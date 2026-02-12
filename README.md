@@ -28,7 +28,7 @@ Operator runs as a background service on your server. When you send a Telegram m
 
 ### Prerequisites
 
-- Python 3.12+
+- Python 3.10+
 - At least one CLI agent: [`claude`](https://docs.anthropic.com/en/docs/claude-code), [`codex`](https://github.com/openai/codex), or [`gemini`](https://github.com/google-gemini/gemini-cli)
 - A Telegram account
 

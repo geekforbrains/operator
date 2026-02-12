@@ -4,13 +4,15 @@ version = "0.1.0"
 description = "Personal AI agent that bridges Telegram to CLI agents (Claude, Codex, Gemini) running on your machine."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 authors = [{ name = "Gavin Vickery", email = "gavin@geekforbrains.com" }]
 keywords = ["ai", "agent", "telegram", "claude", "codex", "gemini", "cli"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Communications :: Chat",
@@ -39,7 +41,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py310"
 line-length = 100
 
 [tool.ruff.lint]
