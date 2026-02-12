@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.1] - 2026-02-12
+
+### Fixed
+
+- Lowered Python requirement from 3.12 to 3.10
+
 ## [0.1.0] - 2026-02-12
 
 Initial public release.
