@@ -1,6 +1,6 @@
 # Operator
 
-Personal AI agent that bridges Telegram to CLI agents running on your server. Send a message, get a response from Claude, Codex, or Gemini — with live status updates as they work.
+Personal AI agent that bridges Telegram (more to come) to CLI agents running on your server. Send a message, get a response from Claude, Codex, or Gemini — with live status updates as they work. Use your subscription, not an API key.
 
 ## Quick Start
 
@@ -31,6 +31,23 @@ Operator runs as a background service on your server. When you send a Telegram m
 - Python 3.12+
 - At least one CLI agent: [`claude`](https://docs.anthropic.com/en/docs/claude-code), [`codex`](https://github.com/openai/codex), or [`gemini`](https://github.com/google-gemini/gemini-cli)
 - A Telegram account
+
+### Recommended: use pyenv + virtualenv
+
+We recommend using [pyenv](https://github.com/pyenv/pyenv) to manage Python versions and installing Operator in a virtualenv to avoid conflicts with system packages.
+
+```bash
+# Install Python 3.12+ via pyenv (if needed)
+pyenv install 3.13
+pyenv shell 3.13
+
+# Create and activate a virtualenv
+python -m venv ~/.operator-venv
+source ~/.operator-venv/bin/activate
+
+# Install Operator
+pip install "operator-agent[telegram]"
+```
 
 ### Running `operator setup`
 
