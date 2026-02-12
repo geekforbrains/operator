@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-02-12
+
+### Added
+
+- Auto-install system prompt files (CLAUDE.md, AGENTS.md, GEMINI.md) to working directory on `operator serve`
+- Bundled system prompt as package data so it ships with the package
+- Existing user-customized prompt files are never overwritten
+
+### Removed
+
+- Symlinked AGENTS.md and GEMINI.md from repo root (canonical source is now `src/operator_agent/system_prompt.md`)
+
 ## [0.2.0] - 2026-02-12
 
 ### Added

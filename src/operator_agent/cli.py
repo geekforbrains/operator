@@ -540,6 +540,7 @@ def serve(
 
     runtime = Runtime(config)
     runtime.init_config_dir()
+    runtime.install_system_prompts()
     runtime.load_state()
 
     log = logging.getLogger("operator_agent")

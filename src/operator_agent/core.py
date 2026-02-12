@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import importlib.resources
 import json
 import logging
 import os
@@ -64,6 +65,28 @@ class Runtime:
     def init_config_dir(self):
         """Ensure config directory exists."""
         os.makedirs(CONFIG_DIR, exist_ok=True)
+
+    def install_system_prompts(self):
+        """Write CLAUDE.md / AGENTS.md / GEMINI.md into the working directory.
+
+        Each CLI agent reads its own convention file from the cwd to understand
+        its role and behaviour.  We ship the canonical prompt as package data
+        and materialise it on every ``serve`` so it stays current across
+        package upgrades.
+        """
+        source = importlib.resources.files("operator_agent").joinpath("system_prompt.md")
+        content = source.read_text(encoding="utf-8")
+
+        for name in ("CLAUDE.md", "AGENTS.md", "GEMINI.md"):
+            target = os.path.join(self.working_dir, name)
+            if os.path.exists(target):
+                continue
+            try:
+                with open(target, "w") as f:
+                    f.write(content)
+                log.info("Wrote %s to %s", name, self.working_dir)
+            except OSError:
+                log.warning("Could not write %s to %s", name, self.working_dir, exc_info=True)
 
     # --- State persistence ---
 
