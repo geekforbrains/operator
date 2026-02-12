@@ -7,12 +7,15 @@ import contextlib
 import logging
 import os
 import sys
+import uuid
 
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters
 
 from ..core import Runtime
 from ..providers import PROVIDER_NAMES
+
+MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB Telegram bot API limit
 
 log = logging.getLogger(__name__)
 
@@ -79,6 +82,14 @@ class TelegramTransport:
         )
         app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self._handle_message)
+        )
+        app.add_handler(
+            MessageHandler(
+                (filters.Document.ALL | filters.PHOTO | filters.AUDIO
+                 | filters.VOICE | filters.VIDEO | filters.VIDEO_NOTE)
+                & ~filters.COMMAND,
+                self._handle_file_message,
+            )
         )
         app.run_polling(allowed_updates=Update.ALL_TYPES)
 
@@ -189,6 +200,106 @@ class TelegramTransport:
                 current = rt.running_task_by_chat.get(chat_id)
                 if current is task:
                     rt.running_task_by_chat.pop(chat_id, None)
+
+    # --- File handling ---
+
+    async def _handle_file_message(self, update: Update, _context):
+        """Handle incoming file uploads — download and pass to agent as a prompt."""
+        user = update.effective_user
+        if user is None or update.message is None:
+            return
+
+        user_id = user.id
+        chat_id = update.effective_chat.id
+
+        if self.allowed_user_ids and user_id not in self.allowed_user_ids:
+            log.warning("Unauthorized user: %s", user_id)
+            return
+
+        msg = update.message
+
+        # Resolve the file object and a human-readable description
+        if msg.document:
+            tg_file_obj = msg.document
+            filename = msg.document.file_name or f"document_{uuid.uuid4().hex[:8]}"
+            desc = f"file ({filename})"
+        elif msg.photo:
+            tg_file_obj = msg.photo[-1]  # highest resolution
+            filename = f"photo_{uuid.uuid4().hex[:8]}.jpg"
+            desc = "photo"
+        elif msg.audio:
+            tg_file_obj = msg.audio
+            filename = msg.audio.file_name or f"audio_{uuid.uuid4().hex[:8]}.mp3"
+            desc = f"audio file ({filename})"
+        elif msg.voice:
+            tg_file_obj = msg.voice
+            filename = f"voice_{uuid.uuid4().hex[:8]}.ogg"
+            desc = "voice message"
+        elif msg.video:
+            tg_file_obj = msg.video
+            filename = msg.video.file_name or f"video_{uuid.uuid4().hex[:8]}.mp4"
+            desc = f"video ({filename})"
+        elif msg.video_note:
+            tg_file_obj = msg.video_note
+            filename = f"videonote_{uuid.uuid4().hex[:8]}.mp4"
+            desc = "video note"
+        else:
+            return
+
+        # Check size
+        file_size = getattr(tg_file_obj, "file_size", None) or 0
+        if file_size > MAX_FILE_SIZE:
+            size_mb = file_size / (1024 * 1024)
+            await msg.reply_text(
+                f"File too large ({size_mb:.1f}MB). Telegram bots can only download files up to 20MB."
+            )
+            return
+
+        # Download to working_dir/uploads/
+        uploads_dir = os.path.join(self.runtime.working_dir, "uploads")
+        os.makedirs(uploads_dir, exist_ok=True)
+        dest_path = os.path.join(uploads_dir, filename)
+
+        try:
+            tg_file = await tg_file_obj.get_file()
+            await tg_file.download_to_drive(dest_path)
+            log.info("Downloaded %s to %s (%d bytes)", desc, dest_path, file_size)
+        except Exception:
+            log.exception("Failed to download %s", desc)
+            await msg.reply_text("Failed to download file. Please try again.")
+            return
+
+        # Build prompt for the agent
+        caption = (msg.caption or "").strip()
+        if caption:
+            prompt = f"User uploaded a {desc}: {dest_path}\n\n{caption}"
+        else:
+            prompt = f"User uploaded a {desc}: {dest_path}"
+
+        # Dispatch like a regular message
+        provider = self.runtime.get_active_provider(chat_id)
+        lock = self.runtime.get_chat_lock(chat_id)
+
+        if lock.locked():
+            await msg.reply_text("A request is already running. Use !stop to cancel it.")
+            return
+
+        log.info("Processing file message chat_id=%s provider=%s: %s", chat_id, provider, desc)
+
+        ctx = TelegramContext(update)
+        async with lock:
+            task = asyncio.create_task(
+                self.runtime.process_request(provider, prompt, chat_id, ctx)
+            )
+            self.runtime.running_task_by_chat[chat_id] = task
+            try:
+                await task
+            except asyncio.CancelledError:
+                log.info("Task cancelled by user for chat_id=%s", chat_id)
+            finally:
+                current = self.runtime.running_task_by_chat.get(chat_id)
+                if current is task:
+                    self.runtime.running_task_by_chat.pop(chat_id, None)
 
     # --- Command handlers ---
 
