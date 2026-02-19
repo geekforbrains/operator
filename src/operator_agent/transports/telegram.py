@@ -150,6 +150,7 @@ class TelegramTransport:
                 "!clear - Clear current provider session\n"
                 "!clear all - Clear all provider sessions\n"
                 "!restart - Restart the bot\n"
+                "!logs - Show last 25 log entries\n"
                 "!help - Show this message"
             )
             return
@@ -157,6 +158,10 @@ class TelegramTransport:
         if text == "!restart":
             await update.message.reply_text("Restarting...")
             asyncio.get_event_loop().call_later(1, _restart)
+            return
+
+        if text == "!logs":
+            await self._handle_logs(update)
             return
 
         if text.startswith("!"):
@@ -414,3 +419,26 @@ class TelegramTransport:
         rt.save_state()
         msg = "Cleared all providers!" if clear_all else "Cleared current provider!"
         await update.message.reply_text(f"{msg}\n" + "\n".join(parts))
+
+    async def _handle_logs(self, update: Update):
+        log_path = os.path.join(os.path.expanduser("~/.operator"), "operator.log")
+        if not os.path.exists(log_path):
+            await update.message.reply_text("No log file found.")
+            return
+
+        try:
+            with open(log_path, "rb") as f:
+                # Read last ~32KB to find the last 25 lines
+                f.seek(0, 2)
+                size = f.tell()
+                f.seek(max(0, size - 32768))
+                tail = f.read().decode(errors="replace")
+
+            lines = tail.splitlines()[-25:]
+            text = "\n".join(lines) if lines else "(empty)"
+            # Telegram message limit is 4096 chars
+            if len(text) > 4000:
+                text = text[-4000:]
+            await update.message.reply_text(text)
+        except Exception as exc:
+            await update.message.reply_text(f"Error reading logs: {exc}")
