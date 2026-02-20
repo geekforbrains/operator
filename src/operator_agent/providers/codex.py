@@ -111,5 +111,8 @@ class CodexProvider(BaseProvider):
 
         return events
 
+    def stdout_limit(self):
+        return 10 * 1024 * 1024
+
     def stderr_to_stdout(self):
         return True

@@ -49,6 +49,9 @@ def _format_status(event: dict) -> str | None:
 class GeminiProvider(BaseProvider):
     name = "gemini"
 
+    def stdout_limit(self):
+        return 10 * 1024 * 1024
+
     def build_command(self, prompt, model, session_id=None):
         cmd = [
             self.path,
