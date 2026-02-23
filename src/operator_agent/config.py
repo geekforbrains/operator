@@ -55,8 +55,17 @@ def _build_default_config() -> dict:
             "bot_token": "",
             "allowed_user_ids": [],
         },
-        "providers": dict(DEFAULT_PROVIDERS),
+        "providers": resolve_providers(),
     }
+
+
+def resolve_providers() -> dict:
+    """Build provider config with absolute paths where available."""
+    providers = {}
+    for name, defaults in DEFAULT_PROVIDERS.items():
+        resolved = shutil.which(name)
+        providers[name] = {**defaults, "path": resolved or name}
+    return providers
 
 
 def detect_providers() -> dict[str, bool]:

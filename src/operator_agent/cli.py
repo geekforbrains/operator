@@ -19,7 +19,7 @@ from rich.prompt import Confirm, Prompt
 from rich.table import Table
 
 from . import __version__
-from .config import CONFIG_FILE, detect_providers, load_config, save_config
+from .config import CONFIG_FILE, resolve_providers, detect_providers, load_config, save_config
 
 log = logging.getLogger(__name__)
 
@@ -350,19 +350,23 @@ def _check_service_running(service: str) -> None:
 # --- Setup wizard steps ---
 
 
-def _setup_providers():
-    """Step 1: detect and display available provider CLIs."""
+def _setup_providers(config: dict):
+    """Step 1: detect and display available provider CLIs, resolve absolute paths."""
     console.rule("[bold]Step 1 \u00b7 Provider Detection")
+
+    resolved = resolve_providers()
+    config["providers"] = resolved
 
     available = detect_providers()
     table = Table(show_header=False, box=None, padding=(0, 2))
     table.add_column("status", width=3)
     table.add_column("name")
-    for name, found in available.items():
-        if found:
-            table.add_row("[green]\u2713[/]", name)
+    table.add_column("path", style="dim")
+    for name, info in resolved.items():
+        if available.get(name):
+            table.add_row("[green]\u2713[/]", name, info["path"])
         else:
-            table.add_row("[red]\u2717[/]", f"[dim]{name}[/]")
+            table.add_row("[red]\u2717[/]", f"[dim]{name}[/]", "")
     console.print(table)
 
     if not any(available.values()):
@@ -455,7 +459,7 @@ def setup():
     console.print(Panel("Operator Setup", subtitle=f"v{__version__}", expand=False))
     config = load_config()
 
-    _setup_providers()
+    _setup_providers(config)
     captured_chat_id = _setup_telegram(config)
 
     # Step 3: Working directory
