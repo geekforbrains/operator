@@ -6,7 +6,7 @@ import json
 import logging
 import math
 import string
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 from typing import Any
 
 import litellm
@@ -165,10 +165,17 @@ class MemoryStore:
 
 
 class MemoryHarvester:
-    def __init__(self, memory_store: MemoryStore, store: Store, config: HarvesterConfig):
+    def __init__(
+        self,
+        memory_store: MemoryStore,
+        store: Store,
+        config: HarvesterConfig,
+        tz: tzinfo = UTC,
+    ):
         self._memory_store = memory_store
         self._store = store
         self._config = config
+        self._tz = tz
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
@@ -188,7 +195,7 @@ class MemoryHarvester:
         try:
             while True:
                 await asyncio.sleep(60)
-                now = datetime.now(UTC)
+                now = datetime.now(self._tz)
                 if not croniter.match(self._config.schedule, now):
                     continue
                 try:
@@ -313,10 +320,17 @@ class MemoryHarvester:
 
 
 class MemoryCleaner:
-    def __init__(self, memory_store: MemoryStore, store: Store, config: CleanerConfig):
+    def __init__(
+        self,
+        memory_store: MemoryStore,
+        store: Store,
+        config: CleanerConfig,
+        tz: tzinfo = UTC,
+    ):
         self._memory_store = memory_store
         self._store = store
         self._config = config
+        self._tz = tz
         self._task: asyncio.Task | None = None
 
     def start(self) -> None:
@@ -336,7 +350,7 @@ class MemoryCleaner:
         try:
             while True:
                 await asyncio.sleep(60)
-                now = datetime.now(UTC)
+                now = datetime.now(self._tz)
                 if not croniter.match(self._config.schedule, now):
                     continue
                 try:

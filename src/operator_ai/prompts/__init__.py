@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime
 from pathlib import Path
 
 from operator_ai.config import OPERATOR_DIR, Config
@@ -72,6 +73,11 @@ def assemble_system_prompt(
 
     # --- Dynamic suffix (changes per conversation / turn) ---
     dynamic: list[str] = []
+
+    now = datetime.now(config.tz)
+    dynamic.append(
+        f"Current time: {now.strftime('%Y-%m-%d %H:%M %Z')} ({config.defaults.timezone})"
+    )
 
     dynamic.extend(section.strip() for section in context_sections if section and section.strip())
 

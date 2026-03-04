@@ -515,12 +515,12 @@ async def async_main() -> None:
             store = get_store(embed_dimensions=config.memory.embed_dimensions)
             memory_store: MemoryStore | None = MemoryStore(store, config.memory)
             harvester = (
-                MemoryHarvester(memory_store, store, config.memory.harvester)
+                MemoryHarvester(memory_store, store, config.memory.harvester, tz=config.tz)
                 if config.memory.harvester.enabled
                 else None
             )
             cleaner = (
-                MemoryCleaner(memory_store, store, config.memory.cleaner)
+                MemoryCleaner(memory_store, store, config.memory.cleaner, tz=config.tz)
                 if config.memory.cleaner.enabled
                 else None
             )
@@ -581,7 +581,11 @@ async def async_main() -> None:
             transport_tasks.append(task)
             logger.info("Transport '%s' starting (agent: %s)", transport.name, transport.agent_name)
 
-        logger.info("Operator running with %d transport(s). Ctrl+C to stop.", len(transports))
+        logger.info(
+            "Operator running with %d transport(s), timezone=%s. Ctrl+C to stop.",
+            len(transports),
+            config.defaults.timezone,
+        )
         await stop.wait()
     finally:
         logger.info("Shutting down...")

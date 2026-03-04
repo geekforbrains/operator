@@ -4,6 +4,7 @@ import os
 import pwd
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
@@ -35,6 +36,7 @@ class DefaultsConfig(BaseModel):
     max_iterations: int = Field(default=25, gt=0)
     context_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
     max_output_tokens: int | None = Field(default=None, gt=0)
+    timezone: str = "UTC"
     env_file: str | None = None
 
     @model_validator(mode="before")
@@ -46,6 +48,14 @@ class DefaultsConfig(BaseModel):
     def validate_models_non_empty(self) -> DefaultsConfig:
         if not self.models:
             raise ValueError("defaults.models must contain at least one model")
+        return self
+
+    @model_validator(mode="after")
+    def validate_timezone(self) -> DefaultsConfig:
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, KeyError):
+            raise ValueError(f"Unknown timezone: {self.timezone!r}") from None
         return self
 
 
@@ -206,6 +216,11 @@ class Config(BaseModel):
 
     def agent_prompt_path(self, agent_name: str) -> Path:
         return self.agent_dir(agent_name) / "AGENT.md"
+
+    @property
+    def tz(self) -> ZoneInfo:
+        """Return the configured timezone as a ZoneInfo instance."""
+        return ZoneInfo(self.defaults.timezone)
 
     def default_agent(self) -> str:
         """Return the first agent name from config, or 'default'."""

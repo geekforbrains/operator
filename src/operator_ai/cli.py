@@ -82,7 +82,8 @@ defaults:
     - "anthropic/claude-sonnet-4-6"
   max_iterations: 25
   context_ratio: 0.5
-  # env_file: "~/.env"        # Load API keys from a dotenv file
+  # timezone: "America/Vancouver" # IANA timezone (default: UTC)
+  # env_file: "~/.env"           # Load API keys from a dotenv file
 
 agents:
   default:
