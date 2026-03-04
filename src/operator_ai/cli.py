@@ -86,7 +86,7 @@ defaults:
   # env_file: "~/.env"           # Load API keys from a dotenv file
 
 agents:
-  default:
+  operator:
     transport:
       type: slack
       bot_token_env: SLACK_BOT_TOKEN
@@ -112,7 +112,7 @@ You are a helpful assistant managed by Operator.
 """
 
 _STARTER_AGENT_MD = """\
-# Default Agent
+# Operator Agent
 
 You are a helpful assistant.
 """
@@ -132,7 +132,7 @@ def init() -> None:
     dirs = [
         home / "logs",
         home / "state",
-        home / "agents" / "default" / "workspace",
+        home / "agents" / "operator" / "workspace",
         home / "jobs",
         home / "skills",
     ]
@@ -144,7 +144,7 @@ def init() -> None:
     files: list[tuple[Path, str]] = [
         (config_file, _STARTER_CONFIG),
         (home / "SYSTEM.md", _STARTER_SYSTEM_MD),
-        (home / "agents" / "default" / "AGENT.md", _STARTER_AGENT_MD),
+        (home / "agents" / "operator" / "AGENT.md", _STARTER_AGENT_MD),
     ]
     for path, content in files:
         if path.exists():

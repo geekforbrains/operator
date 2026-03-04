@@ -226,7 +226,7 @@ class Config(BaseModel):
         """Return the first agent name from config, or 'default'."""
         if self.agents:
             return next(iter(self.agents))
-        return "default"
+        return "operator"
 
 
 def _load_env_file(env_path: str, *, base_dir: Path | None = None) -> None:

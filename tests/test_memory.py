@@ -14,7 +14,7 @@ def _configure_public_context(fake_memory_store) -> None:
         {
             "memory_store": fake_memory_store,
             "user_id": "slack:U123",
-            "agent_name": "hermy",
+            "agent_name": "operator",
             "allow_user_scope": False,
         }
     )
@@ -37,7 +37,7 @@ def test_search_memories_default_scope_excludes_user_in_public_context(
 
     assert fake_memory_store.search_calls
     assert fake_memory_store.search_calls[0]["scopes"] == [
-        ("agent", "hermy"),
+        ("agent", "operator"),
         ("global", "global"),
     ]
 
@@ -45,7 +45,7 @@ def test_search_memories_default_scope_excludes_user_in_public_context(
 def test_list_memories_in_public_context_filters_to_agent_and_global(
     fake_memory_store,
 ) -> None:
-    fake_memory_store.scoped_lists[("agent", "hermy")] = [
+    fake_memory_store.scoped_lists[("agent", "operator")] = [
         {"id": 2, "content": "agent note", "scope": "agent", "pinned": 0}
     ]
     fake_memory_store.scoped_lists[("global", "global")] = [
@@ -69,7 +69,7 @@ def test_parse_harvested_line_rejects_user_scope_when_not_private() -> None:
     parsed = _parse_harvested_line(
         "- [user] Gavin likes espresso",
         user_id="slack:U123",
-        agent_name="hermy",
+        agent_name="operator",
         allow_user_scope=False,
     )
     assert parsed is None
@@ -79,14 +79,14 @@ def test_parse_harvested_line_accepts_agent_and_global_when_not_private() -> Non
     parsed_agent = _parse_harvested_line(
         "- [agent] Project uses uv",
         user_id="",
-        agent_name="hermy",
+        agent_name="operator",
         allow_user_scope=False,
     )
     parsed_global = _parse_harvested_line(
         "- [global] Python 3.11 is required",
         user_id="",
-        agent_name="hermy",
+        agent_name="operator",
         allow_user_scope=False,
     )
-    assert parsed_agent == ("agent", "hermy", "Project uses uv")
+    assert parsed_agent == ("agent", "operator", "Project uses uv")
     assert parsed_global == ("global", "global", "Python 3.11 is required")

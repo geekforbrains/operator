@@ -10,7 +10,7 @@ Do not include any commentary, headings, numbering, or untagged lines.
 
 Example output:
 - [user] Gavin's timezone is America/Toronto
-- [agent] The cron daemon needs hermy's API key to run
+- [agent] The cron daemon needs operator's API key to run
 - [global] The project uses Python 3.11
 
 Conversation:

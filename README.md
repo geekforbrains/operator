@@ -62,7 +62,7 @@ defaults:
   # env_file: "~/.env"        # Load API keys from a dotenv file
 
 agents:
-  default:
+  operator:
     transport:
       type: slack
       bot_token_env: SLACK_BOT_TOKEN
@@ -82,13 +82,13 @@ defaults:
   env_file: "~/.env"
 
 agents:
-  hermy:
+  operator:
     models:
       - "anthropic/claude-sonnet-4-6"
     transport:
       type: slack
-      bot_token_env: SLACK_BOT_TOKEN_HERMY
-      app_token_env: SLACK_APP_TOKEN_HERMY
+      bot_token_env: SLACK_BOT_TOKEN
+      app_token_env: SLACK_APP_TOKEN
 ```
 
 `models` is a fallback chain — if the first model errors (overloaded, rate limited, down), the next is tried automatically. Always use list format, even for a single model.
@@ -264,7 +264,7 @@ Each job is `~/.operator/jobs/<name>/JOB.md` with YAML frontmatter and markdown 
 name: daily-summary
 description: Summarize today's activity
 schedule: "0 9 * * *"
-agent: hermy
+agent: operator
 model: "anthropic/claude-sonnet-4-6"
 hooks:
   prerun: scripts/check.sh

@@ -17,7 +17,7 @@ def test_scan_job_specs_reads_frontmatter_fields(tmp_path: Path) -> None:
         """---
 name: daily-summary
 schedule: "0 9 * * *"
-agent: hermy
+agent: operator
 enabled: false
 description: Morning digest
 model: "openai/gpt-4o"
@@ -31,7 +31,7 @@ Run a summary.
     spec = specs[0]
     assert spec.name == "daily-summary"
     assert spec.schedule == "0 9 * * *"
-    assert spec.agent == "hermy"
+    assert spec.agent == "operator"
     assert spec.enabled is False
     assert spec.description == "Morning digest"
     assert spec.model == "openai/gpt-4o"
