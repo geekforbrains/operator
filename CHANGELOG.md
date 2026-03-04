@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-03-04
+
+### Fixed
+
+- Prompt caching: split system prompt into stable prefix and dynamic suffix with Anthropic cache breakpoints so the prefix is reused across turns
+- Add rolling cache breakpoint on conversation history (penultimate user message) for multi-turn savings
+- Read OpenAI `cached_tokens` from `prompt_tokens_details` for unified cache reporting
+
+### Added
+
+- Per-run ID logging via ContextVar for tracing agent runs in logs
+- Usage line now shows cache write tokens and prefixed with `Usage:`
+
 ## [0.2.1] - 2026-03-04
 
 ### Added
