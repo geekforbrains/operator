@@ -581,7 +581,11 @@ async def async_main() -> None:
             transport_tasks.append(task)
             logger.info("Transport '%s' starting (agent: %s)", transport.name, transport.agent_name)
 
-        logger.info("Operator running with %d transport(s). Ctrl+C to stop.", len(transports))
+        logger.info(
+            "Operator running with %d transport(s), timezone=%s. Ctrl+C to stop.",
+            len(transports),
+            config.defaults.timezone,
+        )
         await stop.wait()
     finally:
         logger.info("Shutting down...")
