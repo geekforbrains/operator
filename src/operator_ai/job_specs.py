@@ -20,6 +20,7 @@ class JobSpec:
     description: str
     path: str
     agent: str = ""
+    model: str = ""
 
 
 def scan_job_specs(jobs_dir: Path = JOBS_DIR) -> list[JobSpec]:
@@ -43,6 +44,7 @@ def scan_job_specs(jobs_dir: Path = JOBS_DIR) -> list[JobSpec]:
                 name=frontmatter.get("name", job_md.parent.name),
                 schedule=frontmatter.get("schedule", ""),
                 agent=frontmatter.get("agent", ""),
+                model=frontmatter.get("model", ""),
                 enabled=bool(frontmatter.get("enabled", True)),
                 description=frontmatter.get("description", ""),
                 path=str(job_md),

@@ -265,6 +265,7 @@ name: daily-summary
 description: Summarize today's activity
 schedule: "0 9 * * *"
 agent: hermy
+model: "anthropic/claude-sonnet-4-6"
 hooks:
   prerun: scripts/check.sh
   postrun: scripts/notify.sh
@@ -276,6 +277,7 @@ Post a one-line teaser to #general, then reply in a thread with the full summary
 ```
 
 Notes:
+- `model` overrides the agent's model for this job (litellm format). When omitted, the agent's configured model chain is used.
 - `prerun` is a gate: non-zero exit skips LLM execution.
 - `postrun` receives model output on stdin.
 - The agent uses `send_message` to post results to Slack channels. The prompt body
@@ -374,3 +376,13 @@ src/operator_ai/
     ├── kv.py
     └── jobs.py
 ```
+
+## Releasing
+
+1. Update `version` in `pyproject.toml`.
+2. Add an entry to `CHANGELOG.md` under a new `## [x.y.z] - YYYY-MM-DD` heading.
+3. Commit: `git commit -am "release: vx.y.z"`
+4. Tag: `git tag vx.y.z`
+5. Push: `git push && git push --tags`
+
+Pushing a `v*` tag triggers the GitHub Actions workflow that builds and publishes to PyPI.

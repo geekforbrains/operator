@@ -32,6 +32,7 @@ class Job:
     prompt: str
     job_dir: Path
     agent: str = ""
+    model: str = ""
     max_iterations: int = 0
     hooks: dict[str, str] = field(default_factory=dict)
     enabled: bool = True
@@ -76,6 +77,7 @@ def scan_jobs() -> list[Job]:
                     prompt=body,
                     job_dir=job_dir,
                     agent=fm.get("agent", ""),
+                    model=fm.get("model", ""),
                     max_iterations=fm.get("max_iterations", 0),
                     hooks=hooks,
                     enabled=fm.get("enabled", True),
@@ -290,7 +292,7 @@ async def _execute_job(
         messaging.configure({"transport": transport})
         kv_tools.configure({"agent_name": agent_name})
 
-        models = config.agent_models(agent_name)
+        models = [job.model] if job.model else config.agent_models(agent_name)
         max_iter = job.max_iterations or config.agent_max_iterations(agent_name)
 
         extra_tools = transport.get_tools() if transport else None

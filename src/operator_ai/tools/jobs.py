@@ -80,6 +80,7 @@ def _list_jobs() -> str:
             f"  schedule: `{job.schedule}`\n"
             f"  description: {job.description}\n"
             f"  agent: {job.agent or '(default)'}\n"
+            f"  model: {job.model or '(agent default)'}\n"
             f"  last_run: {state.last_run or 'never'} ({state.last_result or '-'})\n"
             f"  runs: {state.run_count}, skips: {state.skip_count}"
         )
