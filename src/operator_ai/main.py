@@ -197,6 +197,7 @@ class Dispatcher:
         # Auth check
         username = self.store.resolve_username(msg.user_id)
         if not username:
+            logger.warning("%s rejected — unknown user", msg.user_id)
             await self._handle_rejection(msg, transport)
             return
 
@@ -205,6 +206,12 @@ class Dispatcher:
 
         agent_name = transport.agent_name
         if allowed_agents is not None and agent_name not in allowed_agents:
+            logger.warning(
+                "%s (%s) message to %s rejected — not allowed",
+                msg.user_id,
+                username,
+                agent_name,
+            )
             await self._handle_rejection(msg, transport)
             return
 
