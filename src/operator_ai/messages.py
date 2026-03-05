@@ -4,11 +4,11 @@ from typing import Any
 
 
 def trim_incomplete_tool_turns(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Trim conversation history to the first valid boundary.
+    """Trim conversation history to the last valid boundary.
 
-    Returns a copy of messages with any incomplete assistant tool-call turn and
-    all trailing messages removed. This prevents malformed history from being
-    sent back to the model.
+    Returns messages up to (but not including) the first assistant message
+    with incomplete tool results. Returns the original list unchanged if
+    all tool turns are complete.
     """
     cutoff = _first_incomplete_tool_turn_index(messages)
     if cutoff is None:
