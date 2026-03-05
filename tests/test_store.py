@@ -187,3 +187,51 @@ def test_user_dataclass() -> None:
     assert u.username == "alice"
     assert u.identities == ["slack:X"]
     assert u.roles == ["admin"]
+
+
+def test_load_messages_trims_incomplete_tool_turns(store: Store) -> None:
+    conv = "conv-1"
+    store.ensure_conversation(conv, "slack", "C1", "T1")
+    store.ensure_system_message(conv, "system")
+    store.append_messages(
+        conv,
+        [
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a1", "tool_calls": [{"id": "call_1"}]},
+            {"role": "user", "content": "u2"},
+        ],
+    )
+
+    loaded = store.load_messages(conv)
+
+    assert loaded == [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "u1"},
+    ]
+    # Ensure the repair is persisted in SQLite.
+    assert store.load_messages(conv) == loaded
+
+
+def test_load_messages_keeps_complete_tool_turns(store: Store) -> None:
+    conv = "conv-2"
+    store.ensure_conversation(conv, "slack", "C1", "T1")
+    store.ensure_system_message(conv, "system")
+    store.append_messages(
+        conv,
+        [
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a1", "tool_calls": [{"id": "call_1"}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "t1"},
+            {"role": "assistant", "content": "done"},
+        ],
+    )
+
+    loaded = store.load_messages(conv)
+
+    assert loaded == [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "u1"},
+        {"role": "assistant", "content": "a1", "tool_calls": [{"id": "call_1"}]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "t1"},
+        {"role": "assistant", "content": "done"},
+    ]

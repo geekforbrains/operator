@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import re
 import struct
 import time
@@ -17,8 +18,10 @@ except ImportError:
 import sqlite_vec
 
 from operator_ai.config import OPERATOR_DIR
+from operator_ai.messages import trim_incomplete_tool_turns
 
 DB_PATH = OPERATOR_DIR / "state" / "operator.db"
+logger = logging.getLogger("operator.store")
 
 
 _USERNAME_RE = re.compile(r"^[a-z0-9.\-]{1,64}$")
@@ -342,10 +345,27 @@ class Store:
 
     def load_messages(self, conversation_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
-            "SELECT message_json FROM messages WHERE conversation_id = ? ORDER BY id ASC",
+            "SELECT id, message_json FROM messages WHERE conversation_id = ? ORDER BY id ASC",
             (conversation_id,),
         ).fetchall()
-        return [json.loads(row["message_json"]) for row in rows]
+        messages = [json.loads(row["message_json"]) for row in rows]
+        safe_messages = trim_incomplete_tool_turns(messages)
+
+        if len(safe_messages) != len(messages):
+            removed = len(messages) - len(safe_messages)
+            cutoff_id = rows[len(safe_messages)]["id"]
+            self._conn.execute(
+                "DELETE FROM messages WHERE conversation_id = ? AND id >= ?",
+                (conversation_id, cutoff_id),
+            )
+            self._conn.commit()
+            logger.warning(
+                "conversation %s had incomplete tool history; removed %d message(s)",
+                conversation_id,
+                removed,
+            )
+
+        return safe_messages
 
     def append_messages(self, conversation_id: str, messages: list[dict[str, Any]]) -> None:
         if not messages:

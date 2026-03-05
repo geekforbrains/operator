@@ -19,6 +19,7 @@ from operator_ai.config import OPERATOR_DIR, Config, RoleConfig, load_config
 from operator_ai.jobs import JobRunner
 from operator_ai.log_context import RunContextFilter, new_run_id, set_run_context
 from operator_ai.memory import MemoryCleaner, MemoryHarvester, MemoryStore
+from operator_ai.messages import trim_incomplete_tool_turns
 from operator_ai.prompts import SKILLS_DIR, assemble_system_prompt
 from operator_ai.skills import install_bundled_skills
 from operator_ai.status import StatusIndicator
@@ -491,9 +492,17 @@ class Dispatcher:
             await transport.send(msg.channel_id, f"[error: {e}]", thread_id=msg.root_message_id)
         finally:
             await status.stop()
+            pending_messages = messages[persisted_count:]
+            safe_messages = trim_incomplete_tool_turns(pending_messages)
+            if len(safe_messages) != len(pending_messages):
+                logger.warning(
+                    "conversation %s — trimmed %d incomplete trailing message(s)",
+                    conversation_id,
+                    len(pending_messages) - len(safe_messages),
+                )
             self.store.append_messages(
                 conversation_id,
-                messages[persisted_count:],
+                safe_messages,
             )
 
     def _build_system_prompt(
