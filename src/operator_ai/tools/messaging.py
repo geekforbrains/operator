@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import contextvars
-from pathlib import Path
 from typing import Any
 
+from operator_ai.tools.files import _resolve
 from operator_ai.tools.registry import tool
-from operator_ai.tools.workspace import get_workspace
 
 _context_var: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("_messaging_context")
 
@@ -44,13 +43,13 @@ async def send_message(channel: str = "", text: str = "", thread_id: str = "") -
 
 
 @tool(
-    description="Upload a file from the workspace to a channel. Returns a platform message ID.",
+    description="Upload a file to a channel. Returns a platform message ID.",
 )
 async def send_file(path: str, channel: str = "", thread_id: str = "") -> str:
     """Upload a file to a channel.
 
     Args:
-        path: File path inside the agent workspace.
+        path: File path (relative to workspace, or absolute when unsandboxed).
         channel: Channel name or ID. Defaults to the current conversation channel.
         thread_id: Message ID to reply in a thread. Defaults to the current thread.
     """
@@ -65,12 +64,10 @@ async def send_file(path: str, channel: str = "", thread_id: str = "") -> str:
     channel_id = resolved
     tid = thread_id or ctx.get("thread_id") or None
 
-    workspace = get_workspace().resolve()
-    file_path = (workspace / Path(path).expanduser()).resolve()
     try:
-        file_path.relative_to(workspace)
-    except ValueError:
-        return f"[error: path escapes workspace: {path}]"
+        file_path = _resolve(path)
+    except ValueError as e:
+        return f"[error: {e}]"
 
     if not file_path.exists():
         return f"[error: file not found: {path}]"

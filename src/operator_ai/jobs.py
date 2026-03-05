@@ -312,6 +312,7 @@ async def _execute_job(
             extra_tools=extra_tools,
             tool_filter=config.agent_tool_filter(agent_name),
             shared_dir=config.shared_dir,
+            sandboxed=config.agent_sandboxed(agent_name),
         )
 
         # Postrun hook

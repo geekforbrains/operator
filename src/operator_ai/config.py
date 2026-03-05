@@ -103,6 +103,7 @@ class AgentConfig(BaseModel):
     max_iterations: int | None = Field(default=None, gt=0)
     context_ratio: float | None = Field(default=None, gt=0.0, le=1.0)
     max_output_tokens: int | None = Field(default=None, gt=0)
+    sandbox: bool = True
     transport: TransportConfig | None = None
     permissions: PermissionsConfig | None = None
 
@@ -253,6 +254,12 @@ class Config(BaseModel):
         if self.agents:
             return next(iter(self.agents))
         return "operator"
+
+    def agent_sandboxed(self, agent_name: str) -> bool:
+        agent = self.agents.get(agent_name)
+        if agent is not None:
+            return agent.sandbox
+        return True
 
     def agent_tool_filter(self, agent_name: str) -> Callable[[str], bool] | None:
         """Return a predicate that returns True if a tool name is allowed, or None for no filtering."""

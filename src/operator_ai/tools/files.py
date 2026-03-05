@@ -4,20 +4,28 @@ import asyncio
 from pathlib import Path
 
 from operator_ai.tools.registry import tool
-from operator_ai.tools.workspace import get_workspace
+from operator_ai.tools.workspace import get_workspace, is_sandboxed
 
 MAX_READ_BYTES = 1_000_000  # 1 MB
 _MAX_OUTPUT = 16_384  # 16 KB — keeps tool results within ~4K tokens
 
 
 def _resolve(path: str) -> Path:
-    """Resolve a path inside the agent workspace."""
+    """Resolve a path relative to the agent workspace.
+
+    When sandboxed, rejects paths that escape the workspace.
+    When unsandboxed, allows absolute paths and paths outside the workspace.
+    """
     workspace = get_workspace().resolve()
-    candidate = (workspace / Path(path).expanduser()).resolve()
-    try:
-        candidate.relative_to(workspace)
-    except ValueError as e:
-        raise ValueError(f"path escapes workspace: {path}") from e
+    p = Path(path).expanduser()
+    candidate = p.resolve() if p.is_absolute() else (workspace / p).resolve()
+
+    if is_sandboxed():
+        try:
+            candidate.relative_to(workspace)
+        except ValueError as e:
+            raise ValueError(f"path escapes workspace: {path}") from e
+
     return candidate
 
 
@@ -26,7 +34,7 @@ async def read_file(path: str) -> str:
     """Read a file.
 
     Args:
-        path: File path inside the agent workspace.
+        path: File path (relative to workspace, or absolute when unsandboxed).
     """
     try:
         p = _resolve(path)
@@ -54,7 +62,7 @@ async def write_file(path: str, content: str) -> str:
     """Write a file.
 
     Args:
-        path: File path inside the agent workspace.
+        path: File path (relative to workspace, or absolute when unsandboxed).
         content: The content to write.
     """
     try:
@@ -84,6 +92,8 @@ async def list_files(path: str = ".", max_depth: int = 2) -> str:
     if not root.is_dir():
         return f"[error: not a directory: {path}]"
 
+    sandboxed = is_sandboxed()
+
     def _walk_sync() -> list[str]:
         lines: list[str] = []
         workspace = get_workspace().resolve()
@@ -101,11 +111,12 @@ async def list_files(path: str = ".", max_depth: int = 2) -> str:
                 if name.startswith("."):
                     continue
                 if entry.is_dir() and not entry.is_symlink():
-                    try:
-                        entry.resolve().relative_to(workspace)
-                    except ValueError:
-                        lines.append(f"{prefix}{name}/ [outside workspace]")
-                        continue
+                    if sandboxed:
+                        try:
+                            entry.resolve().relative_to(workspace)
+                        except ValueError:
+                            lines.append(f"{prefix}{name}/ [outside workspace]")
+                            continue
                     lines.append(f"{prefix}{name}/")
                     _walk(entry, depth + 1, prefix + "  ")
                 else:

@@ -125,6 +125,29 @@ settings:
 
 See the [full docs](https://operator.geekforbrains.com) for details.
 
+### Sandbox
+
+By default, file tools (`read_file`, `write_file`, `list_files`, `send_file`) are sandboxed to the agent's workspace directory. Paths that escape the workspace are rejected.
+
+Set `sandbox: false` to give an agent full filesystem access — useful for internal/trusted agents that need to manage skills, edit configs, or work across the system.
+
+```yaml
+agents:
+  operator:
+    sandbox: false    # full filesystem access
+    transport: { ... }
+
+  public-bot:
+    sandbox: true     # default — workspace only
+    transport: { ... }
+```
+
+`run_shell` is not affected by sandbox — it always runs from the workspace as cwd but has no path restrictions. To restrict shell access for public-facing agents, remove `run_shell` from their `permissions.tools`.
+
+The `shared/` symlink inside each workspace points outside the workspace directory. Sandboxed agents can access `shared/` contents via `run_shell` but not through file tools directly. Unsandboxed agents have no such restriction.
+
+Sub-agents inherit their parent's sandbox setting.
+
 ### Permissions
 
 Agents can be restricted to specific tools and skills using an opt-in permissions block:
@@ -380,6 +403,7 @@ Each job tracks four counters in SQLite:
 - `list_files`
 - `web_fetch`
 - `send_message`
+- `send_file`
 - `spawn_agent`
 - `manage_job`
 - `manage_skill`

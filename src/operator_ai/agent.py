@@ -107,6 +107,7 @@ async def run_agent(
     usage: dict[str, int] | None = None,
     tool_filter: Callable[[str], bool] | None = None,
     shared_dir: Path | None = None,
+    sandboxed: bool = True,
 ) -> str:
     """Core agentic loop: LLM -> tool exec -> repeat until text response.
 
@@ -119,7 +120,7 @@ async def run_agent(
     ws.mkdir(parents=True, exist_ok=True)
     if shared_dir is not None:
         ensure_shared_symlink(ws, shared_dir)
-    set_workspace(ws)
+    set_workspace(ws, sandboxed=sandboxed)
 
     # Configure subagent tool with current context
     subagent.configure(
@@ -134,6 +135,7 @@ async def run_agent(
             "usage": usage,
             "tool_filter": tool_filter,
             "shared_dir": shared_dir,
+            "sandboxed": sandboxed,
         }
     )
 

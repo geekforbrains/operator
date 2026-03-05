@@ -66,6 +66,7 @@ async def spawn_agent(task: str, context: str = "") -> str:
             usage=current_context.get("usage"),
             tool_filter=current_context.get("tool_filter"),
             shared_dir=current_context.get("shared_dir"),
+            sandboxed=current_context.get("sandboxed", True),
         )
 
     # Run in a copied context so the child's configure() call doesn't
