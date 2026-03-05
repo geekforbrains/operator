@@ -43,7 +43,7 @@ class MessageContext:
     user_name: str
     username: str = ""
 
-    def to_prompt(self, workspace: str = "") -> str:
+    def to_prompt(self, workspace: str = "", operator_home: str = "") -> str:
         if self.username:
             user_line = f"- User: {self.username} ({self.user_name} via {self.platform})"
         else:
@@ -57,6 +57,8 @@ class MessageContext:
         ]
         if workspace:
             lines.append(f"- Workspace: `{workspace}`")
+        if operator_home:
+            lines.append(f"- Operator home: `{operator_home}` (also `$OPERATOR_HOME`)")
         return "\n".join(lines)
 
 

@@ -5,6 +5,7 @@ import contextvars
 from typing import Any
 
 from operator_ai.log_context import get_run_context, new_run_id, set_run_context
+from operator_ai.prompts import load_prompt
 from operator_ai.tools.registry import tool
 
 MAX_SUBAGENT_DEPTH = 3
@@ -31,10 +32,7 @@ async def spawn_agent(task: str, context: str = "") -> str:
     if depth >= MAX_SUBAGENT_DEPTH:
         return f"[error: max subagent depth ({MAX_SUBAGENT_DEPTH}) reached]"
 
-    system_prompt = (
-        "You are a focused sub-agent. Complete the given task and return a clear, "
-        "concise result. You have access to the same tools as the parent agent."
-    )
+    system_prompt = load_prompt("subagent.md")
     if context:
         system_prompt += f"\n\nAdditional context:\n{context}"
 

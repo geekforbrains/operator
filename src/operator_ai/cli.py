@@ -19,6 +19,7 @@ from rich.table import Table
 from rich.text import Text
 
 from operator_ai.config import OPERATOR_DIR
+from operator_ai.prompts import load_prompt
 from operator_ai.job_specs import find_job_spec, scan_job_specs
 
 console = Console()
@@ -150,17 +151,6 @@ settings:
 #     model: "openai/gpt-4.1-mini"
 """
 
-_STARTER_SYSTEM_MD = """\
-# System Prompt
-
-You are a helpful assistant managed by Operator.
-"""
-
-_STARTER_AGENT_MD = """\
-# Operator Agent
-
-You are a helpful assistant.
-"""
 
 
 @app.command("init")
@@ -189,8 +179,8 @@ def init() -> None:
     # Files — only write if not already present
     files: list[tuple[Path, str]] = [
         (config_file, _STARTER_CONFIG),
-        (home / "SYSTEM.md", _STARTER_SYSTEM_MD),
-        (home / "agents" / "operator" / "AGENT.md", _STARTER_AGENT_MD),
+        (home / "SYSTEM.md", load_prompt("system.md")),
+        (home / "agents" / "operator" / "AGENT.md", load_prompt("agent.md")),
     ]
     for path, content in files:
         if path.exists():

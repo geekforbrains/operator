@@ -16,6 +16,11 @@ logger = logging.getLogger("operator.config")
 OPERATOR_DIR = Path.home() / ".operator"
 CONFIG_PATH = OPERATOR_DIR / "operator.yaml"
 
+# Expose the resolved base directory as an environment variable so that
+# run_shell commands, skill scripts, and job hooks can reference paths
+# portably via $OPERATOR_HOME instead of relying on tilde expansion.
+os.environ.setdefault("OPERATOR_HOME", str(OPERATOR_DIR))
+
 # The user's login shell, used to wrap subprocess calls so that the full
 # environment (Homebrew, Cargo, pyenv, nvm …) is available — even under
 # minimal launchers like launchd / systemd.

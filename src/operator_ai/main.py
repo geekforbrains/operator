@@ -517,7 +517,10 @@ class Dispatcher:
             config=self.config,
             agent_name=agent_name,
             context_sections=[
-                ctx.to_prompt(workspace=str(self.config.agent_workspace(agent_name)))
+                ctx.to_prompt(
+                    workspace=str(self.config.agent_workspace(agent_name)),
+                    operator_home=str(OPERATOR_DIR),
+                )
             ],
             pinned_memory_lines=pinned_lines,
             transport_extra=transport.get_prompt_extra(),

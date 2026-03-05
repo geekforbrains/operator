@@ -16,7 +16,7 @@ from croniter import croniter
 from operator_ai.config import LOGIN_SHELL, OPERATOR_DIR, Config
 from operator_ai.job_specs import JOBS_DIR
 from operator_ai.log_context import new_run_id, set_run_context
-from operator_ai.prompts import assemble_system_prompt
+from operator_ai.prompts import assemble_system_prompt, load_prompt
 from operator_ai.skills import extract_body, parse_frontmatter
 from operator_ai.store import DB_PATH, Store
 from operator_ai.transport.base import Transport
@@ -181,19 +181,15 @@ def _build_job_prompt(
 ) -> str:
     """Assemble the system prompt for a job execution."""
     workspace = config.agent_workspace(agent_name)
-    job_ctx = (
-        "# Job\n\n"
-        "This is an autonomous scheduled job, not a conversation.\n\n"
+    job_details = (
         f"- Name: {job.name}\n"
         f"- Schedule: `{job.schedule}`\n"
         f"- Description: {job.description}\n"
         f"- Job directory: `{job.job_dir}`\n"
-        f"- Workspace: `{workspace}`\n\n"
-        "## Output\n\n"
-        "Your text responses are internal and will not be delivered anywhere.\n"
-        "Use the `send_message` tool to post results.\n"
-        "If you have nothing to post, simply do not call `send_message`."
+        f"- Workspace: `{workspace}`\n"
+        f"- Operator home: `{OPERATOR_DIR}` (also `$OPERATOR_HOME`)"
     )
+    job_ctx = load_prompt("job.md").replace("{job_details}", job_details)
 
     context_sections: list[str] = [job_ctx]
 
