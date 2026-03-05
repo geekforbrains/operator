@@ -18,24 +18,24 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-    "litellm",
-    "slack-bolt",
-    "slack-sdk",
-    "aiohttp",
-    "pyyaml",
-    "pydantic",
-    "markdown-to-mrkdwn",
-    "croniter",
-    "trafilatura",
-    "sqlite-vec",
-    "pysqlite3",
-    "rich",
-    "typing-extensions",
-    "typer",
+    "litellm==1.82.0",
+    "slack-bolt==1.27.0",
+    "slack-sdk==3.40.1",
+    "aiohttp==3.13.3",
+    "pyyaml==6.0.3",
+    "pydantic==2.12.5",
+    "markdown-to-mrkdwn==0.3.1",
+    "croniter==6.0.0",
+    "trafilatura==2.0.0",
+    "sqlite-vec==0.1.6",
+    "pysqlite3==0.6.0",
+    "rich==14.3.3",
+    "typing-extensions==4.15.0",
+    "typer==0.24.1",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff"]
+dev = ["pytest==9.0.2", "ruff==0.15.2"]
 
 [project.scripts]
 operator = "operator_ai.cli:cli"
