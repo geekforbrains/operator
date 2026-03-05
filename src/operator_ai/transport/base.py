@@ -2,11 +2,22 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from operator_ai.tools.registry import ToolDef
+
+
+@dataclass
+class Attachment:
+    """Platform-agnostic file attachment."""
+
+    filename: str
+    content_type: str  # MIME type: image/png, application/pdf, audio/wav
+    size: int  # bytes
+    url: str  # platform download URL (ephemeral)
+    platform_id: str = ""  # slack file ID, telegram file_id, etc.
 
 
 @dataclass
@@ -18,6 +29,7 @@ class IncomingMessage:
     root_message_id: str
     transport_name: str
     is_private: bool = False
+    attachments: list[Attachment] = field(default_factory=list)
 
 
 @dataclass
@@ -82,6 +94,23 @@ class Transport(ABC):
     async def get_thread_context(self, msg: IncomingMessage) -> str | None:
         """Return formatted thread history for context injection. None if not applicable."""
         return None
+
+    async def download_file(self, attachment: Attachment) -> bytes:
+        """Download file bytes for an attachment. Override in transports that support files."""
+        raise NotImplementedError(f"{type(self).__name__} does not support file downloads")
+
+    async def send_file(
+        self,
+        channel_id: str,
+        file_data: bytes,
+        filename: str,
+        thread_id: str | None = None,
+    ) -> str:
+        """Upload a file to a channel, return platform message ID.
+
+        Override in transports that support files.
+        """
+        raise NotImplementedError(f"{type(self).__name__} does not support file uploads")
 
     async def update(
         self, channel_id: str, message_id: str, text: str, thread_id: str | None = None

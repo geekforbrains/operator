@@ -7,6 +7,7 @@ import re
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
+import aiohttp
 from markdown_to_mrkdwn import SlackMarkdownConverter
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
@@ -14,7 +15,7 @@ from slack_sdk.errors import SlackApiError
 from typing_extensions import override
 
 from operator_ai.tools.registry import ToolDef
-from operator_ai.transport.base import IncomingMessage, MessageContext, Transport
+from operator_ai.transport.base import Attachment, IncomingMessage, MessageContext, Transport
 
 logger = logging.getLogger("operator.transport.slack")
 
@@ -24,6 +25,25 @@ _mrkdwn = SlackMarkdownConverter()
 CACHE_REFRESH_SECONDS = 15 * 60  # 15 minutes
 MAX_API_ATTEMPTS = 3
 BASE_RETRY_SECONDS = 1.0
+
+
+def _extract_attachments(event: dict) -> list[Attachment]:
+    """Extract file attachments from a Slack event."""
+    attachments: list[Attachment] = []
+    for f in event.get("files", []):
+        url = f.get("url_private", "")
+        if not url:
+            continue
+        attachments.append(
+            Attachment(
+                filename=f.get("name", "unknown"),
+                content_type=f.get("mimetype", "application/octet-stream"),
+                size=f.get("size", 0),
+                url=url,
+                platform_id=f.get("id", ""),
+            )
+        )
+    return attachments
 
 
 class SlackTransport(Transport):
@@ -238,6 +258,55 @@ class SlackTransport(Transport):
             lambda: app.client.chat_delete(channel=channel_id, ts=message_id),
         )
 
+    # --- File handling ---
+
+    _MAX_DOWNLOAD = 50 * 1024 * 1024  # 50 MB hard limit on file downloads
+
+    @override
+    async def download_file(self, attachment: Attachment) -> bytes:
+        async with aiohttp.ClientSession() as session:
+            headers = {"Authorization": f"Bearer {self._bot_token}"}
+            async with session.get(attachment.url, headers=headers) as resp:
+                resp.raise_for_status()
+                length = resp.content_length
+                if length is not None and length > self._MAX_DOWNLOAD:
+                    raise ValueError(f"File too large: {length} bytes (limit {self._MAX_DOWNLOAD})")
+                data = await resp.read()
+                if len(data) > self._MAX_DOWNLOAD:
+                    raise ValueError(
+                        f"File too large: {len(data)} bytes (limit {self._MAX_DOWNLOAD})"
+                    )
+                return data
+
+    @override
+    async def send_file(
+        self,
+        channel_id: str,
+        file_data: bytes,
+        filename: str,
+        thread_id: str | None = None,
+    ) -> str:
+        app = self._require_app()
+        kwargs: dict = {
+            "channel": channel_id,
+            "content": file_data,
+            "filename": filename,
+        }
+        if thread_id:
+            kwargs["thread_ts"] = thread_id
+        resp = await self._api_call(
+            "files.upload_v2",
+            lambda: app.client.files_upload_v2(**kwargs),
+        )
+        # files_upload_v2 returns file info; extract the message ts if available
+        file_info = resp.get("file", {})
+        shares = file_info.get("shares", {})
+        for share_type in ("public", "private"):
+            for channel_shares in shares.get(share_type, {}).values():
+                if channel_shares:
+                    return channel_shares[0].get("ts", "")
+        return ""
+
     # --- Context resolution ---
 
     @override
@@ -426,6 +495,11 @@ class SlackTransport(Transport):
                 time_str = "unknown time"
             text = m.get("text", "")
             text = MENTION_RE.sub("", text).strip()
+            # Note file attachments in formatted output
+            files = m.get("files", [])
+            if files:
+                file_names = [f.get("name", "file") for f in files]
+                text += f" [attached: {', '.join(file_names)}]"
             thread_ts = m.get("thread_ts")
             reply_count = m.get("reply_count", 0)
             suffix = f" (thread: {thread_ts}, {reply_count} replies)" if reply_count else ""
@@ -469,12 +543,17 @@ class SlackTransport(Transport):
         on_message: Callable[[IncomingMessage], Awaitable[None]],
     ) -> None:
         subtype = event.get("subtype")
-        if subtype:
-            # Ignore edited/deleted/system message variants.
+        if subtype and subtype != "file_share":
+            # Ignore edited/deleted/system message variants,
+            # but allow file_share (message with uploaded files).
             return
         text = event.get("text", "")
         text = MENTION_RE.sub("", text).strip()
-        if not text:
+
+        # Extract file attachments
+        attachments = _extract_attachments(event)
+
+        if not text and not attachments:
             return
 
         channel_id = event.get("channel", "")
@@ -498,5 +577,6 @@ class SlackTransport(Transport):
             root_message_id=root_message_id,
             transport_name=self.name,
             is_private=(event.get("channel_type") == "im"),
+            attachments=attachments,
         )
         await on_message(msg)

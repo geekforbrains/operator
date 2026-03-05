@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import collections
 import fcntl
 import logging
@@ -9,6 +10,7 @@ import os
 import signal
 import sys
 from contextlib import suppress
+from pathlib import Path
 
 # Import tools to trigger registration
 import operator_ai.tools  # noqa: F401
@@ -31,7 +33,7 @@ from operator_ai.tools.context import (
     set_user_context,
 )
 from operator_ai.tools.web import close_session
-from operator_ai.transport.base import IncomingMessage, MessageContext, Transport
+from operator_ai.transport.base import Attachment, IncomingMessage, MessageContext, Transport
 from operator_ai.transport.slack import SlackTransport
 
 logger = logging.getLogger("operator")
@@ -90,6 +92,71 @@ def resolve_allowed_agents(
         if role_cfg:
             allowed.update(role_cfg.agents)
     return allowed
+
+
+_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+MAX_INLINE_SIZE = 5 * 1024 * 1024  # 5 MB — larger images saved to disk instead
+MAX_DOWNLOAD_SIZE = 50 * 1024 * 1024  # 50 MB — skip oversized files
+
+
+async def process_attachments(
+    attachments: list[Attachment],
+    transport: Transport,
+    workspace: Path,
+) -> list[dict]:
+    """Download attachments and return multimodal content blocks.
+
+    Images are inlined as base64 image_url blocks.
+    Other files are saved to workspace/uploads/ and described in a text block.
+    """
+    blocks: list[dict] = []
+    uploads_dir = workspace / "uploads"
+
+    for att in attachments:
+        if att.size > MAX_DOWNLOAD_SIZE:
+            blocks.append(
+                {"type": "text", "text": f"[skipped: {att.filename} too large ({att.size} bytes)]"}
+            )
+            continue
+
+        try:
+            data = await transport.download_file(att)
+        except Exception:
+            logger.warning("Failed to download attachment %s", att.filename, exc_info=True)
+            blocks.append({"type": "text", "text": f"[failed to download: {att.filename}]"})
+            continue
+
+        if att.content_type in _IMAGE_TYPES and len(data) <= MAX_INLINE_SIZE:
+            b64 = base64.b64encode(data).decode()
+            blocks.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{att.content_type};base64,{b64}"},
+                }
+            )
+        else:
+            # Save to workspace/uploads/ so the agent can access it
+            uploads_dir.mkdir(parents=True, exist_ok=True)
+            safe_name = Path(att.filename).name or "unnamed"
+            dest = uploads_dir / safe_name
+            # Avoid overwriting — append suffix if needed
+            if dest.exists():
+                stem, suffix = dest.stem, dest.suffix
+                counter = 1
+                while dest.exists():
+                    dest = uploads_dir / f"{stem}_{counter}{suffix}"
+                    counter += 1
+            dest.write_bytes(data)
+            blocks.append(
+                {
+                    "type": "text",
+                    "text": (
+                        f"[file saved: uploads/{dest.name} ({att.content_type}, {len(data)} bytes)]"
+                    ),
+                }
+            )
+
+    return blocks
 
 
 class ConversationRuntime:
@@ -337,7 +404,19 @@ class Dispatcher:
         if context_parts:
             msg_text = "\n\n".join(context_parts) + "\n\n" + msg.text
 
-        user_message = {"role": "user", "content": msg_text}
+        # Build user message — multimodal if attachments present
+        if msg.attachments:
+            workspace_path = self.config.agent_workspace(agent_name)
+            attachment_blocks = await process_attachments(
+                msg.attachments, transport, workspace_path
+            )
+            content_blocks: list[dict] = []
+            if msg_text:
+                content_blocks.append({"type": "text", "text": msg_text})
+            content_blocks.extend(attachment_blocks)
+            user_message: dict = {"role": "user", "content": content_blocks}
+        else:
+            user_message = {"role": "user", "content": msg_text}
         messages.append(user_message)
         self.store.append_messages(conversation_id, [user_message])
         persisted_count = len(messages)

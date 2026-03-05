@@ -161,9 +161,7 @@ def _shorten_oldest_non_user_content(
     candidates = [
         idx
         for idx, msg in enumerate(messages)
-        if msg.get("role") not in ("user", "system")
-        and isinstance(msg.get("content"), str)
-        and msg.get("content")
+        if msg.get("role") not in ("user", "system") and msg.get("content")
     ]
 
     if not candidates:
@@ -175,12 +173,14 @@ def _shorten_oldest_non_user_content(
         changed = False
         for idx in candidates:
             content = candidate[idx].get("content")
-            if not isinstance(content, str):
-                continue
-            if len(content) <= max_chars:
-                continue
-            candidate[idx]["content"] = _truncate_middle(content, max_chars)
-            changed = True
+            if isinstance(content, str):
+                if len(content) <= max_chars:
+                    continue
+                candidate[idx]["content"] = _truncate_middle(content, max_chars)
+                changed = True
+            elif isinstance(content, list):
+                if _shorten_content_blocks(content, max_chars):
+                    changed = True
 
         if not changed:
             continue
@@ -199,6 +199,18 @@ def _shorten_oldest_non_user_content(
 
     messages[:] = working
     return False
+
+
+def _shorten_content_blocks(blocks: list[dict[str, Any]], max_chars: int) -> bool:
+    """Shorten text blocks within a multimodal content block list. Returns True if anything changed."""
+    changed = False
+    for block in blocks:
+        if block.get("type") == "text":
+            text = block.get("text", "")
+            if isinstance(text, str) and len(text) > max_chars:
+                block["text"] = _truncate_middle(text, max_chars)
+                changed = True
+    return changed
 
 
 def _truncate_middle(content: str, max_chars: int) -> str:
