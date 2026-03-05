@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import logging
 from typing import Any
 
 from operator_ai.log_context import get_run_context, new_run_id, set_run_context
 from operator_ai.prompts import assemble_system_prompt, load_prompt
 from operator_ai.tools.registry import tool
+
+logger = logging.getLogger("operator.subagent")
 
 MAX_SUBAGENT_DEPTH = 3
 
@@ -88,7 +91,15 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
     from operator_ai.agent import run_agent
 
     parent_ctx = get_run_context()
+    parent_agent = parent_ctx.agent if parent_ctx else "unknown"
     target_agent = agent or (parent_ctx.agent if parent_ctx else "sub")
+
+    if agent:
+        logger.info(
+            "spawning agent '%s' from '%s' (depth %d)", target_agent, parent_agent, depth + 1
+        )
+    else:
+        logger.info("spawning sub-agent from '%s' (depth %d)", parent_agent, depth + 1)
 
     async def _child() -> str:
         set_run_context(
