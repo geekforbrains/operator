@@ -17,25 +17,27 @@ def configure(context: dict[str, Any]) -> None:
 @tool(
     description="Post a message to a channel. Returns a platform message ID.",
 )
-async def send_message(channel: str, text: str, thread_id: str = "") -> str:
+async def send_message(channel: str = "", text: str = "", thread_id: str = "") -> str:
     """Post a message to a channel.
 
     Args:
-        channel: Channel name or ID (format depends on platform).
+        channel: Channel name or ID. Defaults to the current conversation channel.
         text: Message content (markdown supported).
-        thread_id: Optional message ID to reply in a thread (ignored if platform has no threading).
+        thread_id: Message ID to reply in a thread. Defaults to the current thread.
     """
     ctx = _context_var.get({})
     transport = ctx.get("transport")
     if transport is None:
         return "[error: no transport configured for send_message]"
 
-    channel_id = await transport.resolve_channel_id(channel)
-    if channel_id is None:
-        return f"[error: could not resolve channel '{channel}']"
+    resolved = await _resolve_channel(ctx, transport, channel)
+    if isinstance(resolved, str) and resolved.startswith("[error"):
+        return resolved
+    channel_id = resolved
+    tid = thread_id or ctx.get("thread_id") or None
 
     try:
-        message_id = await transport.send(channel_id, text, thread_id=thread_id or None)
+        message_id = await transport.send(channel_id, text, thread_id=tid)
         return message_id
     except Exception as e:
         return f"[error: failed to send message: {e}]"
@@ -44,22 +46,24 @@ async def send_message(channel: str, text: str, thread_id: str = "") -> str:
 @tool(
     description="Upload a file from the workspace to a channel. Returns a platform message ID.",
 )
-async def send_file(channel: str, path: str, thread_id: str = "") -> str:
+async def send_file(path: str, channel: str = "", thread_id: str = "") -> str:
     """Upload a file to a channel.
 
     Args:
-        channel: Channel name or ID (format depends on platform).
         path: File path inside the agent workspace.
-        thread_id: Optional message ID to reply in a thread.
+        channel: Channel name or ID. Defaults to the current conversation channel.
+        thread_id: Message ID to reply in a thread. Defaults to the current thread.
     """
     ctx = _context_var.get({})
     transport = ctx.get("transport")
     if transport is None:
         return "[error: no transport configured for send_file]"
 
-    channel_id = await transport.resolve_channel_id(channel)
-    if channel_id is None:
-        return f"[error: could not resolve channel '{channel}']"
+    resolved = await _resolve_channel(ctx, transport, channel)
+    if isinstance(resolved, str) and resolved.startswith("[error"):
+        return resolved
+    channel_id = resolved
+    tid = thread_id or ctx.get("thread_id") or None
 
     workspace = get_workspace().resolve()
     file_path = (workspace / Path(path).expanduser()).resolve()
@@ -77,11 +81,22 @@ async def send_file(channel: str, path: str, thread_id: str = "") -> str:
         if size > max_upload:
             return f"[error: file too large ({size} bytes, limit {max_upload})]"
         file_data = file_path.read_bytes()
-        message_id = await transport.send_file(
-            channel_id, file_data, file_path.name, thread_id=thread_id or None
-        )
+        message_id = await transport.send_file(channel_id, file_data, file_path.name, thread_id=tid)
         return message_id
     except NotImplementedError:
         return "[error: this transport does not support file uploads]"
     except Exception as e:
         return f"[error: failed to send file: {e}]"
+
+
+async def _resolve_channel(ctx: dict, transport: Any, channel: str) -> str:
+    """Resolve channel to an ID, falling back to the current conversation's channel."""
+    if channel:
+        channel_id = await transport.resolve_channel_id(channel)
+        if channel_id is None:
+            return f"[error: could not resolve channel '{channel}']"
+        return channel_id
+    fallback = ctx.get("channel_id")
+    if not fallback:
+        return "[error: no channel specified and no current conversation context]"
+    return fallback

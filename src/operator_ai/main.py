@@ -421,7 +421,13 @@ class Dispatcher:
         self.store.append_messages(conversation_id, [user_message])
         persisted_count = len(messages)
 
-        messaging.configure({"transport": transport})
+        messaging.configure(
+            {
+                "transport": transport,
+                "channel_id": msg.channel_id,
+                "thread_id": msg.root_message_id,
+            }
+        )
         kv_tools.configure({"agent_name": transport.agent_name})
 
         if self.memory_store:

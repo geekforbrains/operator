@@ -265,27 +265,40 @@ def test_send_file_tool(tmp_path: Path):
     workspace.set_workspace(tmp_path)
     (tmp_path / "output.txt").write_text("hello world")
     transport = FakeTransport()
-    messaging.configure({"transport": transport})
+    messaging.configure({"transport": transport, "channel_id": "C1", "thread_id": "t1"})
 
-    result = asyncio.run(messaging.send_file("C1", "output.txt"))
+    result = asyncio.run(messaging.send_file("output.txt"))
     assert result == "msg-123"
     assert len(transport.sent_files) == 1
+    assert transport.sent_files[0][0] == "C1"  # default channel
     assert transport.sent_files[0][2] == "output.txt"
+    assert transport.sent_files[0][3] == "t1"  # default thread
+
+
+def test_send_file_tool_explicit_channel(tmp_path: Path):
+    workspace.set_workspace(tmp_path)
+    (tmp_path / "output.txt").write_text("hello world")
+    transport = FakeTransport()
+    messaging.configure({"transport": transport, "channel_id": "C1", "thread_id": "t1"})
+
+    result = asyncio.run(messaging.send_file("output.txt", channel="C1", thread_id="t2"))
+    assert result == "msg-123"
+    assert transport.sent_files[0][3] == "t2"  # explicit thread overrides default
 
 
 def test_send_file_tool_not_found(tmp_path: Path):
     workspace.set_workspace(tmp_path)
     transport = FakeTransport()
-    messaging.configure({"transport": transport})
+    messaging.configure({"transport": transport, "channel_id": "C1", "thread_id": "t1"})
 
-    result = asyncio.run(messaging.send_file("C1", "missing.txt"))
+    result = asyncio.run(messaging.send_file("missing.txt"))
     assert "not found" in result
 
 
 def test_send_file_tool_escapes_workspace(tmp_path: Path):
     workspace.set_workspace(tmp_path)
     transport = FakeTransport()
-    messaging.configure({"transport": transport})
+    messaging.configure({"transport": transport, "channel_id": "C1", "thread_id": "t1"})
 
-    result = asyncio.run(messaging.send_file("C1", "../../etc/passwd"))
+    result = asyncio.run(messaging.send_file("../../etc/passwd"))
     assert "escapes workspace" in result
