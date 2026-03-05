@@ -108,6 +108,7 @@ async def run_agent(
     tool_filter: Callable[[str], bool] | None = None,
     shared_dir: Path | None = None,
     sandboxed: bool = True,
+    config: Any = None,
 ) -> str:
     """Core agentic loop: LLM -> tool exec -> repeat until text response.
 
@@ -136,6 +137,7 @@ async def run_agent(
             "tool_filter": tool_filter,
             "shared_dir": shared_dir,
             "sandboxed": sandboxed,
+            "config": config,
         }
     )
 

@@ -6,6 +6,7 @@ from collections.abc import Callable, Iterable
 from datetime import datetime
 from pathlib import Path
 
+from operator_ai.agents import AgentInfo, build_agents_prompt, load_agent_body, scan_agents
 from operator_ai.config import OPERATOR_DIR, Config
 from operator_ai.skills import SkillInfo, build_skills_prompt, scan_skills
 
@@ -33,11 +34,8 @@ def load_system_prompt() -> str:
 
 
 def load_agent_prompt(config: Config, agent_name: str) -> str:
-    """Load AGENT.md verbatim. Returns empty string if the file doesn't exist."""
-    agent_md = config.agent_prompt_path(agent_name)
-    if agent_md.exists():
-        return agent_md.read_text().strip()
-    return ""
+    """Load AGENT.md body, stripping frontmatter if present."""
+    return load_agent_body(config.agent_prompt_path(agent_name))
 
 
 def load_skills_prompt(
@@ -60,6 +58,7 @@ def assemble_system_prompt(
     transport_extra: str = "",
     skills_dir: Path = SKILLS_DIR,
     skill_filter: Callable[[str], bool] | None = None,
+    available_agents: list[AgentInfo] | None = None,
 ) -> str:
     """Assemble the runtime system prompt with shared ordering for chat and jobs.
 
@@ -77,6 +76,12 @@ def assemble_system_prompt(
     skills_prompt = load_skills_prompt(skills_dir, skill_filter=skill_filter)
     if skills_prompt:
         stable.append(skills_prompt)
+
+    if available_agents is None:
+        available_agents = scan_agents()
+    agents_prompt = build_agents_prompt(available_agents, agent_name)
+    if agents_prompt:
+        stable.append(agents_prompt)
 
     # --- Dynamic suffix (changes per conversation / turn) ---
     dynamic: list[str] = []

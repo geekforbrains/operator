@@ -492,6 +492,7 @@ class Dispatcher:
                 tool_filter=self.config.agent_tool_filter(agent_name),
                 shared_dir=self.config.shared_dir,
                 sandboxed=self.config.agent_sandboxed(agent_name),
+                config=self.config,
             )
             logger.info("conversation %s — done", conversation_id)
             if usage:
