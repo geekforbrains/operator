@@ -12,6 +12,7 @@ from operator_ai.config import ensure_shared_symlink
 from operator_ai.prompts import CACHE_BOUNDARY
 from operator_ai.tools import registry as tool_registry
 from operator_ai.tools import set_workspace, subagent
+from operator_ai.tools.context import ROLE_GATED_TOOLS, get_user_context
 from operator_ai.tools.registry import ToolDef
 from operator_ai.truncation import prepare_messages_for_model
 
@@ -285,15 +286,28 @@ async def run_agent(
                 result = f"[error: unknown tool '{func_name}']"
                 logger.warning("%s unknown tool: %s", step, func_name)
             else:
-                logger.info("%s tool %s(%s)", step, func_name, _truncate(str(args), 150))
-                try:
-                    raw_result = await tool_def.func(**args)
-                except Exception as e:
-                    result = f"[error: {e}]"
-                    logger.exception("%s tool %s failed: %s", step, func_name, e)
-                else:
-                    result = _normalize_tool_result(raw_result)
-                    logger.info("%s tool %s → %d chars", step, func_name, len(result))
+                result = ""
+
+                # Role gate: block execution if the user lacks the required role
+                required_role = ROLE_GATED_TOOLS.get(func_name)
+                if required_role:
+                    user_ctx = get_user_context()
+                    if not user_ctx or required_role not in user_ctx.roles:
+                        result = f"[error: this tool requires the '{required_role}' role]"
+                        logger.warning(
+                            "%s role gate: %s requires '%s'", step, func_name, required_role
+                        )
+
+                if not result:
+                    logger.info("%s tool %s(%s)", step, func_name, _truncate(str(args), 150))
+                    try:
+                        raw_result = await tool_def.func(**args)
+                    except Exception as e:
+                        result = f"[error: {e}]"
+                        logger.exception("%s tool %s failed: %s", step, func_name, e)
+                    else:
+                        result = _normalize_tool_result(raw_result)
+                        logger.info("%s tool %s → %d chars", step, func_name, len(result))
 
             messages.append(
                 {

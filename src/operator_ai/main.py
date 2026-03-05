@@ -13,7 +13,7 @@ from contextlib import suppress
 # Import tools to trigger registration
 import operator_ai.tools  # noqa: F401
 from operator_ai.agent import run_agent
-from operator_ai.config import OPERATOR_DIR, Config, load_config
+from operator_ai.config import OPERATOR_DIR, Config, RoleConfig, load_config
 from operator_ai.jobs import JobRunner
 from operator_ai.log_context import RunContextFilter, new_run_id, set_run_context
 from operator_ai.memory import MemoryCleaner, MemoryHarvester, MemoryStore
@@ -24,6 +24,12 @@ from operator_ai.store import Store, get_store
 from operator_ai.tools import kv as kv_tools
 from operator_ai.tools import memory as memory_tools
 from operator_ai.tools import messaging
+from operator_ai.tools.context import (
+    UserContext,
+    get_user_context,
+    set_skill_filter,
+    set_user_context,
+)
 from operator_ai.tools.web import close_session
 from operator_ai.transport.base import IncomingMessage, MessageContext, Transport
 from operator_ai.transport.slack import SlackTransport
@@ -70,6 +76,20 @@ def _conversation_memory_scopes(
         scopes.append(("user", user_id))
     scopes.extend([("agent", agent_name), ("global", "global")])
     return scopes
+
+
+def resolve_allowed_agents(
+    roles: list[str], config_roles: dict[str, RoleConfig]
+) -> set[str] | None:
+    """Return the set of agent names a user may access, or None if admin (all access)."""
+    if "admin" in roles:
+        return None
+    allowed: set[str] = set()
+    for role in roles:
+        role_cfg = config_roles.get(role)
+        if role_cfg:
+            allowed.update(role_cfg.agents)
+    return allowed
 
 
 class ConversationRuntime:
@@ -174,7 +194,22 @@ class Dispatcher:
             logger.debug("Duplicate message %s, skipping", msg.message_id)
             return
 
+        # Auth check
+        username = self.store.resolve_username(msg.user_id)
+        if not username:
+            await self._handle_rejection(msg, transport)
+            return
+
+        roles = self.store.get_user_roles(username)
+        allowed_agents = resolve_allowed_agents(roles, self.config.roles)
+
         agent_name = transport.agent_name
+        if allowed_agents is not None and agent_name not in allowed_agents:
+            await self._handle_rejection(msg, transport)
+            return
+
+        set_user_context(UserContext(username=username, roles=roles))
+
         set_run_context(agent=agent_name, run_id=new_run_id())
         conversation_id = self.store.lookup_platform_message(
             msg.transport_name, msg.root_message_id
@@ -191,6 +226,7 @@ class Dispatcher:
 
         # Resolve platform context (cached)
         ctx = await transport.resolve_context(msg)
+        ctx.username = username
         logger.info(
             "message from %s in %s thread=%s",
             ctx.user_name,
@@ -199,7 +235,7 @@ class Dispatcher:
         )
 
         system_prompt = self._build_system_prompt(
-            agent_name, ctx, msg.user_id, transport, msg.is_private
+            agent_name, ctx, username, transport, msg.is_private
         )
         self.store.ensure_conversation(
             conversation_id=conversation_id,
@@ -248,6 +284,9 @@ class Dispatcher:
     ) -> None:
         messages = self.store.load_messages(conversation_id)
 
+        user_ctx = get_user_context()
+        username = user_ctx.username if user_ctx else ""
+
         # Context snapshot injection
         context_parts: list[str] = []
 
@@ -268,7 +307,7 @@ class Dispatcher:
         # Memory injection
         if self.memory_store:
             scopes = _conversation_memory_scopes(
-                user_id=msg.user_id,
+                user_id=username,
                 agent_name=transport.agent_name,
                 is_private=msg.is_private,
             )
@@ -303,11 +342,13 @@ class Dispatcher:
             memory_tools.configure(
                 {
                     "memory_store": self.memory_store,
-                    "user_id": msg.user_id,
+                    "user_id": username,
                     "agent_name": transport.agent_name,
                     "allow_user_scope": msg.is_private,
                 }
             )
+
+        set_skill_filter(self.config.agent_skill_filter(agent_name))
 
         msg_count = sum(1 for m in messages if m.get("role") == "user")
         logger.info("conversation %s — message #%d", conversation_id, msg_count)
@@ -416,6 +457,15 @@ class Dispatcher:
         response = await dispatch_command(cmd_name, ctx)
         if response:
             await transport.send(msg.channel_id, response, thread_id=msg.root_message_id)
+
+    async def _handle_rejection(self, msg: IncomingMessage, transport: Transport) -> None:
+        if self.config.settings.reject_response == "announce":
+            await transport.send(
+                msg.channel_id,
+                "You don't have access to this agent.",
+                thread_id=msg.root_message_id,
+            )
+        # "ignore" = silently drop
 
 
 def create_transports(config: Config) -> list[Transport]:
@@ -533,6 +583,11 @@ async def async_main() -> None:
         else:
             store = get_store()
             memory_store = None
+
+        if not store.list_users():
+            logger.warning(
+                "No users configured. Run: operator user add <username> --role admin <transport> <id>"
+            )
 
         runtimes = RuntimeManager()
         dispatcher = Dispatcher(config, store, runtimes, memory_store=memory_store)

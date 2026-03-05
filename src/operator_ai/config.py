@@ -5,7 +5,7 @@ import os
 import pwd
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
@@ -89,31 +89,13 @@ class TransportConfig(BaseModel):
         return value
 
 
-class ToolPermissions(BaseModel):
-    allow: list[str] | None = None
-    deny: list[str] | None = None
-
-    @model_validator(mode="after")
-    def validate_mutually_exclusive(self) -> ToolPermissions:
-        if self.allow is not None and self.deny is not None:
-            raise ValueError("tools: 'allow' and 'deny' are mutually exclusive")
-        return self
-
-
-class SkillPermissions(BaseModel):
-    allow: list[str] | None = None
-    deny: list[str] | None = None
-
-    @model_validator(mode="after")
-    def validate_mutually_exclusive(self) -> SkillPermissions:
-        if self.allow is not None and self.deny is not None:
-            raise ValueError("skills: 'allow' and 'deny' are mutually exclusive")
-        return self
-
-
 class PermissionsConfig(BaseModel):
-    tools: ToolPermissions = Field(default_factory=ToolPermissions)
-    skills: SkillPermissions = Field(default_factory=SkillPermissions)
+    tools: list[str] | Literal["*"] | None = None  # None = no block = full access
+    skills: list[str] | Literal["*"] | None = None
+
+
+class RoleConfig(BaseModel):
+    agents: list[str]
 
 
 class AgentConfig(BaseModel):
@@ -208,13 +190,21 @@ class MemoryConfig(BaseModel):
 
 class SettingsConfig(BaseModel):
     show_usage: bool = False
+    reject_response: Literal["announce", "ignore"] = "ignore"
 
 
 class Config(BaseModel):
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     agents: dict[str, AgentConfig] = Field(default_factory=dict)
+    roles: dict[str, RoleConfig] = Field(default_factory=dict)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     settings: SettingsConfig = Field(default_factory=SettingsConfig)
+
+    @model_validator(mode="after")
+    def validate_no_admin_role(self) -> Config:
+        if "admin" in self.roles:
+            raise ValueError("admin is a built-in role and cannot be redefined")
+        return self
 
     def agent_models(self, agent_name: str) -> list[str]:
         agent = self.agents.get(agent_name)
@@ -269,28 +259,22 @@ class Config(BaseModel):
         agent = self.agents.get(agent_name)
         if not agent or not agent.permissions:
             return None
-        perms = agent.permissions.tools
-        if perms.allow is not None:
-            allowed = set(perms.allow)
-            return lambda name: name in allowed
-        if perms.deny is not None:
-            denied = set(perms.deny)
-            return lambda name: name not in denied
-        return None
+        tools = agent.permissions.tools
+        if tools is None or tools == "*":
+            return None
+        allowed = set(tools)
+        return lambda name: name in allowed
 
     def agent_skill_filter(self, agent_name: str) -> Callable[[str], bool] | None:
         """Return a predicate that returns True if a skill name is allowed, or None for no filtering."""
         agent = self.agents.get(agent_name)
         if not agent or not agent.permissions:
             return None
-        perms = agent.permissions.skills
-        if perms.allow is not None:
-            allowed = set(perms.allow)
-            return lambda name: name in allowed
-        if perms.deny is not None:
-            denied = set(perms.deny)
-            return lambda name: name not in denied
-        return None
+        skills = agent.permissions.skills
+        if skills is None or skills == "*":
+            return None
+        allowed = set(skills)
+        return lambda name: name in allowed
 
 
 def ensure_shared_symlink(workspace: Path, shared: Path) -> None:

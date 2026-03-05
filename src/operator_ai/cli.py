@@ -30,11 +30,13 @@ job_app = typer.Typer(help="Job inspection and management.")
 service_app = typer.Typer(help="Manage the operator background service.")
 memory_app = typer.Typer(help="Browse and inspect memories.")
 skill_app = typer.Typer(help="Manage skills.")
+user_app = typer.Typer(help="Manage users, identities, and roles.")
 app.add_typer(kv_app, name="kv")
 app.add_typer(job_app, name="job")
 app.add_typer(service_app, name="service")
 app.add_typer(memory_app, name="memories")
 app.add_typer(skill_app, name="skills")
+app.add_typer(user_app, name="user")
 
 LOG_DIR = OPERATOR_DIR / "logs"
 LOG_FILE = LOG_DIR / "operator.log"
@@ -96,6 +98,13 @@ agents:
       type: slack
       bot_token_env: SLACK_BOT_TOKEN
       app_token_env: SLACK_APP_TOKEN
+
+roles:
+  guest:
+    agents: []
+
+settings:
+  reject_response: ignore   # "announce" or "ignore"
 
 # memory:
 #   embed_model: "openai/text-embedding-3-small"
@@ -168,6 +177,9 @@ def init() -> None:
 
     console.print(f"\n[bold green]Operator initialized at {home}[/bold green]")
     console.print("Edit [bold]operator.yaml[/bold] to configure your agents and transports.")
+    console.print(
+        "Add yourself: [bold]operator user add <username> --role admin <transport> <id>[/bold]"
+    )
 
 
 # ── Default: start the service ───────────────────────────────
@@ -806,6 +818,191 @@ def skills_reset(
 
     if all_skills:
         console.print(f"\nReset {len(targets)} bundled skill(s).")
+
+
+# ── User commands ────────────────────────────────────────────
+
+
+@user_app.command("add")
+def user_add(
+    username: str = typer.Argument(help="Username (lowercase alphanumeric, dots, hyphens)."),
+    transport: str = typer.Argument(help="Transport name (e.g. slack, telegram)."),
+    external_id: str = typer.Argument(help="External ID on that transport."),
+    role: str = typer.Option(..., "--role", "-r", help="Role to assign."),
+) -> None:
+    """Create a user with an initial identity and role."""
+    if role != "admin":
+        try:
+            from operator_ai.config import load_config
+
+            config = load_config()
+            if role not in config.roles:
+                console.print(f"[yellow]Warning:[/yellow] role '{role}' is not defined in config.")
+        except Exception:
+            pass
+
+    store = _store()
+    platform_id = f"{transport}:{external_id}"
+    try:
+        store.add_user(username)
+    except ValueError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1) from None
+    except Exception:
+        console.print(f"[red]Error:[/red] user '{username}' already exists.")
+        raise typer.Exit(code=1) from None
+
+    store.add_role(username, role)
+    store.add_identity(username, platform_id)
+    console.print(f"User '{username}' created with role '{role}' and identity '{platform_id}'.")
+
+
+@user_app.command("link")
+def user_link(
+    username: str = typer.Argument(help="Username."),
+    transport: str = typer.Argument(help="Transport name."),
+    external_id: str = typer.Argument(help="External ID on that transport."),
+) -> None:
+    """Link a transport identity to an existing user."""
+    store = _store()
+    if store.get_user(username) is None:
+        console.print(f"[red]Error:[/red] user '{username}' not found.")
+        raise typer.Exit(code=1)
+
+    platform_id = f"{transport}:{external_id}"
+    try:
+        store.add_identity(username, platform_id)
+    except Exception:
+        console.print(f"[red]Error:[/red] identity '{platform_id}' already linked.")
+        raise typer.Exit(code=1) from None
+    console.print(f"Linked '{platform_id}' to user '{username}'.")
+
+
+@user_app.command("unlink")
+def user_unlink(
+    username: str = typer.Argument(help="Username."),
+    transport: str = typer.Argument(help="Transport name."),
+    external_id: str = typer.Argument(help="External ID on that transport."),
+) -> None:
+    """Remove a transport identity from a user."""
+    store = _store()
+    platform_id = f"{transport}:{external_id}"
+    if not store.remove_identity(platform_id):
+        console.print(f"[red]Error:[/red] identity '{platform_id}' not found.")
+        raise typer.Exit(code=1)
+    console.print(f"Unlinked '{platform_id}' from user '{username}'.")
+
+
+@user_app.command("remove")
+def user_remove(
+    username: str = typer.Argument(help="Username to remove."),
+) -> None:
+    """Remove a user entirely (cascades identities and roles)."""
+    store = _store()
+    if not store.remove_user(username):
+        console.print(f"[red]Error:[/red] user '{username}' not found.")
+        raise typer.Exit(code=1)
+    console.print(f"User '{username}' removed.")
+
+
+@user_app.command("list")
+def user_list() -> None:
+    """List all users with identities and roles."""
+    store = _store()
+    users = store.list_users()
+    if not users:
+        console.print("No users found.")
+        raise typer.Exit()
+
+    table = Table(show_header=True, show_edge=False, pad_edge=False)
+    table.add_column("Username", style="bold")
+    table.add_column("Roles")
+    table.add_column("Identities")
+    for user in users:
+        roles = ", ".join(user.roles) if user.roles else "-"
+        identities = ", ".join(user.identities) if user.identities else "-"
+        table.add_row(user.username, roles, identities)
+    console.print(table)
+
+
+@user_app.command("info")
+def user_info(
+    username: str = typer.Argument(help="Username to inspect."),
+) -> None:
+    """Show details for one user."""
+    store = _store()
+    user = store.get_user(username)
+    if user is None:
+        console.print(f"[red]Error:[/red] user '{username}' not found.")
+        raise typer.Exit(code=1)
+
+    table = Table(show_header=False, show_edge=False, pad_edge=False, box=None)
+    table.add_column("Key", style="bold", min_width=12)
+    table.add_column("Value")
+    table.add_row("Username", user.username)
+    table.add_row("Created", user.created_at)
+    table.add_row("Roles", ", ".join(user.roles) if user.roles else "-")
+    table.add_row(
+        "Identities",
+        ", ".join(user.identities) if user.identities else "-",
+    )
+    console.print(table)
+
+
+@user_app.command("add-role")
+def user_add_role(
+    username: str = typer.Argument(help="Username."),
+    role: str = typer.Argument(help="Role to add."),
+) -> None:
+    """Add a role to a user."""
+    store = _store()
+    if store.get_user(username) is None:
+        console.print(f"[red]Error:[/red] user '{username}' not found.")
+        raise typer.Exit(code=1)
+
+    try:
+        store.add_role(username, role)
+    except Exception:
+        console.print(f"[red]Error:[/red] user '{username}' already has role '{role}'.")
+        raise typer.Exit(code=1) from None
+    console.print(f"Added role '{role}' to user '{username}'.")
+
+
+@user_app.command("remove-role")
+def user_remove_role(
+    username: str = typer.Argument(help="Username."),
+    role: str = typer.Argument(help="Role to remove."),
+) -> None:
+    """Remove a role from a user."""
+    store = _store()
+    if not store.remove_role(username, role):
+        console.print(f"[red]Error:[/red] user '{username}' does not have role '{role}'.")
+        raise typer.Exit(code=1)
+    console.print(f"Removed role '{role}' from user '{username}'.")
+
+
+# ── Tools command ────────────────────────────────────────────
+
+
+@app.command("tools")
+def show_tools() -> None:
+    """List all registered built-in tools."""
+    import operator_ai.tools  # noqa: F401
+    from operator_ai.tools.registry import get_tools
+
+    tools = get_tools()
+    table = Table(show_header=True, show_edge=False, pad_edge=False)
+    table.add_column("Tool", style="bold")
+    table.add_column("Description")
+
+    for t in sorted(tools, key=lambda t: t.name):
+        desc = t.description
+        if len(desc) > 80:
+            desc = desc[:77] + "..."
+        table.add_row(t.name, desc)
+
+    console.print(table)
+    console.print("\n[dim]Transports may provide additional tools at runtime.[/dim]")
 
 
 # ── Entry point ──────────────────────────────────────────────

@@ -21,6 +21,26 @@ from operator_ai.config import OPERATOR_DIR
 DB_PATH = OPERATOR_DIR / "state" / "operator.db"
 
 
+_USERNAME_RE = re.compile(r"^[a-z0-9.\-]{1,64}$")
+
+
+def _validate_username(username: str) -> None:
+    if not _USERNAME_RE.match(username):
+        msg = (
+            f"Invalid username {username!r}: must be 1-64 chars, "
+            "lowercase alphanumeric, dots, and hyphens only"
+        )
+        raise ValueError(msg)
+
+
+@dataclass
+class User:
+    username: str
+    created_at: str
+    identities: list[str]
+    roles: list[str]
+
+
 @dataclass
 class JobState:
     last_run: str = ""
@@ -198,6 +218,35 @@ class Store:
             """
             CREATE INDEX IF NOT EXISTS idx_agent_kv_expires
             ON agent_kv(expires_at) WHERE expires_at IS NOT NULL
+            """
+        )
+
+        # User / identity / role tables
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                username TEXT PRIMARY KEY,
+                created_at TEXT DEFAULT (datetime('now'))
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_identities (
+                platform_id TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS user_roles (
+                username TEXT NOT NULL,
+                role TEXT NOT NULL,
+                PRIMARY KEY (username, role),
+                FOREIGN KEY (username) REFERENCES users(username) ON DELETE CASCADE
+            )
             """
         )
 
@@ -623,6 +672,124 @@ class Store:
             (since,),
         ).fetchall()
         return [dict(row) for row in rows]
+
+    # ── Users ────────────────────────────────────────────────────
+
+    def add_user(self, username: str) -> None:
+        _validate_username(username)
+        self._conn.execute("INSERT INTO users (username) VALUES (?)", (username,))
+        self._conn.commit()
+
+    def remove_user(self, username: str) -> bool:
+        cur = self._conn.execute("DELETE FROM users WHERE username = ?", (username,))
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def get_user(self, username: str) -> User | None:
+        row = self._conn.execute(
+            "SELECT username, created_at FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        if row is None:
+            return None
+        identities = [
+            r["platform_id"]
+            for r in self._conn.execute(
+                "SELECT platform_id FROM user_identities WHERE username = ?",
+                (username,),
+            ).fetchall()
+        ]
+        roles = [
+            r["role"]
+            for r in self._conn.execute(
+                "SELECT role FROM user_roles WHERE username = ?",
+                (username,),
+            ).fetchall()
+        ]
+        return User(
+            username=row["username"],
+            created_at=row["created_at"],
+            identities=identities,
+            roles=roles,
+        )
+
+    def list_users(self) -> list[User]:
+        rows = self._conn.execute(
+            "SELECT username, created_at FROM users ORDER BY username"
+        ).fetchall()
+        users: list[User] = []
+        for row in rows:
+            uname = row["username"]
+            identities = [
+                r["platform_id"]
+                for r in self._conn.execute(
+                    "SELECT platform_id FROM user_identities WHERE username = ?",
+                    (uname,),
+                ).fetchall()
+            ]
+            roles = [
+                r["role"]
+                for r in self._conn.execute(
+                    "SELECT role FROM user_roles WHERE username = ?",
+                    (uname,),
+                ).fetchall()
+            ]
+            users.append(
+                User(
+                    username=uname,
+                    created_at=row["created_at"],
+                    identities=identities,
+                    roles=roles,
+                )
+            )
+        return users
+
+    # ── Identities ───────────────────────────────────────────────
+
+    def add_identity(self, username: str, platform_id: str) -> None:
+        self._conn.execute(
+            "INSERT INTO user_identities (platform_id, username) VALUES (?, ?)",
+            (platform_id, username),
+        )
+        self._conn.commit()
+
+    def remove_identity(self, platform_id: str) -> bool:
+        cur = self._conn.execute(
+            "DELETE FROM user_identities WHERE platform_id = ?", (platform_id,)
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def resolve_username(self, platform_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT username FROM user_identities WHERE platform_id = ?",
+            (platform_id,),
+        ).fetchone()
+        return row["username"] if row else None
+
+    # ── Roles ────────────────────────────────────────────────────
+
+    def add_role(self, username: str, role: str) -> None:
+        self._conn.execute(
+            "INSERT INTO user_roles (username, role) VALUES (?, ?)",
+            (username, role),
+        )
+        self._conn.commit()
+
+    def remove_role(self, username: str, role: str) -> bool:
+        cur = self._conn.execute(
+            "DELETE FROM user_roles WHERE username = ? AND role = ?",
+            (username, role),
+        )
+        self._conn.commit()
+        return cur.rowcount > 0
+
+    def get_user_roles(self, username: str) -> list[str]:
+        rows = self._conn.execute(
+            "SELECT role FROM user_roles WHERE username = ? ORDER BY role",
+            (username,),
+        ).fetchall()
+        return [row["role"] for row in rows]
 
 
 def serialize_float32(vec: list[float]) -> bytes:

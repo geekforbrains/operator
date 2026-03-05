@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from operator_ai.main import _conversation_memory_scopes
 from operator_ai.memory import _parse_harvested_line
 from operator_ai.tools import memory as memory_tools
 
@@ -90,3 +91,35 @@ def test_parse_harvested_line_accepts_agent_and_global_when_not_private() -> Non
     )
     assert parsed_agent == ("agent", "operator", "Project uses uv")
     assert parsed_global == ("global", "global", "Python 3.11 is required")
+
+
+# -- memory scopes use username, not platform ID ----------------------------
+
+
+def test_conversation_memory_scopes_uses_username() -> None:
+    scopes = _conversation_memory_scopes(
+        user_id="gavin",
+        agent_name="hermy",
+        is_private=True,
+    )
+    assert scopes == [("user", "gavin"), ("agent", "hermy"), ("global", "global")]
+
+
+def test_conversation_memory_scopes_private_without_user() -> None:
+    scopes = _conversation_memory_scopes(
+        user_id="",
+        agent_name="hermy",
+        is_private=True,
+    )
+    # Empty user_id should be excluded even in private context
+    assert scopes == [("agent", "hermy"), ("global", "global")]
+
+
+def test_conversation_memory_scopes_public_channel() -> None:
+    scopes = _conversation_memory_scopes(
+        user_id="gavin",
+        agent_name="hermy",
+        is_private=False,
+    )
+    # Public channels should not include user scope
+    assert scopes == [("agent", "hermy"), ("global", "global")]

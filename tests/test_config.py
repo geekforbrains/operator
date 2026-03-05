@@ -7,7 +7,9 @@ import pytest
 from operator_ai.config import (
     Config,
     DefaultsConfig,
-    ToolPermissions,
+    PermissionsConfig,
+    RoleConfig,
+    SettingsConfig,
     ensure_shared_symlink,
 )
 
@@ -50,45 +52,36 @@ def test_no_permissions_returns_none_filters() -> None:
     assert c.agent_skill_filter("a") is None
 
 
-def test_tool_allow_filter() -> None:
-    c = _cfg(permissions={"tools": {"allow": ["read_file", "list_files"]}})
+def test_permissions_none_means_unrestricted() -> None:
+    c = _cfg(permissions={"tools": None, "skills": None})
+    assert c.agent_tool_filter("a") is None
+    assert c.agent_skill_filter("a") is None
+
+
+def test_permissions_star_means_unrestricted() -> None:
+    c = _cfg(permissions={"tools": "*", "skills": "*"})
+    assert c.agent_tool_filter("a") is None
+    assert c.agent_skill_filter("a") is None
+
+
+def test_tool_list_filter() -> None:
+    c = _cfg(permissions={"tools": ["read_file", "list_files"]})
     f = c.agent_tool_filter("a")
     assert f is not None
     assert f("read_file") is True
     assert f("run_shell") is False
 
 
-def test_tool_deny_filter() -> None:
-    c = _cfg(permissions={"tools": {"deny": ["run_shell"]}})
-    f = c.agent_tool_filter("a")
-    assert f is not None
-    assert f("read_file") is True
-    assert f("run_shell") is False
-
-
-def test_skill_allow_filter() -> None:
-    c = _cfg(permissions={"skills": {"allow": ["deploy"]}})
+def test_skill_list_filter() -> None:
+    c = _cfg(permissions={"skills": ["deploy"]})
     f = c.agent_skill_filter("a")
     assert f is not None
     assert f("deploy") is True
     assert f("other") is False
 
 
-def test_skill_deny_filter() -> None:
-    c = _cfg(permissions={"skills": {"deny": ["deploy"]}})
-    f = c.agent_skill_filter("a")
-    assert f is not None
-    assert f("deploy") is False
-    assert f("other") is True
-
-
-def test_allow_and_deny_raises() -> None:
-    with pytest.raises(ValueError, match="mutually exclusive"):
-        ToolPermissions(allow=["a"], deny=["b"])
-
-
 def test_unknown_agent_returns_none_filter() -> None:
-    c = _cfg(permissions={"tools": {"deny": ["run_shell"]}})
+    c = _cfg(permissions={"tools": ["run_shell"]})
     assert c.agent_tool_filter("nonexistent") is None
 
 
@@ -96,6 +89,65 @@ def test_empty_permissions_returns_none_filter() -> None:
     c = _cfg(permissions={})
     assert c.agent_tool_filter("a") is None
     assert c.agent_skill_filter("a") is None
+
+
+# ── Flat permissions model ───────────────────────────────────
+
+
+def test_permissions_config_defaults() -> None:
+    p = PermissionsConfig()
+    assert p.tools is None
+    assert p.skills is None
+
+
+def test_permissions_config_star() -> None:
+    p = PermissionsConfig(tools="*", skills="*")
+    assert p.tools == "*"
+    assert p.skills == "*"
+
+
+def test_permissions_config_list() -> None:
+    p = PermissionsConfig(tools=["a", "b"], skills=["c"])
+    assert p.tools == ["a", "b"]
+    assert p.skills == ["c"]
+
+
+# ── RoleConfig ───────────────────────────────────────────────
+
+
+def test_role_config_validation() -> None:
+    r = RoleConfig(agents=["alice", "bob"])
+    assert r.agents == ["alice", "bob"]
+
+
+def test_admin_role_raises() -> None:
+    with pytest.raises(ValueError, match="admin is a built-in role"):
+        Config(
+            defaults={"models": ["test/m"]},
+            roles={"admin": {"agents": ["alice"]}},
+        )
+
+
+def test_custom_roles_allowed() -> None:
+    c = Config(
+        defaults={"models": ["test/m"]},
+        roles={"developer": {"agents": ["alice"]}},
+    )
+    assert "developer" in c.roles
+    assert c.roles["developer"].agents == ["alice"]
+
+
+# ── SettingsConfig ───────────────────────────────────────────
+
+
+def test_reject_response_defaults_to_ignore() -> None:
+    s = SettingsConfig()
+    assert s.reject_response == "ignore"
+
+
+def test_reject_response_announce() -> None:
+    s = SettingsConfig(reject_response="announce")
+    assert s.reject_response == "announce"
 
 
 # ── Shared symlink ───────────────────────────────────────────

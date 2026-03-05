@@ -27,14 +27,19 @@ class MessageContext:
     channel_name: str
     user_id: str
     user_name: str
+    username: str = ""
 
     def to_prompt(self, workspace: str = "") -> str:
+        if self.username:
+            user_line = f"- User: {self.username} ({self.user_name} via {self.platform})"
+        else:
+            user_line = f"- User: {self.user_name} (`{self.user_id}`)"
         lines = [
             "# Context",
             "",
             f"- Platform: {self.platform}",
             f"- Channel: {self.channel_name} (`{self.channel_id}`)",
-            f"- User: {self.user_name} (`{self.user_id}`)",
+            user_line,
         ]
         if workspace:
             lines.append(f"- Workspace: `{workspace}`")
