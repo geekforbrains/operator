@@ -9,6 +9,7 @@ from operator_ai.skills import (
     scan_skills,
     validate_skill_frontmatter,
 )
+from operator_ai.tools.context import get_skill_filter
 from operator_ai.tools.registry import tool
 
 SKILLS_DIR = OPERATOR_DIR / "skills"
@@ -47,6 +48,9 @@ async def manage_skill(action: str, name: str = "", config: str = "") -> str:
 
 def _list_skills() -> str:
     skills = scan_skills(SKILLS_DIR)
+    skill_filter = get_skill_filter()
+    if skill_filter is not None:
+        skills = [s for s in skills if skill_filter(s.name)]
     if not skills:
         return "No skills found."
 
