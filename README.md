@@ -9,7 +9,8 @@ It is intentionally small and file-driven:
 
 ## Core Features
 
-- Multiple agents (`~/.operator/agents/*/AGENT.md`)
+- Multiple agents with frontmatter metadata (`~/.operator/agents/*/AGENT.md`)
+- Cross-agent delegation via `spawn_agent(agent="...")`
 - Multiple transports (currently Slack)
 - Skills discovery from `~/.operator/skills/*/SKILL.md`
 - Scheduled jobs with `prerun` gating and `postrun` hooks
@@ -146,7 +147,7 @@ agents:
 
 The `shared/` symlink inside each workspace points outside the workspace directory. Sandboxed agents can access `shared/` contents via `run_shell` but not through file tools directly. Unsandboxed agents have no such restriction.
 
-Sub-agents inherit their parent's sandbox setting.
+Sub-agents inherit their parent's sandbox setting unless spawned as a different agent (via `spawn_agent(agent="...")`), in which case the target agent's sandbox setting is used.
 
 ### Permissions
 
@@ -169,7 +170,7 @@ Rules:
 - **No `permissions` block** = full access to all tools and skills.
 - **`"*"`** = explicit full access.
 - **`[list]`** = only these names. Everything else is hidden from the LLM.
-- Sub-agents inherit their parent's tool filter.
+- Sub-agents inherit their parent's tool filter unless spawned as a different agent, in which case the target agent's permissions apply.
 
 Run `operator tools` to see all available built-in tool names.
 
@@ -223,6 +224,37 @@ Use namespaces to group related keys (typically by job name). Use TTL to prevent
 ### Agent Workspace
 
 Each agent has a workspace directory at `~/.operator/agents/<name>/workspace/`. This is the working directory for all tool calls — shell commands, file reads/writes, and `list_files` all resolve relative paths against it. Files written here persist across conversations and job runs.
+
+### Agent Format
+
+Each agent's prompt is `~/.operator/agents/<name>/AGENT.md`. Like skills and jobs, agents support optional YAML frontmatter with `name` and `description`:
+
+```yaml
+---
+name: researcher
+description: Deep research agent with web access and document analysis.
+---
+
+# Agent
+
+You are a research specialist...
+```
+
+When frontmatter is present, the runtime scans all agents and injects an "Available Agents" block into each agent's system prompt — listing the other agents and their descriptions. This enables agents to discover each other and delegate tasks via `spawn_agent`.
+
+Agents without a `description` in their frontmatter are omitted from the list. The frontmatter is stripped before injecting the prompt body — the LLM only sees the markdown content below the `---` delimiters.
+
+### Cross-Agent Spawning
+
+The `spawn_agent` tool accepts an optional `agent` parameter to delegate a task to a different agent:
+
+```
+spawn_agent(task="Review this PR", agent="coder")
+```
+
+When `agent` is specified, the sub-agent runs with the target agent's full config — its own system prompt, models, workspace, sandbox setting, and permissions. When omitted, the sub-agent inherits the calling agent's context (original behavior).
+
+Sub-agents are capped at 3 levels of nesting. Each spawn is logged with the parent agent, target agent, and depth for traceability.
 
 ## Filesystem Layout
 
@@ -404,7 +436,7 @@ Each job tracks four counters in SQLite:
 - `web_fetch`
 - `send_message`
 - `send_file`
-- `spawn_agent`
+- `spawn_agent` (supports cross-agent delegation via `agent` parameter)
 - `manage_job`
 - `manage_skill`
 - `read_skill`
@@ -436,11 +468,12 @@ Messages starting with `!` bypass the LLM.
 Ordered from most stable (cache-friendly) to least stable:
 
 1. `SYSTEM.md` — system preamble (auto-created at `~/.operator/SYSTEM.md`)
-2. `AGENT.md` — agent prompt body (verbatim)
-3. `# Context` block (platform/channel/user/workspace) or `# Job` block
-4. Pinned memories (from SQLite, always injected) — chat only
-5. Available skills from scanned `skills/*/SKILL.md`
-6. Transport extras (`transport.get_prompt_extra()`) — e.g. Slack channel list, messaging instructions
+2. `AGENT.md` — agent prompt body (frontmatter stripped)
+3. Available skills from scanned `skills/*/SKILL.md`
+4. Available agents from scanned `agents/*/AGENT.md` frontmatter (other agents only)
+5. `# Context` block (platform/channel/user/workspace) or `# Job` block
+6. Pinned memories (from SQLite, always injected) — chat only
+7. Transport extras (`transport.get_prompt_extra()`) — e.g. Slack channel list, messaging instructions
 
 ## Conversation and Routing Model
 
@@ -462,6 +495,7 @@ src/operator_ai/
 ├── main.py              # service lifecycle, dispatch, commands
 ├── config.py            # yaml + env config
 ├── agent.py             # litellm loop and tool execution
+├── agents.py            # agent metadata scan/frontmatter/prompt block
 ├── truncation.py        # token-budget, exchange-safe history shaping
 ├── store.py             # sqlite persistence, vector search, KV, caches
 ├── memory.py            # MemoryStore (embed/save/search) + MemoryHarvester + MemoryCleaner
