@@ -4,8 +4,9 @@ import asyncio
 import logging
 import os
 import shlex
+import subprocess
 
-from operator_ai.config import OPERATOR_DIR, load_config
+from operator_ai.config import LOGIN_SHELL, OPERATOR_DIR, load_config
 from operator_ai.tools.context import get_skill_filter
 from operator_ai.tools.registry import tool
 from operator_ai.tools.workspace import get_workspace
@@ -15,6 +16,25 @@ logger = logging.getLogger("operator.tools.skills_access")
 SKILLS_DIR = OPERATOR_DIR / "skills"
 _MAX_OUTPUT = 16_384  # 16 KB
 _SKILL_SUBDIRS = ("scripts/", "references/", "assets/")
+
+
+def _login_shell_path() -> str:
+    """Resolve PATH from the user's login shell (Homebrew, pyenv, etc.)."""
+    try:
+        result = subprocess.run(
+            [LOGIN_SHELL, "-l", "-c", "echo $PATH"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return os.environ.get("PATH", "/usr/bin:/bin")
+
+
+_LOGIN_PATH = _login_shell_path()
 
 
 def _check_skill_access(skill: str) -> str | None:
@@ -113,8 +133,7 @@ async def run_skill(skill: str, command: str, timeout: int = 120) -> str:
 
     # Build env
     env = os.environ.copy()
-
-    # Set SKILL_DIR
+    env["PATH"] = _LOGIN_PATH
     env["SKILL_DIR"] = str(skill_dir)
 
     # Strip transport-config env vars
