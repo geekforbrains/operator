@@ -8,7 +8,7 @@ from typing import Any
 
 import litellm
 
-from operator_ai.config import ensure_shared_symlink
+from operator_ai.config import Config, ensure_shared_symlink
 from operator_ai.prompts import CACHE_BOUNDARY
 from operator_ai.tools import registry as tool_registry
 from operator_ai.tools import set_workspace, subagent
@@ -108,7 +108,7 @@ async def run_agent(
     tool_filter: Callable[[str], bool] | None = None,
     shared_dir: Path | None = None,
     sandboxed: bool = True,
-    config: Any = None,
+    config: Config | None = None,
 ) -> str:
     """Core agentic loop: LLM -> tool exec -> repeat until text response.
 

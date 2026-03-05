@@ -50,10 +50,7 @@ def load_agent_body(agent_md: Path) -> str:
     """Load the markdown body of an AGENT.md, stripping frontmatter if present."""
     if not agent_md.exists():
         return ""
-    text = agent_md.read_text()
-    if parse_frontmatter(text) is not None:
-        return extract_body(text)
-    return text.strip()
+    return extract_body(agent_md.read_text())
 
 
 def build_agents_prompt(agents: list[AgentInfo], current_agent: str) -> str:

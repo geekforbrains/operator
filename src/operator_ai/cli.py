@@ -764,7 +764,8 @@ def show_agents() -> None:
     for name, agent in config.agents.items():
         models = ", ".join(agent.models) if agent.models else ", ".join(config.defaults.models)
         transport_type = agent.transport.type if agent.transport else "none"
-        description = agent_infos[name].description if name in agent_infos else ""
+        info = agent_infos.get(name)
+        description = info.description if info else ""
         agent_md = config.agent_prompt_path(name)
         workspace = config.agent_workspace(name)
         flags = []

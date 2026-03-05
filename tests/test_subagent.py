@@ -22,7 +22,12 @@ class FakeConfig:
         self.defaults = type(
             "D",
             (),
-            {"models": ["openai/gpt-4.1"], "max_iterations": 25, "context_ratio": 0.5},
+            {
+                "models": ["openai/gpt-4.1"],
+                "max_iterations": 25,
+                "context_ratio": 0.5,
+                "max_output_tokens": None,
+            },
         )()
         self.agents = {
             "researcher": FakeAgentConfig(sandbox=False),
@@ -45,7 +50,7 @@ class FakeConfig:
 
     def agent_max_output_tokens(self, name: str) -> int | None:
         a = self.agents.get(name)
-        return a.max_output_tokens if a and a.max_output_tokens else None
+        return a.max_output_tokens if a and a.max_output_tokens else self.defaults.max_output_tokens
 
     def agent_sandboxed(self, name: str) -> bool:
         a = self.agents.get(name)
@@ -69,11 +74,32 @@ def test_resolve_empty_string_returns_current() -> None:
 
 def test_resolve_known_agent() -> None:
     config = FakeConfig()
-    current = {"models": ["m1"], "workspace": "/ws", "config": config}
+    current = {"models": ["m1"], "workspace": "/ws", "config": config, "extra_tools": ["t1"]}
     result = _resolve_agent_context("researcher", current)
     assert result["models"] == ["anthropic/claude-sonnet-4-6"]
     assert "researcher" in result["workspace"]
     assert result["sandboxed"] is False
+    assert result["max_iterations"] == 25
+    assert result["context_ratio"] == 0.5
+    assert result["max_output_tokens"] is None
+    assert result["tool_filter"] is None
+    assert result["agent_name"] == "researcher"
+
+
+def test_resolve_preserves_parent_keys() -> None:
+    config = FakeConfig()
+    current = {
+        "models": ["m1"],
+        "config": config,
+        "extra_tools": ["web_fetch"],
+        "usage": {"prompt_tokens": 100},
+        "shared_dir": "/shared",
+    }
+    result = _resolve_agent_context("researcher", current)
+    assert result["extra_tools"] == ["web_fetch"]
+    assert result["usage"] == {"prompt_tokens": 100}
+    assert result["shared_dir"] == "/shared"
+    assert result["config"] is config
 
 
 def test_resolve_unknown_agent_raises() -> None:

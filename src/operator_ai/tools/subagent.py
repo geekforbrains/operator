@@ -5,12 +5,14 @@ import contextvars
 from typing import Any
 
 from operator_ai.log_context import get_run_context, new_run_id, set_run_context
-from operator_ai.prompts import load_prompt
+from operator_ai.prompts import assemble_system_prompt, load_prompt
 from operator_ai.tools.registry import tool
 
 MAX_SUBAGENT_DEPTH = 3
 
-_context_var: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("_agent_context")
+_context_var: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "_agent_context", default=None
+)
 
 
 def configure(context: dict[str, Any]) -> None:
@@ -52,7 +54,10 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
         context: Optional additional context or data for the sub-agent.
         agent: Optional agent name to spawn. Uses a different agent's config (prompt, models, workspace). If omitted, inherits the calling agent's context.
     """
-    current_context = _context_var.get({})
+    current_context = _context_var.get()
+    if current_context is None:
+        return "[error: subagent context not configured]"
+
     depth = current_context.get("depth", 0)
     if depth >= MAX_SUBAGENT_DEPTH:
         return f"[error: max subagent depth ({MAX_SUBAGENT_DEPTH}) reached]"
@@ -64,8 +69,6 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
 
     # Build system prompt — use the target agent's prompt if spawning a different agent
     if agent and resolved.get("config"):
-        from operator_ai.prompts import assemble_system_prompt
-
         system_prompt = assemble_system_prompt(
             config=resolved["config"],
             agent_name=agent,
@@ -106,6 +109,7 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
             tool_filter=resolved.get("tool_filter"),
             shared_dir=resolved.get("shared_dir"),
             sandboxed=resolved.get("sandboxed", True),
+            config=resolved.get("config"),
         )
 
     # Run in a copied context so the child's configure() call doesn't
