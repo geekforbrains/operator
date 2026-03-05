@@ -50,6 +50,37 @@ _SYSTEMD_DIR = Path.home() / ".config" / "systemd" / "user"
 _SYSTEMD_PATH = _SYSTEMD_DIR / _SYSTEMD_UNIT
 
 
+def _setup_cli_logging() -> None:
+    """Set up logging for CLI commands — writes to the shared log file + stderr."""
+    import logging.handlers
+
+    from operator_ai.log_context import RunContextFilter
+
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    fmt = logging.Formatter(
+        "%(asctime)s %(levelname)-5s %(run_ctx)s%(message)s", datefmt="%H:%M:%S"
+    )
+    ctx_filter = RunContextFilter()
+
+    fh = logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=5_000_000, backupCount=3)
+    fh.setFormatter(fmt)
+    fh.setLevel(logging.DEBUG)
+    fh.addFilter(ctx_filter)
+
+    sh = logging.StreamHandler()
+    sh.setFormatter(fmt)
+    sh.setLevel(logging.INFO)
+    sh.addFilter(ctx_filter)
+
+    root = logging.getLogger("operator")
+    root.setLevel(logging.DEBUG)
+    root.addHandler(fh)
+    root.addHandler(sh)
+
+    for name in ("httpx", "httpcore", "litellm", "openai"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
 def _resolve_agent(agent: str | None) -> str:
     """Resolve agent: --agent flag > OPERATOR_AGENT env > config default."""
     if agent:
@@ -549,6 +580,10 @@ def job_run(
     from operator_ai.config import load_config
     from operator_ai.jobs import run_job_now
     from operator_ai.store import get_store
+    from operator_ai.transport.cli import CliTransport
+
+    _setup_cli_logging()
+    cli_logger = logging.getLogger("operator.cli")
 
     config = load_config()
     store = get_store()
@@ -559,11 +594,16 @@ def job_run(
         raise typer.Exit(code=1)
     agent_name = job.agent or config.default_agent()
 
+    cli_logger.info("CLI job run: '%s' (agent: %s)", name, agent_name)
     print(f"Running job '{name}' with agent '{agent_name}'...")
+
+    transport = CliTransport(agent_name)
 
     async def _run() -> None:
         try:
-            await run_job_now(name=name, config=config, store=store)
+            await run_job_now(
+                name=name, config=config, store=store, transports={agent_name: transport}
+            )
         except ValueError as e:
             print(str(e))
             raise typer.Exit(code=1) from None
