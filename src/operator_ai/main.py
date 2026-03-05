@@ -164,6 +164,7 @@ class ConversationRuntime:
     def __init__(self) -> None:
         self._active = False
         self.cancelled = asyncio.Event()
+        self._task: asyncio.Task[None] | None = None
 
     @property
     def busy(self) -> bool:
@@ -185,9 +186,16 @@ class ConversationRuntime:
     def release(self) -> None:
         logger.debug("release runtime=%s", id(self))
         self._active = False
+        self._task = None
+
+    def attach_task(self, task: asyncio.Task[None]) -> None:
+        self._task = task
 
     def cancel(self) -> None:
         self.cancelled.set()
+        task = self._task
+        if task is not None and not task.done():
+            task.cancel()
 
     def check_cancelled(self) -> None:
         if self.cancelled.is_set():
@@ -345,6 +353,9 @@ class Dispatcher:
             return
 
         try:
+            current = asyncio.current_task()
+            if current is not None:
+                runtime.attach_task(current)
             await self._run_conversation(msg, transport, runtime, conversation_id, agent_name)
         finally:
             runtime.release()
@@ -484,7 +495,7 @@ class Dispatcher:
             if usage:
                 usage_line = _format_usage(usage)
                 await transport.send(msg.channel_id, usage_line, thread_id=msg.root_message_id)
-        except AgentCancelledError:
+        except (AgentCancelledError, asyncio.CancelledError):
             logger.info("conversation %s — stopped by user", conversation_id)
             await transport.send(msg.channel_id, "Request stopped.", thread_id=msg.root_message_id)
         except Exception as e:

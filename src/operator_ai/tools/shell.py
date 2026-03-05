@@ -23,6 +23,7 @@ async def run_shell(command: str, timeout: int = 120) -> str:
     # environment (Homebrew, Cargo, pyenv, etc.) are available — even when
     # the process is launched from a minimal launchd environment.
     wrapped = [LOGIN_SHELL, "-l", "-c", command]
+    proc: asyncio.subprocess.Process | None = None
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -32,9 +33,16 @@ async def run_shell(command: str, timeout: int = 120) -> str:
             cwd=get_workspace(),
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.CancelledError:
+        # !stop should terminate in-flight shell commands immediately.
+        if proc is not None:
+            proc.kill()
+            await proc.wait()
+        raise
     except TimeoutError:
-        proc.kill()
-        await proc.wait()
+        if proc is not None:
+            proc.kill()
+            await proc.wait()
         return f"[timed out after {timeout}s]"
 
     out = stdout.decode(errors="replace")
