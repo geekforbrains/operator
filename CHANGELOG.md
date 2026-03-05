@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-03-05
+
+### Added
+
+- Users, roles, and auth — every inbound message is authenticated against a user database with role-based agent access control
+- Agent permissions — flat allow-lists for tools and skills per agent
+- Skill access tools (`read_skill`, `run_skill`) for agents without shell access
+- Agent sandbox — `sandbox` config flag confines file tools to the workspace (default) or grants full filesystem access
+- File/media support — Slack users can upload images, PDFs, and documents; images are sent as vision input, other files saved to `workspace/uploads/`
+- `send_file` tool for uploading workspace files back to chat
+- `operator job run` CLI command with dedicated CLI transport and logging
+- `manage_users` admin-only tool for runtime user management
+
+### Fixed
+
+- `send_message` and `send_file` default to the current conversation's channel and thread
+- Hook scripts respect shebang interpreter via `exec`
+- Skill script paths expanded correctly in `argv[0]` for `run_skill`
+- `manage_skill list` respects agent skill permissions
+- Login shell PATH resolved correctly for `run_skill`
+
 ## [0.3.0] - 2026-03-04
 
 ### Added
