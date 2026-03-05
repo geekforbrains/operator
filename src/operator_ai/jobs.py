@@ -14,6 +14,7 @@ from typing import Any
 from croniter import croniter
 
 from operator_ai.config import LOGIN_SHELL, OPERATOR_DIR, Config
+from operator_ai.job_specs import JOBS_DIR
 from operator_ai.log_context import new_run_id, set_run_context
 from operator_ai.prompts import assemble_system_prompt
 from operator_ai.skills import extract_body, parse_frontmatter
@@ -21,8 +22,6 @@ from operator_ai.store import DB_PATH, Store
 from operator_ai.transport.base import Transport
 
 logger = logging.getLogger("operator.jobs")
-
-JOBS_DIR = OPERATOR_DIR / "jobs"
 
 
 @dataclass

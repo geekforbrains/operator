@@ -71,6 +71,8 @@ TOOL_LABELS: dict[str, Callable[[dict], str]] = {
     "kv_delete": _label_static("Deleting state..."),
     "kv_list": _label_static("Listing state..."),
     "list_channels": _label_static("Listing channels..."),
+    "read_channel": _label_static("Reading channel..."),
+    "read_thread": _label_static("Reading thread..."),
 }
 
 

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
+import re
+import shutil
 import subprocess
 import sys
 import textwrap
@@ -175,8 +178,6 @@ def main(ctx: typer.Context) -> None:
 
 def _find_operator_bin() -> str:
     """Find the operator executable path."""
-    import shutil
-
     path = shutil.which("operator")
     if path:
         return path
@@ -318,8 +319,6 @@ def service_status() -> None:
             print("Service not loaded.")
             raise typer.Exit(code=1)
         # Parse the dict-style output from `launchctl list <label>`
-        import re
-
         output = result.stdout
         pid_match = re.search(r'"PID"\s*=\s*(\d+)', output)
         exit_match = re.search(r'"LastExitStatus"\s*=\s*(\d+)', output)
@@ -355,8 +354,6 @@ def logs(
     if follow:
         cmd.append("-f")
     cmd.append(str(LOG_FILE))
-    import contextlib
-
     with contextlib.suppress(KeyboardInterrupt):
         subprocess.run(cmd)
 

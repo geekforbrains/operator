@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from operator_ai.config import OPERATOR_DIR, Config
+from operator_ai.job_specs import JOBS_DIR as _JOBS_DIR
 from operator_ai.job_specs import find_job_spec, scan_job_specs
 from operator_ai.store import Store
 
@@ -117,7 +118,7 @@ async def cmd_jobs(ctx: CommandContext) -> str:
 
 
 def _list_jobs(ctx: CommandContext) -> str:
-    jobs = _scan_jobs()
+    jobs = scan_job_specs(_JOBS_DIR)
     if not jobs:
         return "No jobs found."
 
@@ -147,7 +148,7 @@ async def _job_subcommand(ctx: CommandContext) -> str:
         return "Job enable/disable is disabled in chat. Use `operator job disable <name>`."
 
     # Show single job details
-    job = _find_job(job_name)
+    job = find_job_spec(job_name, _JOBS_DIR)
     if not job:
         return f"Job `{job_name}` not found."
 
@@ -238,14 +239,3 @@ async def _memories_subcommand(ctx: CommandContext) -> str:
         return "Memory mutation is disabled in chat. Use CLI tooling for memory updates."
 
     return f"Unknown memories subcommand: `{action}`. Use `clear` or `delete <id>`."
-
-
-# ── Helpers (shared with cli.py) ─────────────────────────────
-
-
-def _scan_jobs():
-    return scan_job_specs(OPERATOR_DIR / "jobs")
-
-
-def _find_job(name: str):
-    return find_job_spec(name, OPERATOR_DIR / "jobs")

@@ -330,10 +330,69 @@ class SlackTransport(Transport):
                 return "No channels cached yet. Try again shortly."
             return "\n".join(self._format_channel_list())
 
+        async def read_channel(channel: str, count: int = 20) -> str:
+            """Read recent messages from a Slack channel.
+
+            Args:
+                channel: Channel name (e.g. #general) or channel ID.
+                count: Number of recent messages to fetch (max 100, default 20).
+            """
+            channel_id = await self.resolve_channel_id(channel)
+            if channel_id is None:
+                return f"[error: could not resolve channel '{channel}']"
+            app = self._require_app()
+            count = max(1, min(count, 100))
+            try:
+                resp = await self._api_call(
+                    "conversations.history",
+                    lambda: app.client.conversations_history(channel=channel_id, limit=count),
+                )
+            except Exception as e:
+                return f"[error: failed to read channel: {e}]"
+            messages = resp.get("messages", [])
+            if not messages:
+                return "No messages found."
+            return await self._format_messages(messages)
+
+        async def read_thread(channel: str, thread_id: str, count: int = 50) -> str:
+            """Read messages from a Slack thread.
+
+            Args:
+                channel: Channel name (e.g. #general) or channel ID where the thread lives.
+                thread_id: The thread timestamp (ts) of the parent message.
+                count: Number of messages to fetch (max 100, default 50).
+            """
+            channel_id = await self.resolve_channel_id(channel)
+            if channel_id is None:
+                return f"[error: could not resolve channel '{channel}']"
+            app = self._require_app()
+            count = max(1, min(count, 100))
+            try:
+                resp = await self._api_call(
+                    "conversations.replies",
+                    lambda: app.client.conversations_replies(
+                        channel=channel_id, ts=thread_id, limit=count
+                    ),
+                )
+            except Exception as e:
+                return f"[error: failed to read thread: {e}]"
+            messages = resp.get("messages", [])
+            if not messages:
+                return "No messages found in thread."
+            return await self._format_messages(messages)
+
         return [
             ToolDef(
                 list_channels,
                 "List available Slack channels the bot can post to, with their IDs and descriptions.",
+            ),
+            ToolDef(
+                read_channel,
+                "Read recent messages from a Slack channel. Use this to see what's been discussed.",
+            ),
+            ToolDef(
+                read_thread,
+                "Read messages from a specific Slack thread. Use this to get full context on a conversation.",
             ),
         ]
 
@@ -348,6 +407,29 @@ class SlackTransport(Transport):
         if self._channels:
             lines += ["", "# Available Channels", ""]
             lines += self._format_channel_list()
+        return "\n".join(lines)
+
+    # --- Message formatting ---
+
+    async def _format_messages(self, messages: list[dict]) -> str:
+        """Format a list of Slack messages into readable text."""
+        # Slack returns newest-first for history, oldest-first for replies
+        lines: list[str] = []
+        for m in messages:
+            user_id = m.get("user", "unknown")
+            name = await self._resolve_user(user_id)
+            try:
+                ts = float(m.get("ts", "0"))
+                dt = datetime.fromtimestamp(ts, tz=UTC).astimezone()
+                time_str = dt.strftime("%-I:%M %p")
+            except (TypeError, ValueError):
+                time_str = "unknown time"
+            text = m.get("text", "")
+            text = MENTION_RE.sub("", text).strip()
+            thread_ts = m.get("thread_ts")
+            reply_count = m.get("reply_count", 0)
+            suffix = f" (thread: {thread_ts}, {reply_count} replies)" if reply_count else ""
+            lines.append(f"[{name}] {time_str}: {text}{suffix}")
         return "\n".join(lines)
 
     # --- Thread context ---
@@ -376,25 +458,8 @@ class SlackTransport(Transport):
         if total > 50:
             replies = replies[-50:]
 
-        lines: list[str] = []
-        if total > 50:
-            lines.append(f"(showing last 50 of {total} messages)")
-        for r in replies:
-            user_id = r.get("user", "unknown")
-            name = await self._resolve_user(user_id)
-            # Format timestamp from Slack ts (Unix epoch)
-            try:
-                ts = float(r.get("ts", "0"))
-                dt = datetime.fromtimestamp(ts, tz=UTC).astimezone()
-                time_str = dt.strftime("%-I:%M %p")
-            except (TypeError, ValueError):
-                time_str = "unknown time"
-            text = r.get("text", "")
-            # Strip bot mentions from thread messages too
-            text = MENTION_RE.sub("", text).strip()
-            lines.append(f"[{name}] {time_str}: {text}")
-
-        return "\n".join(lines)
+        prefix = f"(showing last 50 of {total} messages)\n" if total > 50 else ""
+        return prefix + await self._format_messages(replies)
 
     # --- Dispatch ---
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import pwd
 from collections.abc import Callable
@@ -9,6 +10,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from pydantic import BaseModel, Field, model_validator
+
+logger = logging.getLogger("operator.config")
 
 OPERATOR_DIR = Path.home() / ".operator"
 CONFIG_PATH = OPERATOR_DIR / "operator.yaml"
@@ -292,9 +295,6 @@ class Config(BaseModel):
 
 def ensure_shared_symlink(workspace: Path, shared: Path) -> None:
     """Ensure workspace/shared is a symlink to the shared directory."""
-    import logging
-
-    _logger = logging.getLogger("operator.config")
     shared.mkdir(parents=True, exist_ok=True)
     link = workspace / "shared"
     if link.is_symlink():
@@ -303,10 +303,10 @@ def ensure_shared_symlink(workspace: Path, shared: Path) -> None:
         link.unlink()
     elif link.exists():
         # Not a symlink but something else exists — don't clobber
-        _logger.warning("shared: %s exists and is not a symlink, skipping", link)
+        logger.warning("shared: %s exists and is not a symlink, skipping", link)
         return
     link.symlink_to(shared)
-    _logger.info("shared: created symlink %s → %s", link, shared)
+    logger.info("shared: created symlink %s → %s", link, shared)
 
 
 def _load_env_file(env_path: str, *, base_dir: Path | None = None) -> None:
