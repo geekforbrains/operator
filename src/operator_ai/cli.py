@@ -744,6 +744,7 @@ def show_config() -> None:
 @app.command("agents")
 def show_agents() -> None:
     """List configured agents."""
+    from operator_ai.agents import scan_agents
     from operator_ai.config import load_config
 
     config = load_config()
@@ -751,8 +752,11 @@ def show_agents() -> None:
         console.print("No agents configured.")
         raise typer.Exit()
 
+    agent_infos = {a.name: a for a in scan_agents()}
+
     table = Table(show_header=True, show_edge=False, pad_edge=False)
     table.add_column("Agent", style="bold")
+    table.add_column("Description")
     table.add_column("Transport")
     table.add_column("Models")
     table.add_column("Files", style="dim")
@@ -760,6 +764,8 @@ def show_agents() -> None:
     for name, agent in config.agents.items():
         models = ", ".join(agent.models) if agent.models else ", ".join(config.defaults.models)
         transport_type = agent.transport.type if agent.transport else "none"
+        info = agent_infos.get(name)
+        description = info.description if info else ""
         agent_md = config.agent_prompt_path(name)
         workspace = config.agent_workspace(name)
         flags = []
@@ -767,7 +773,9 @@ def show_agents() -> None:
             flags.append("AGENT.md")
         if workspace.exists():
             flags.append("workspace/")
-        table.add_row(name, transport_type, models, ", ".join(flags) if flags else "-")
+        table.add_row(
+            name, description or "-", transport_type, models, ", ".join(flags) if flags else "-"
+        )
     console.print(table)
 
 
