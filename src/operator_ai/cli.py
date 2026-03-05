@@ -19,8 +19,8 @@ from rich.table import Table
 from rich.text import Text
 
 from operator_ai.config import OPERATOR_DIR
-from operator_ai.prompts import load_prompt
 from operator_ai.job_specs import find_job_spec, scan_job_specs
+from operator_ai.prompts import load_prompt
 
 console = Console()
 logger = logging.getLogger("operator.cli")
@@ -150,7 +150,6 @@ settings:
 #     schedule: "0 3 * * *"
 #     model: "openai/gpt-4.1-mini"
 """
-
 
 
 @app.command("init")
