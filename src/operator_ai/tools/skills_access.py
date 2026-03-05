@@ -125,7 +125,7 @@ async def run_skill(skill: str, command: str, timeout: int = 120) -> str:
         return "[error: empty command]"
 
     # Path expansion: expand skill subdirectory references to absolute paths
-    for i in range(1, len(argv)):
+    for i in range(len(argv)):
         for prefix in _SKILL_SUBDIRS:
             if argv[i].startswith(prefix):
                 argv[i] = str(skill_dir / argv[i])
