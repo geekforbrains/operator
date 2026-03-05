@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-03-05
+
+### Added
+
+- Agent frontmatter — `AGENT.md` files support optional YAML frontmatter with `name` and `description` for inter-agent discovery
+- Cross-agent spawning — `spawn_agent` accepts an optional `agent` parameter to delegate tasks to a different agent with its own prompt, models, workspace, sandbox, and permissions
+- Spawn logging — every `spawn_agent` call is logged with parent agent, target agent, and nesting depth
+- `OPERATOR_HOME` env var exposed in all shell commands, skill scripts, and job hooks
+- `job-creator` bundled skill for teaching agents to create and manage scheduled jobs
+- Prompts extracted to `.md` files under `prompts/` and loaded via `load_prompt()`
+
+### Changed
+
+- `AGENT.md` frontmatter is stripped before prompt injection — the LLM only sees the markdown body
+- `operator agents` CLI now shows a Description column from agent frontmatter
+- Sub-agent sandbox and permissions inheritance respects the target agent's config when spawning a different agent
+- System prompt trimmed and reworded for clarity
+
+### Fixed
+
+- `!stop` now cancels the active task immediately instead of waiting for the next iteration
+- Incomplete tool-call history trimmed on cancel and load to prevent malformed conversation state
+- Stop flag cleared after cancelled run so subsequent requests aren't incorrectly cancelled
+
 ## [0.4.0] - 2026-03-05
 
 ### Added
