@@ -130,10 +130,14 @@ async def _run_hook(
     try:
         # Wrap in login shell so the user's full PATH is available,
         # matching the behaviour of run_shell() in tools/shell.py.
+        # Use `exec` so the script's own shebang is respected — running
+        # the script as an argument to zsh would ignore #!/bin/bash and
+        # cause subtle incompatibilities (e.g. zsh word-splitting rules).
         proc = await asyncio.create_subprocess_exec(
             LOGIN_SHELL,
             "-l",
-            str(full_path),
+            "-c",
+            f'exec "{full_path}"',
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
