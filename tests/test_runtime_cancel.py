@@ -37,3 +37,11 @@ def test_cancel_without_attached_task_sets_flag_only() -> None:
     runtime.cancel()
     with pytest.raises(AgentCancelledError):
         runtime.check_cancelled()
+
+
+def test_release_clears_stale_cancel_flag() -> None:
+    runtime = ConversationRuntime()
+    assert runtime.try_claim() is True
+    runtime.cancel()
+    runtime.release()
+    runtime.check_cancelled()  # should not raise

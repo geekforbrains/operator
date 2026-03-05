@@ -187,6 +187,8 @@ class ConversationRuntime:
         logger.debug("release runtime=%s", id(self))
         self._active = False
         self._task = None
+        # Clear stale stop state so the next request in this thread starts cleanly.
+        self.cancelled.clear()
 
     def attach_task(self, task: asyncio.Task[None]) -> None:
         self._task = task
