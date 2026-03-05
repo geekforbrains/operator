@@ -14,6 +14,7 @@ It is intentionally small and file-driven:
 - Skills discovery from `~/.operator/skills/*/SKILL.md`
 - Scheduled jobs with `prerun` gating and `postrun` hooks
 - Durable conversation history and run tracking in SQLite
+- User auth with roles and per-agent access control
 - Slack thread continuity via persistent platform message index
 - Turn-safe context truncation against model token budgets
 - Vector memory with automatic harvesting and semantic search (sqlite-vec)
@@ -29,7 +30,8 @@ This creates `~/.operator/` with a starter config, system prompt, and a default 
 
 1. **Edit `~/.operator/operator.yaml`** — set your model, transport, and API key source.
 2. **Set API keys** — export `ANTHROPIC_API_KEY` (or whichever provider you chose), plus transport tokens (e.g. `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`).
-3. **Run it:**
+3. **Add yourself** — `operator user add yourname --role admin slack YOUR_SLACK_USER_ID`
+4. **Run it:**
 
 ```sh
 operator
@@ -98,6 +100,31 @@ agents:
 
 Agents without a `transport` block are available for jobs and sub-agent spawning but have no chat interface.
 
+### Users & Auth
+
+Every inbound message is authenticated. Users are identified by a stable username linked to one or more transport identities (e.g. `slack:U04ABC123`).
+
+```sh
+operator user add gavin --role admin slack U04ABC123
+operator user link gavin telegram 12345678
+operator user list
+```
+
+Roles control which agents a user can message. The built-in `admin` role grants access to all agents plus admin-only tools like `manage_users`.
+
+```yaml
+roles:
+  team:
+    agents: [operator, researcher]
+  viewer:
+    agents: [researcher]
+
+settings:
+  reject_response: ignore   # "announce" or "ignore"
+```
+
+See the [full docs](https://operator.geekforbrains.com) for details.
+
 ### Permissions
 
 Agents can be restricted to specific tools and skills using an opt-in permissions block:
@@ -111,19 +138,17 @@ agents:
   researcher:
     transport: { ... }
     permissions:
-      tools:
-        allow: [read_file, list_files, web_fetch, search_memories]
-      skills:
-        deny: [deploy]
+      tools: [read_file, list_files, web_fetch, read_skill, run_skill, search_memories]
+      skills: [summarize, translate]
 ```
 
 Rules:
-- **No `permissions` block** = full access to all tools and skills (backwards compatible).
-- `allow` and `deny` are **mutually exclusive** per category — setting both is a validation error.
-- **`allow`** — only the listed names are available; everything else is hidden.
-- **`deny`** — everything is available except the listed names.
-- Denied tools and skills are removed from the LLM's view entirely (tool list and system prompt).
+- **No `permissions` block** = full access to all tools and skills.
+- **`"*"`** = explicit full access.
+- **`[list]`** = only these names. Everything else is hidden from the LLM.
 - Sub-agents inherit their parent's tool filter.
+
+Run `operator tools` to see all available built-in tool names.
 
 ### Shared Directory
 
@@ -268,11 +293,25 @@ operator memories [--scope/-s SCOPE] [--scope-id/-i ID] [--pinned] [--limit/-n N
 operator memories stats        # memory counts per scope
 ```
 
+### Users
+
+```sh
+operator user add <username> --role <role> <transport> <external_id>
+operator user remove <username>
+operator user link <username> <transport> <external_id>
+operator user unlink <username> <transport> <external_id>
+operator user list
+operator user info <username>
+operator user add-role <username> <role>
+operator user remove-role <username> <role>
+```
+
 ### Inspection
 
 ```sh
 operator config                # print resolved configuration as JSON
 operator agents                # list configured agents with transport and model info
+operator tools                 # list built-in tools (for configuring permissions)
 operator skills                # list discovered skills with env status
 operator skills reset <name>   # reset a bundled skill to its original version
 operator skills reset --all    # reset all bundled skills
@@ -344,6 +383,9 @@ Each job tracks four counters in SQLite:
 - `spawn_agent`
 - `manage_job`
 - `manage_skill`
+- `read_skill`
+- `run_skill`
+- `manage_users` (admin only)
 - `save_memory`
 - `search_memories`
 - `forget_memory`
@@ -412,11 +454,14 @@ src/operator_ai/
 └── tools/
     ├── registry.py
     ├── workspace.py
+    ├── context.py       # UserContext, skill filter context vars
     ├── shell.py
     ├── files.py
     ├── web.py
     ├── messaging.py
     ├── subagent.py
+    ├── skills_access.py # read_skill, run_skill
+    ├── users.py         # manage_users
     ├── memory.py
     ├── kv.py
     └── jobs.py
