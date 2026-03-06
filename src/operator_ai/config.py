@@ -13,6 +13,11 @@ from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger("operator.config")
 
+
+class ConfigError(Exception):
+    """Raised when configuration is missing, unreadable, or invalid."""
+
+
 OPERATOR_DIR = Path.home() / ".operator"
 CONFIG_PATH = OPERATOR_DIR / "operator.yaml"
 SKILLS_DIR = OPERATOR_DIR / "skills"
@@ -300,7 +305,7 @@ def _load_env_file(env_path: str, *, base_dir: Path | None = None) -> None:
 def load_config(path: Path | None = None) -> Config:
     path = path or CONFIG_PATH
     if not path.exists():
-        raise SystemExit(
+        raise ConfigError(
             f'Config not found: {path}\nCreate it with at least:\n  defaults:\n    models:\n      - "openai/gpt-4.1"'
         )
     try:
@@ -308,9 +313,9 @@ def load_config(path: Path | None = None) -> Config:
             data: dict[str, Any] = yaml.safe_load(f) or {}
         config = Config(**data)
     except yaml.YAMLError as e:
-        raise SystemExit(f"Invalid YAML in {path}: {e}") from e
+        raise ConfigError(f"Invalid YAML in {path}: {e}") from e
     except Exception as e:
-        raise SystemExit(f"Invalid config in {path}: {e}") from e
+        raise ConfigError(f"Invalid config in {path}: {e}") from e
 
     if config.defaults.env_file:
         _load_env_file(config.defaults.env_file, base_dir=path.parent)

@@ -20,6 +20,12 @@ def _allow_user_scope() -> bool:
     return bool(ctx.get("allow_user_scope", True))
 
 
+def _scope_id(scope: str, ctx: dict[str, Any]) -> str:
+    user_id = ctx.get("user_id", "")
+    agent_name = ctx.get("agent_name", "default")
+    return {"user": user_id, "agent": agent_name, "global": "global"}[scope]
+
+
 @tool(
     description="Save a memory for future reference. Memories persist across conversations.",
 )
@@ -41,10 +47,7 @@ async def save_memory(content: str, scope: str = "user", pinned: bool = False) -
     if scope == "user" and not _allow_user_scope():
         return "[error: user-scoped memory is only allowed in private conversations]"
 
-    user_id = ctx.get("user_id", "")
-    agent_name = ctx.get("agent_name", "default")
-
-    scope_id = {"user": user_id, "agent": agent_name, "global": "global"}[scope]
+    scope_id = _scope_id(scope, ctx)
     if not scope_id:
         return "[error: no user_id available for user-scoped memory]"
 
@@ -73,17 +76,15 @@ async def search_memories(query: str, scope: str = "", top_k: int = 5) -> str:
     if memory_store is None:
         return "[error: memory system not configured]"
 
-    user_id = ctx.get("user_id", "")
-    agent_name = ctx.get("agent_name", "default")
-
     if scope:
         if scope not in ("user", "agent", "global"):
             return f"[error: invalid scope '{scope}', must be user/agent/global or empty]"
         if scope == "user" and not _allow_user_scope():
             return "[error: user-scoped memory is only allowed in private conversations]"
-        scope_id = {"user": user_id, "agent": agent_name, "global": "global"}[scope]
-        scopes = [(scope, scope_id)]
+        scopes = [(scope, _scope_id(scope, ctx))]
     else:
+        user_id = ctx.get("user_id", "")
+        agent_name = ctx.get("agent_name", "default")
         scopes = [("agent", agent_name), ("global", "global")]
         if _allow_user_scope() and user_id:
             scopes.insert(0, ("user", user_id))
@@ -138,21 +139,18 @@ async def list_memories(scope: str = "", limit: int = 50, offset: int = 0) -> st
     if memory_store is None:
         return "[error: memory system not configured]"
 
-    user_id = ctx.get("user_id", "")
-    agent_name = ctx.get("agent_name", "default")
-
     if scope:
         if scope not in ("user", "agent", "global"):
             return f"[error: invalid scope '{scope}', must be user/agent/global or empty]"
         if scope == "user" and not _allow_user_scope():
             return "[error: user-scoped memory is only allowed in private conversations]"
-        scope_id = {"user": user_id, "agent": agent_name, "global": "global"}[scope]
-        results = memory_store.list_memories(scope, scope_id, limit, offset)
+        results = memory_store.list_memories(scope, _scope_id(scope, ctx), limit, offset)
     else:
         if _allow_user_scope():
             results = memory_store.list_memories(limit=limit, offset=offset)
         else:
             # Public conversations should not expose user-scoped memories.
+            agent_name = ctx.get("agent_name", "default")
             pool_size = max(limit + offset, limit)
             results = memory_store.list_memories("agent", agent_name, pool_size, 0)
             results.extend(memory_store.list_memories("global", "global", pool_size, 0))

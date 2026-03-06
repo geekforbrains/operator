@@ -6,7 +6,7 @@ from pathlib import Path
 
 from croniter import croniter
 
-from operator_ai.config import load_config
+from operator_ai.config import ConfigError, load_config
 from operator_ai.jobs import JOBS_DIR, scan_jobs
 from operator_ai.skills import parse_frontmatter, rewrite_frontmatter
 from operator_ai.store import get_store
@@ -83,7 +83,10 @@ def _list_jobs() -> str:
 
 
 def _validate_frontmatter(fm: dict) -> str | None:
-    config = load_config()
+    try:
+        config = load_config()
+    except ConfigError:
+        return "[error: unable to load config]"
     agent_names = list(config.agents.keys())
 
     if not fm.get("schedule"):

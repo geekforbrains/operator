@@ -5,7 +5,7 @@ import logging
 import os
 import shlex
 
-from operator_ai.config import SKILLS_DIR, load_config
+from operator_ai.config import SKILLS_DIR, ConfigError, load_config
 from operator_ai.tools.context import get_skill_filter
 from operator_ai.tools.registry import MAX_OUTPUT, format_process_output, safe_name, tool
 from operator_ai.tools.workspace import get_workspace
@@ -128,7 +128,7 @@ async def run_skill(skill: str, command: str, timeout: int = 120) -> str:
                 strip_keys.add(tc.app_token_env)
         for key in strip_keys:
             env.pop(key, None)
-    except SystemExit:
+    except ConfigError:
         # Config might not be loadable in test environments
         pass
 

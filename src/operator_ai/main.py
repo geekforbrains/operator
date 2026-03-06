@@ -16,7 +16,7 @@ from pathlib import Path
 import operator_ai.tools  # noqa: F401
 from operator_ai.agent import run_agent
 from operator_ai.commands import CommandContext, dispatch_command
-from operator_ai.config import OPERATOR_DIR, Config, RoleConfig, load_config
+from operator_ai.config import OPERATOR_DIR, Config, ConfigError, RoleConfig, load_config
 from operator_ai.jobs import JobRunner
 from operator_ai.log_context import RunContextFilter, new_run_id, set_run_context
 from operator_ai.memory import MemoryCleaner, MemoryHarvester, MemoryStore
@@ -693,7 +693,10 @@ async def async_main() -> None:
         stop.set()
 
     try:
-        config = load_config()
+        try:
+            config = load_config()
+        except ConfigError as e:
+            raise SystemExit(str(e)) from None
         install_bundled_skills(SKILLS_DIR)
 
         if not any(a.transport for a in config.agents.values()):

@@ -30,7 +30,7 @@ from rich.text import Text
 
 import operator_ai.tools  # noqa: F401
 from operator_ai.agents import scan_agents
-from operator_ai.config import OPERATOR_DIR, load_config
+from operator_ai.config import OPERATOR_DIR, ConfigError, load_config
 from operator_ai.job_specs import find_job_spec, scan_job_specs
 from operator_ai.jobs import run_job_now
 from operator_ai.log_context import RunContextFilter
@@ -112,7 +112,7 @@ def _resolve_agent(agent: str | None) -> str:
         return from_env
     try:
         return load_config().default_agent()
-    except SystemExit:
+    except ConfigError:
         typer.echo("Error: no --agent flag, OPERATOR_AGENT not set, config not found.", err=True)
         raise typer.Exit(code=1) from None
 
@@ -1169,7 +1169,11 @@ def job_run(
     _setup_cli_logging()
     cli_logger = logging.getLogger("operator.cli")
 
-    config = load_config()
+    try:
+        config = load_config()
+    except ConfigError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1) from None
     store = get_store()
 
     job = next((job for job in _scan_jobs() if job.name == name), None)
@@ -1324,7 +1328,11 @@ def memories_stats() -> None:
 @app.command("config")
 def show_config() -> None:
     """Print the resolved configuration."""
-    config = load_config()
+    try:
+        config = load_config()
+    except ConfigError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1) from None
     output = json.dumps(config.model_dump(), indent=2)
     console.print(Syntax(output, "json", theme="monokai"))
 
@@ -1335,7 +1343,11 @@ def show_config() -> None:
 @app.command("agents")
 def show_agents() -> None:
     """List configured agents."""
-    config = load_config()
+    try:
+        config = load_config()
+    except ConfigError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1) from None
     if not config.agents:
         console.print("No agents configured.")
         raise typer.Exit()
@@ -1457,7 +1469,7 @@ def user_add(
             config = load_config()
             if role not in config.roles:
                 console.print(f"[yellow]Warning:[/yellow] role '{role}' is not defined in config.")
-        except (FileNotFoundError, SystemExit):
+        except ConfigError:
             pass
 
     store = _store()
