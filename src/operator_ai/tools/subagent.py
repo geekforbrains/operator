@@ -135,6 +135,7 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
             models=resolved["models"],
             max_iterations=min(resolved.get("max_iterations", 10), 10),
             workspace=resolved.get("workspace", "."),
+            agent_name=run_agent_name,
             depth=depth + 1,
             context_ratio=resolved.get("context_ratio", 0.0),
             max_output_tokens=resolved.get("max_output_tokens"),

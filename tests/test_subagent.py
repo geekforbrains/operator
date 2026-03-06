@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
-from operator_ai.tools.subagent import _resolve_agent_context
+from operator_ai.config import Config
+from operator_ai.tools import subagent
+from operator_ai.tools.subagent import _resolve_agent_context, spawn_agent
 
 
 class FakeAgentConfig:
@@ -128,3 +132,46 @@ def test_resolve_without_config_returns_current() -> None:
     current = {"models": ["m1"], "workspace": "/ws"}
     result = _resolve_agent_context("anything", current)
     assert result is current
+
+
+def test_spawn_agent_without_explicit_target_uses_current_agent_prompt(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_run_agent(**kwargs):
+        captured["system_prompt"] = kwargs["messages"][0]["content"]
+        captured["agent_name"] = kwargs["agent_name"]
+        return "done"
+
+    monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda: "# System")
+    monkeypatch.setattr(
+        "operator_ai.prompts.load_agent_prompt",
+        lambda _config, agent_name: f"# Agent\n\n{agent_name}",
+    )
+    monkeypatch.setattr(
+        "operator_ai.prompts.load_skills_prompt",
+        lambda _skills_dir, **_kwargs: "",
+    )
+    monkeypatch.setattr("operator_ai.agent.run_agent", fake_run_agent)
+
+    subagent.configure(
+        {
+            "models": ["openai/gpt-4.1"],
+            "max_iterations": 5,
+            "workspace": "/ws",
+            "agent_name": "operator",
+            "skill_filter": None,
+            "config": Config(
+                runtime={"timezone": "America/Vancouver"},
+                defaults={"models": ["openai/gpt-4.1"]},
+                agents={"operator": {}},
+            ),
+        }
+    )
+
+    result = asyncio.run(spawn_agent("Summarize the release branch."))
+
+    assert result == "done"
+    assert captured["agent_name"] == "operator"
+    assert "Default timezone: America/Vancouver" in captured["system_prompt"]
+    assert "# Agent\n\noperator" in captured["system_prompt"]
+    assert "You are a focused sub-agent." in captured["system_prompt"]

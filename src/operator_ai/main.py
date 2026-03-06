@@ -502,6 +502,7 @@ class Dispatcher:
                 models=self.config.agent_models(agent_name),
                 max_iterations=self.config.agent_max_iterations(agent_name),
                 workspace=str(self.config.agent_workspace(agent_name)),
+                agent_name=agent_name,
                 on_message=on_message,
                 check_cancelled=runtime.check_cancelled,
                 on_tool_call=on_tool_call,

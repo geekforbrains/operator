@@ -347,6 +347,7 @@ async def _execute_job(
             models=models,
             max_iterations=max_iter,
             workspace=str(config.agent_workspace(agent_name)),
+            agent_name=agent_name,
             context_ratio=config.agent_context_ratio(agent_name),
             max_output_tokens=config.agent_max_output_tokens(agent_name),
             thinking=config.agent_thinking(agent_name),
