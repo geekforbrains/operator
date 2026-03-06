@@ -112,7 +112,7 @@ def _is_macos() -> bool:
 
 _STARTER_CONFIG = """\
 # Operator configuration
-# Docs: https://github.com/gavinballard/operator
+# Docs: https://github.com/geekforbrains/operator
 
 defaults:
   # Model fallback chain — first model is preferred, rest are fallbacks.
