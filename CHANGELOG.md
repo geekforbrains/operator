@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-03-05
+
+### Fixed
+
+- Replace `LOGIN_SHELL` subprocess wrapping with proper PATH resolution — `operator service install` now embeds the full interactive PATH in the launchd plist / systemd unit, so tools installed via pyenv, nvm, Homebrew, etc. work correctly under background services (#15)
+- Cleaner error output when a tool command is not found (no more full tracebacks for simple `FileNotFoundError`)
+
+### Changed
+
+- `.env` file uses `setdefault` semantics — shell environment takes precedence over `.env` values
+- `operator init` generates `.env` for API key defaults only (PATH is handled by the service definition)
+
 ## [0.5.0] - 2026-03-05
 
 ### Added
