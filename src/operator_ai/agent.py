@@ -11,6 +11,7 @@ import litellm
 
 from operator_ai.config import Config, ensure_shared_symlink
 from operator_ai.prompts import CACHE_BOUNDARY
+from operator_ai.request_context import inject_current_time
 from operator_ai.tools import registry as tool_registry
 from operator_ai.tools import set_workspace, subagent
 from operator_ai.tools.context import ROLE_GATED_TOOLS, get_user_context
@@ -175,7 +176,10 @@ async def run_agent(
         response = None
         last_error: Exception | None = None
         for model in models:
-            model_messages = prepare_messages_for_model(messages, model, context_ratio)
+            model_messages = (
+                inject_current_time(messages, config) if config is not None else list(messages)
+            )
+            model_messages = prepare_messages_for_model(model_messages, model, context_ratio)
             model_messages = _apply_cache_control(model_messages, model)
             logger.debug("%s calling %s", step, model)
 

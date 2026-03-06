@@ -15,6 +15,7 @@ Built for teams, not just individuals. Multi-user auth, role-based access, isola
 - **Multi-agent orchestration.** Agents delegate to each other via `spawn_agent`. A coordinator can dispatch work to a researcher, a coder, and a reviewer — each with their own prompt, tools, and permissions.
 - **Team-native.** Multi-user auth with roles. Control who can talk to which agents. Isolated per-user memories. Not a single-player toy.
 - **Markdown-driven.** Agents, jobs, and skills are markdown files with YAML frontmatter. Version them in git, review them in PRs, edit them in your editor. No dashboards, no YAML hellscapes.
+- **Time-aware without history churn.** Every live model request gets current-time context in your configured timezone, without polluting stored conversation history or memory inputs with synthetic timestamps.
 - **Model-agnostic.** Supports 100+ LLM providers out of the box. Define fallback chains so if your primary model is down, the next one picks up automatically.
 - **Runs on your machine.** No SaaS, no cloud dependency, no data leaving your network. Install it, run it, own it.
 
