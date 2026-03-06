@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import os
-import pwd
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Literal
@@ -20,17 +19,6 @@ CONFIG_PATH = OPERATOR_DIR / "operator.yaml"
 # run_shell commands, skill scripts, and job hooks can reference paths
 # portably via $OPERATOR_HOME instead of relying on tilde expansion.
 os.environ.setdefault("OPERATOR_HOME", str(OPERATOR_DIR))
-
-# The user's login shell, used to wrap subprocess calls so that the full
-# environment (Homebrew, Cargo, pyenv, nvm …) is available — even under
-# minimal launchers like launchd / systemd.
-#
-# Resolution order:
-#   1. $SHELL environment variable (set in most interactive contexts)
-#   2. System user database — pwd.getpwuid (works on macOS & Linux,
-#      including launchd/systemd where $SHELL isn't propagated)
-#   3. /bin/sh as a last resort
-LOGIN_SHELL: str = os.environ.get("SHELL") or pwd.getpwuid(os.getuid()).pw_shell or "/bin/sh"
 
 
 def _normalize_models(values: Any) -> Any:
@@ -306,7 +294,7 @@ def ensure_shared_symlink(workspace: Path, shared: Path) -> None:
 
 
 def _load_env_file(env_path: str, *, base_dir: Path | None = None) -> None:
-    """Load KEY=VALUE lines from a file into os.environ (doesn't override existing)."""
+    """Load KEY=VALUE lines from a file into os.environ (overrides existing)."""
     p = Path(env_path).expanduser()
     if not p.is_absolute() and base_dir is not None:
         p = (base_dir / p).resolve()
@@ -324,7 +312,7 @@ def _load_env_file(env_path: str, *, base_dir: Path | None = None) -> None:
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
             value = value[1:-1]
         if key:
-            os.environ.setdefault(key, value)
+            os.environ[key] = value
 
 
 def load_config(path: Path | None = None) -> Config:

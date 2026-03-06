@@ -13,7 +13,7 @@ from typing import Any
 
 from croniter import croniter
 
-from operator_ai.config import LOGIN_SHELL, OPERATOR_DIR, Config
+from operator_ai.config import OPERATOR_DIR, Config
 from operator_ai.job_specs import JOBS_DIR
 from operator_ai.log_context import new_run_id, set_run_context
 from operator_ai.prompts import assemble_system_prompt, load_prompt
@@ -96,12 +96,7 @@ async def _run_hook(
     stdin_data: str = "",
     timeout: int = 30,
 ) -> tuple[int, str]:
-    """Run a hook script from the job's scripts/ directory.
-
-    Scripts are executed via the user's login shell (``-l``) so that the full
-    PATH (Homebrew, Cargo, pyenv, etc.) is available — even when the service
-    is launched from a minimal launchd environment.
-    """
+    """Run a hook script from the job's scripts/ directory."""
     script_path = job.hooks.get(hook_name, "")
     if not script_path:
         return 0, ""
@@ -128,16 +123,8 @@ async def _run_hook(
     hook_start = time.time()
 
     try:
-        # Wrap in login shell so the user's full PATH is available,
-        # matching the behaviour of run_shell() in tools/shell.py.
-        # Use `exec` so the script's own shebang is respected — running
-        # the script as an argument to zsh would ignore #!/bin/bash and
-        # cause subtle incompatibilities (e.g. zsh word-splitting rules).
         proc = await asyncio.create_subprocess_exec(
-            LOGIN_SHELL,
-            "-l",
-            "-c",
-            f'exec "{full_path}"',
+            str(full_path),
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,

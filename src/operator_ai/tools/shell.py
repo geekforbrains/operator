@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 
-from operator_ai.config import LOGIN_SHELL
 from operator_ai.tools.registry import tool
 from operator_ai.tools.workspace import get_workspace
 
@@ -19,15 +18,13 @@ async def run_shell(command: str, timeout: int = 120) -> str:
         command: The shell command to execute.
         timeout: Timeout in seconds (default 120).
     """
-    # Wrap the command in a login shell so the user's full PATH and
-    # environment (Homebrew, Cargo, pyenv, etc.) are available — even when
-    # the process is launched from a minimal launchd environment.
-    wrapped = [LOGIN_SHELL, "-l", "-c", command]
     proc: asyncio.subprocess.Process | None = None
 
     try:
         proc = await asyncio.create_subprocess_exec(
-            *wrapped,
+            "bash",
+            "-c",
+            command,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             cwd=get_workspace(),
