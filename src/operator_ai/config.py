@@ -8,12 +8,14 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
+from croniter import croniter
 from pydantic import BaseModel, Field, model_validator
 
 logger = logging.getLogger("operator.config")
 
 OPERATOR_DIR = Path.home() / ".operator"
 CONFIG_PATH = OPERATOR_DIR / "operator.yaml"
+SKILLS_DIR = OPERATOR_DIR / "skills"
 
 # Expose the resolved base directory as an environment variable so that
 # run_shell commands, skill scripts, and job hooks can reference paths
@@ -106,15 +108,16 @@ class AgentConfig(BaseModel):
         return _normalize_models(values)
 
 
-class HarvesterConfig(BaseModel):
+class ScheduledTaskConfig(BaseModel):
     enabled: bool = False
     schedule: str = ""
     model: str = ""
 
     @model_validator(mode="after")
-    def validate_required_when_enabled(self) -> HarvesterConfig:
+    def validate_required_when_enabled(self) -> ScheduledTaskConfig:
         if not self.enabled:
             return self
+        label = type(self).__name__.removesuffix("Config").lower()
         missing = []
         if not self.schedule:
             missing.append("schedule")
@@ -122,42 +125,21 @@ class HarvesterConfig(BaseModel):
             missing.append("model")
         if missing:
             raise ValueError(
-                f"memory.harvester is enabled but missing required fields: {', '.join(missing)}"
+                f"memory.{label} is enabled but missing required fields: {', '.join(missing)}"
             )
-        from croniter import croniter
-
         if not croniter.is_valid(self.schedule):
             raise ValueError(
-                f"memory.harvester.schedule is not a valid cron expression: {self.schedule!r}"
+                f"memory.{label}.schedule is not a valid cron expression: {self.schedule!r}"
             )
         return self
 
 
-class CleanerConfig(BaseModel):
-    enabled: bool = False
-    schedule: str = ""
-    model: str = ""
+class HarvesterConfig(ScheduledTaskConfig):
+    pass
 
-    @model_validator(mode="after")
-    def validate_required_when_enabled(self) -> CleanerConfig:
-        if not self.enabled:
-            return self
-        missing = []
-        if not self.schedule:
-            missing.append("schedule")
-        if not self.model:
-            missing.append("model")
-        if missing:
-            raise ValueError(
-                f"memory.cleaner is enabled but missing required fields: {', '.join(missing)}"
-            )
-        from croniter import croniter
 
-        if not croniter.is_valid(self.schedule):
-            raise ValueError(
-                f"memory.cleaner.schedule is not a valid cron expression: {self.schedule!r}"
-            )
-        return self
+class CleanerConfig(ScheduledTaskConfig):
+    pass
 
 
 class MemoryConfig(BaseModel):

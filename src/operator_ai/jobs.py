@@ -255,7 +255,8 @@ async def _execute_job(
                 store.save_job_state(job.name, state)
                 return
 
-        # Lazy import to avoid circular dependency
+        # Lazy imports to avoid circular dependency:
+        # jobs -> agent -> tools/__init__ -> tools/jobs -> jobs
         from operator_ai.agent import run_agent
         from operator_ai.tools import kv as kv_tools
         from operator_ai.tools import messaging

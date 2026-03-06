@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import OrderedDict
 from html.parser import HTMLParser
 from urllib.parse import urlparse
 
@@ -19,7 +20,8 @@ _FETCH_TIMEOUT = aiohttp.ClientTimeout(total=30)
 _LLMS_TIMEOUT = aiohttp.ClientTimeout(total=5)
 
 _session: aiohttp.ClientSession | None = None
-_llms_txt_cache: dict[str, bool] = {}
+_LLMS_CACHE_MAX = 128
+_llms_txt_cache: OrderedDict[str, bool] = OrderedDict()
 
 
 async def get_session() -> aiohttp.ClientSession:
@@ -34,6 +36,7 @@ async def close_session() -> None:
     if _session and not _session.closed:
         await _session.close()
         _session = None
+    _llms_txt_cache.clear()
 
 
 def _is_text(content_type: str | None) -> bool:
@@ -68,7 +71,7 @@ async def _try_md_variant(session: aiohttp.ClientSession, url: str) -> str | Non
                 if body.strip():
                     logger.info("Found .md variant: %s", md_url)
                     return body
-    except Exception:
+    except (aiohttp.ClientError, TimeoutError):
         pass
     return None
 
@@ -77,13 +80,16 @@ async def _check_llms_txt(session: aiohttp.ClientSession, url: str) -> bool:
     """Check if the domain serves /llms.txt (cached per domain)."""
     domain = _domain(url)
     if domain in _llms_txt_cache:
+        _llms_txt_cache.move_to_end(domain)
         return _llms_txt_cache[domain]
     try:
         check_url = f"{domain}/llms.txt"
         async with session.head(check_url, timeout=_LLMS_TIMEOUT, allow_redirects=True) as resp:
             exists = resp.status == 200
-    except Exception:
+    except (aiohttp.ClientError, TimeoutError):
         exists = False
+    if len(_llms_txt_cache) >= _LLMS_CACHE_MAX:
+        _llms_txt_cache.popitem(last=False)
     _llms_txt_cache[domain] = exists
     if exists:
         logger.info("Domain %s has /llms.txt", domain)

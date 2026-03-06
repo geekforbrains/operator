@@ -7,12 +7,11 @@ from datetime import datetime
 from pathlib import Path
 
 from operator_ai.agents import AgentInfo, build_agents_prompt, load_agent_body, scan_agents
-from operator_ai.config import OPERATOR_DIR, Config
+from operator_ai.config import OPERATOR_DIR, SKILLS_DIR, Config
 from operator_ai.skills import SkillInfo, build_skills_prompt, scan_skills
 
 PROMPTS_DIR = Path(__file__).parent
 SYSTEM_PROMPT_PATH = OPERATOR_DIR / "SYSTEM.md"
-SKILLS_DIR = OPERATOR_DIR / "skills"
 
 # Sentinel that separates the stable (cacheable) prefix from dynamic content.
 # Must survive DB round-trips (stored in JSON as part of the system message).

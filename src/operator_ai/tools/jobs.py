@@ -10,13 +10,7 @@ from operator_ai.config import load_config
 from operator_ai.jobs import JOBS_DIR, scan_jobs
 from operator_ai.skills import parse_frontmatter, rewrite_frontmatter
 from operator_ai.store import get_store
-from operator_ai.tools.registry import tool
-
-
-def _safe_job_name(name: str) -> str:
-    if not name or "/" in name or "\\" in name or ".." in name:
-        raise ValueError(f"Invalid job name: {name!r}")
-    return name
+from operator_ai.tools.registry import safe_name, tool
 
 
 def _safe_job_relative_path(job_dir: Path, path: str) -> Path:
@@ -124,7 +118,12 @@ def _create_job(name: str, config: str) -> str:
     if not config:
         return "[error: 'config' (JOB.md content) is required for create]"
 
-    job_dir = JOBS_DIR / _safe_job_name(name)
+    try:
+        slug = safe_name(name, "job")
+    except ValueError as e:
+        return f"[error: {e}]"
+
+    job_dir = JOBS_DIR / slug
     if job_dir.exists():
         return f"[error: job '{name}' already exists. Use 'update' to modify.]"
 
@@ -161,7 +160,12 @@ def _update_job(name: str, config: str) -> str:
     if not config:
         return "[error: 'config' (JOB.md content) is required for update]"
 
-    job_dir = JOBS_DIR / _safe_job_name(name)
+    try:
+        slug = safe_name(name, "job")
+    except ValueError as e:
+        return f"[error: {e}]"
+
+    job_dir = JOBS_DIR / slug
     if not job_dir.exists():
         return f"[error: job '{name}' not found]"
 
@@ -181,7 +185,12 @@ def _delete_job(name: str) -> str:
     if not name:
         return "[error: 'name' is required for delete]"
 
-    job_dir = JOBS_DIR / _safe_job_name(name)
+    try:
+        slug = safe_name(name, "job")
+    except ValueError as e:
+        return f"[error: {e}]"
+
+    job_dir = JOBS_DIR / slug
     if not job_dir.exists():
         return f"[error: job '{name}' not found]"
 
@@ -193,7 +202,12 @@ def _toggle_job(name: str, *, enabled: bool) -> str:
     if not name:
         return f"[error: 'name' is required for {'enable' if enabled else 'disable'}]"
 
-    job_dir = JOBS_DIR / _safe_job_name(name)
+    try:
+        slug = safe_name(name, "job")
+    except ValueError as e:
+        return f"[error: {e}]"
+
+    job_dir = JOBS_DIR / slug
     job_md = job_dir / "JOB.md"
     if not job_md.exists():
         return f"[error: job '{name}' not found]"

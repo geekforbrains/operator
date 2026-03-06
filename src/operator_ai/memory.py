@@ -6,13 +6,14 @@ import json
 import logging
 import math
 import string
+from abc import ABC, abstractmethod
 from datetime import UTC, datetime, tzinfo
 from typing import Any
 
 import litellm
 from croniter import croniter
 
-from operator_ai.config import CleanerConfig, HarvesterConfig, MemoryConfig
+from operator_ai.config import CleanerConfig, HarvesterConfig, MemoryConfig, ScheduledTaskConfig
 from operator_ai.log_context import set_run_context
 from operator_ai.prompts import load_prompt
 from operator_ai.store import Store, serialize_float32
@@ -164,12 +165,14 @@ class MemoryStore:
         return self._store.get_pinned_memories(scope, scope_id)
 
 
-class MemoryHarvester:
+class ScheduledWorker(ABC):
+    _label: str = "worker"
+
     def __init__(
         self,
         memory_store: MemoryStore,
         store: Store,
-        config: HarvesterConfig,
+        config: ScheduledTaskConfig,
         tz: tzinfo = UTC,
     ):
         self._memory_store = memory_store
@@ -180,7 +183,7 @@ class MemoryHarvester:
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._tick_loop())
-        logger.info("MemoryHarvester started (schedule: %s)", self._config.schedule)
+        logger.info("%s started (schedule: %s)", type(self).__name__, self._config.schedule)
 
     async def stop(self) -> None:
         if self._task:
@@ -188,10 +191,10 @@ class MemoryHarvester:
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
             self._task = None
-        logger.info("MemoryHarvester stopped")
+        logger.info("%s stopped", type(self).__name__)
 
     async def _tick_loop(self) -> None:
-        set_run_context(agent="harvester")
+        set_run_context(agent=self._label)
         try:
             while True:
                 await asyncio.sleep(60)
@@ -204,6 +207,22 @@ class MemoryHarvester:
                     logger.exception("tick failed")
         except asyncio.CancelledError:
             return
+
+    @abstractmethod
+    async def _tick(self) -> None: ...
+
+
+class MemoryHarvester(ScheduledWorker):
+    _label = "harvester"
+
+    def __init__(
+        self,
+        memory_store: MemoryStore,
+        store: Store,
+        config: HarvesterConfig,
+        tz: tzinfo = UTC,
+    ):
+        super().__init__(memory_store, store, config, tz)
 
     async def _tick(self) -> None:
         watermark_str = self._store.get_memory_state("watermark")
@@ -270,7 +289,7 @@ class MemoryHarvester:
 
         if extraction_failed:
             logger.warning(
-                "paused watermark advancement at %.6f after extraction failure",
+                "extraction failed; watermark advanced to %.6f (skipping failed conversation)",
                 new_watermark,
             )
 
@@ -300,7 +319,7 @@ class MemoryHarvester:
             temperature=0.2,
             max_tokens=1024,
         )
-        output = resp.choices[0].message.content.strip()
+        output = (resp.choices[0].message.content or "").strip()
 
         if output == "NONE":
             return 0
@@ -319,7 +338,9 @@ class MemoryHarvester:
         return count
 
 
-class MemoryCleaner:
+class MemoryCleaner(ScheduledWorker):
+    _label = "cleaner"
+
     def __init__(
         self,
         memory_store: MemoryStore,
@@ -327,38 +348,7 @@ class MemoryCleaner:
         config: CleanerConfig,
         tz: tzinfo = UTC,
     ):
-        self._memory_store = memory_store
-        self._store = store
-        self._config = config
-        self._tz = tz
-        self._task: asyncio.Task | None = None
-
-    def start(self) -> None:
-        self._task = asyncio.create_task(self._tick_loop())
-        logger.info("MemoryCleaner started (schedule: %s)", self._config.schedule)
-
-    async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
-            self._task = None
-        logger.info("MemoryCleaner stopped")
-
-    async def _tick_loop(self) -> None:
-        set_run_context(agent="cleaner")
-        try:
-            while True:
-                await asyncio.sleep(60)
-                now = datetime.now(self._tz)
-                if not croniter.match(self._config.schedule, now):
-                    continue
-                try:
-                    await self._tick()
-                except Exception:
-                    logger.exception("tick failed")
-        except asyncio.CancelledError:
-            return
+        super().__init__(memory_store, store, config, tz)
 
     async def _tick(self) -> None:
         scopes = self._store.get_distinct_scopes()
@@ -403,7 +393,7 @@ class MemoryCleaner:
             temperature=0.2,
             max_tokens=2048,
         )
-        output = resp.choices[0].message.content.strip()
+        output = (resp.choices[0].message.content or "").strip()
 
         # Strip markdown fencing if present
         if output.startswith("```"):

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from operator_ai.config import OPERATOR_DIR, Config
+from operator_ai.config import SKILLS_DIR, Config
 from operator_ai.job_specs import JOBS_DIR as _JOBS_DIR
 from operator_ai.job_specs import find_job_spec, scan_job_specs
+from operator_ai.skills import scan_skills
 from operator_ai.store import Store
 
 if TYPE_CHECKING:
@@ -17,8 +17,6 @@ if TYPE_CHECKING:
     from operator_ai.transport.base import Transport
 
 logger = logging.getLogger("operator.commands")
-
-SKILLS_DIR = OPERATOR_DIR / "skills"
 
 
 @dataclass
@@ -89,12 +87,6 @@ async def cmd_stop(ctx: CommandContext) -> str:
 @command("restart", "Restart the background service")
 async def cmd_restart(ctx: CommandContext) -> str:
     return "Service restart is disabled in chat. Use `operator service restart` on the host."
-
-
-@command("config", "Show resolved configuration")
-async def cmd_config(ctx: CommandContext) -> str:
-    output = json.dumps(ctx.config.model_dump(), indent=2)
-    return f"```\n{output}\n```"
 
 
 @command("agents", "List configured agents")
@@ -178,8 +170,6 @@ async def _job_subcommand(ctx: CommandContext) -> str:
 
 @command("skills", "List discovered skills")
 async def cmd_skills(ctx: CommandContext) -> str:
-    from operator_ai.skills import scan_skills
-
     skills = scan_skills(SKILLS_DIR)
     if not skills:
         return "No skills found."

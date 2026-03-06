@@ -7,6 +7,34 @@ from typing import Any, get_type_hints
 
 _TOOLS: list[ToolDef] = []
 
+MAX_OUTPUT = 16_384  # 16 KB — keeps tool results within ~4K tokens
+
+
+def safe_name(name: str, entity: str) -> str:
+    """Validate a user-supplied name for a skill, job, or similar entity."""
+    if not name or "/" in name or "\\" in name or ".." in name:
+        raise ValueError(f"Invalid {entity} name: {name!r}")
+    return name
+
+
+def format_process_output(
+    stdout: bytes, stderr: bytes, returncode: int, max_output: int = MAX_OUTPUT
+) -> str:
+    """Assemble stdout/stderr/exit-code into a single truncated string."""
+    out = stdout.decode(errors="replace")
+    err = stderr.decode(errors="replace")
+    parts: list[str] = []
+    if out:
+        parts.append(out)
+    if err:
+        parts.append(f"[stderr]\n{err}")
+    if returncode != 0:
+        parts.append(f"[exit code: {returncode}]")
+    result = "\n".join(parts) or "[no output]"
+    if len(result) > max_output:
+        result = result[:max_output] + "\n[truncated — output exceeded 16KB]"
+    return result
+
 
 class ToolDef:
     def __init__(self, func: Callable[..., Any], description: str):

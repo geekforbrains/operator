@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import shutil
 
-from operator_ai.config import OPERATOR_DIR
+from operator_ai.config import SKILLS_DIR
 from operator_ai.skills import (
     extract_body,
     parse_frontmatter,
@@ -10,15 +10,7 @@ from operator_ai.skills import (
     validate_skill_frontmatter,
 )
 from operator_ai.tools.context import get_skill_filter
-from operator_ai.tools.registry import tool
-
-SKILLS_DIR = OPERATOR_DIR / "skills"
-
-
-def _safe_skill_name(name: str) -> str:
-    if not name or "/" in name or "\\" in name or ".." in name:
-        raise ValueError(f"Invalid skill name: {name!r}")
-    return name
+from operator_ai.tools.registry import safe_name, tool
 
 
 @tool(
@@ -65,70 +57,79 @@ def _list_skills() -> str:
     return "\n".join(lines)
 
 
-def _validate_and_parse(name: str, config: str) -> tuple[dict, str] | str:
-    """Parse and validate config. Returns (frontmatter, body) or error string."""
+def _validate_and_parse(name: str, config: str) -> str | None:
+    """Parse and validate config.
+
+    Returns an optional warning string on success, or raises ``ValueError``
+    if validation fails.
+    """
     if not name:
-        return "[error: 'name' is required]"
+        raise ValueError("'name' is required")
     if not config:
-        return "[error: 'config' (SKILL.md content) is required]"
+        raise ValueError("'config' (SKILL.md content) is required")
 
     fm = parse_frontmatter(config)
     if not fm:
-        return "[error: config must have YAML frontmatter between --- delimiters]"
+        raise ValueError("config must have YAML frontmatter between --- delimiters")
 
-    err = validate_skill_frontmatter(fm, _safe_skill_name(name))
+    err = validate_skill_frontmatter(fm, safe_name(name, "skill"))
     if err:
-        return f"[error: {err}]"
+        raise ValueError(err)
 
     body = extract_body(config)
     if not body.strip():
-        return "[error: skill body must not be empty — include instructions after the frontmatter]"
+        raise ValueError(
+            "skill body must not be empty — include instructions after the frontmatter"
+        )
 
     line_count = len(body.strip().splitlines())
-    warning = ""
     if line_count > 500:
-        warning = (
+        return (
             f"\n[warning: body is {line_count} lines — recommended max is 500. "
             "Consider splitting into references/ files.]"
         )
-
-    return (fm, warning)
+    return None
 
 
 def _create_skill(name: str, config: str) -> str:
-    result = _validate_and_parse(name, config)
-    if isinstance(result, str):
-        return result
-    _, warning = result
+    try:
+        warning = _validate_and_parse(name, config)
+    except ValueError as e:
+        return f"[error: {e}]"
 
-    skill_dir = SKILLS_DIR / _safe_skill_name(name)
+    skill_dir = SKILLS_DIR / name
     if skill_dir.exists():
         return f"[error: skill '{name}' already exists. Use 'update' to modify.]"
 
     skill_dir.mkdir(parents=True, exist_ok=True)
     (skill_dir / "SKILL.md").write_text(config)
-    return f"Created skill '{name}' at {skill_dir}{warning}"
+    return f"Created skill '{name}' at {skill_dir}{warning or ''}"
 
 
 def _update_skill(name: str, config: str) -> str:
-    result = _validate_and_parse(name, config)
-    if isinstance(result, str):
-        return result
-    _, warning = result
+    try:
+        warning = _validate_and_parse(name, config)
+    except ValueError as e:
+        return f"[error: {e}]"
 
-    skill_dir = SKILLS_DIR / _safe_skill_name(name)
+    skill_dir = SKILLS_DIR / name
     if not skill_dir.exists():
         return f"[error: skill '{name}' not found]"
 
     (skill_dir / "SKILL.md").write_text(config)
-    return f"Updated skill '{name}'{warning}"
+    return f"Updated skill '{name}'{warning or ''}"
 
 
 def _delete_skill(name: str) -> str:
     if not name:
         return "[error: 'name' is required for delete]"
 
-    skill_dir = SKILLS_DIR / _safe_skill_name(name)
+    try:
+        slug = safe_name(name, "skill")
+    except ValueError as e:
+        return f"[error: {e}]"
+
+    skill_dir = SKILLS_DIR / slug
     if not skill_dir.exists():
         return f"[error: skill '{name}' not found]"
 

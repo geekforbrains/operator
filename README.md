@@ -22,14 +22,40 @@ Built for teams, not just individuals. Multi-user auth, role-based access, isola
 
 ```sh
 pip install operator-ai
+operator setup
+```
+
+`operator setup` takes you from a fresh install to a working Slack-backed agent:
+
+- scaffolds `~/.operator/`
+- saves the API keys and Slack tokens operator needs
+- creates your first admin user
+- leaves you one command away from the first message
+
+Use `operator setup --run` if you want it to start the runtime immediately after onboarding.
+
+If the `operator` script is not on your `PATH` yet right after `pip install`, use:
+
+```sh
+python3 -m operator_ai setup --run
+```
+
+### What setup asks for
+
+- `ANTHROPIC_API_KEY`
+- `SLACK_BOT_TOKEN`
+- `SLACK_APP_TOKEN`
+- your Slack user ID or a mention like `<@U123ABC45>`
+
+### Manual setup
+
+If you want to configure everything by hand instead, run:
+
+```sh
 operator init
 ```
 
-This scaffolds `~/.operator/` with a starter config, system prompt, and a default agent.
-
-### 1. Configure
-
-Edit `~/.operator/operator.yaml`:
+Then edit `~/.operator/operator.yaml`:
 
 ```yaml
 defaults:
@@ -45,9 +71,7 @@ agents:
       app_token_env: SLACK_APP_TOKEN
 ```
 
-### 2. Set your keys
-
-Add API keys to `~/.operator/.env` or export them in your shell:
+Add your keys to `~/.operator/.env` or export them in your shell:
 
 ```sh
 export ANTHROPIC_API_KEY="sk-..."
@@ -55,13 +79,9 @@ export SLACK_BOT_TOKEN="xoxb-..."
 export SLACK_APP_TOKEN="xapp-..."
 ```
 
-### 3. Add yourself
-
 ```sh
 operator user add yourname --role admin slack YOUR_SLACK_USER_ID
 ```
-
-### 4. Run it
 
 ```sh
 operator                    # run in the foreground
@@ -144,6 +164,7 @@ Operator ships with a full CLI for managing everything outside of chat.
 ```sh
 operator                          # run the service
 operator init                     # scaffold ~/.operator/
+operator setup                    # guided onboarding
 operator agents                   # list configured agents
 operator tools                    # list available tools
 operator skills                   # list discovered skills

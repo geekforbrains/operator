@@ -289,6 +289,15 @@ class Store:
             )
             raise ValueError(msg)
 
+    def close(self) -> None:
+        self._conn.close()
+
+    def __enter__(self) -> Store:
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.close()
+
     # ── Conversations ────────────────────────────────────────────
 
     def ensure_conversation(
@@ -300,23 +309,40 @@ class Store:
         metadata: dict[str, Any] | None = None,
     ) -> None:
         now = time.time()
-        meta = json.dumps(metadata or {})
-        self._conn.execute(
-            """
-            INSERT INTO conversations (
-                conversation_id, transport_name, channel_id, root_thread_id,
-                updated_at, metadata_json
+        meta = json.dumps(metadata if metadata is not None else {})
+        if metadata is not None:
+            self._conn.execute(
+                """
+                INSERT INTO conversations (
+                    conversation_id, transport_name, channel_id, root_thread_id,
+                    updated_at, metadata_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    transport_name=excluded.transport_name,
+                    channel_id=excluded.channel_id,
+                    root_thread_id=excluded.root_thread_id,
+                    updated_at=excluded.updated_at,
+                    metadata_json=excluded.metadata_json
+                """,
+                (conversation_id, transport_name, channel_id, root_thread_id, now, meta),
             )
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(conversation_id) DO UPDATE SET
-                transport_name=excluded.transport_name,
-                channel_id=excluded.channel_id,
-                root_thread_id=excluded.root_thread_id,
-                updated_at=excluded.updated_at,
-                metadata_json=excluded.metadata_json
-            """,
-            (conversation_id, transport_name, channel_id, root_thread_id, now, meta),
-        )
+        else:
+            self._conn.execute(
+                """
+                INSERT INTO conversations (
+                    conversation_id, transport_name, channel_id, root_thread_id,
+                    updated_at, metadata_json
+                )
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(conversation_id) DO UPDATE SET
+                    transport_name=excluded.transport_name,
+                    channel_id=excluded.channel_id,
+                    root_thread_id=excluded.root_thread_id,
+                    updated_at=excluded.updated_at
+                """,
+                (conversation_id, transport_name, channel_id, root_thread_id, now, meta),
+            )
         self._conn.commit()
 
     def ensure_system_message(self, conversation_id: str, system_prompt: str) -> None:
@@ -831,3 +857,10 @@ def get_store(embed_dimensions: int = 1536) -> Store:
         )
         raise ValueError(msg)
     return _instance
+
+
+def reset_store() -> None:
+    global _instance
+    if _instance is not None:
+        _instance.close()
+        _instance = None

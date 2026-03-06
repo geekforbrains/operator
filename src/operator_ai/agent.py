@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
@@ -204,6 +205,8 @@ async def run_agent(
                     logger.info("%s recovered using fallback model %s", step, model)
                 last_error = None
                 break
+            except asyncio.CancelledError:
+                raise
             except Exception as e:
                 last_error = e
                 if model != models[-1]:
@@ -306,6 +309,8 @@ async def run_agent(
                     logger.info("%s tool %s(%s)", step, func_name, _truncate(str(args), 150))
                     try:
                         raw_result = await tool_def.func(**args)
+                    except asyncio.CancelledError:
+                        raise
                     except Exception as e:
                         result = f"[error: {e}]"
                         logger.error("%s tool %s failed: %s", step, func_name, e)

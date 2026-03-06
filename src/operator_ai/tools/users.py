@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+try:
+    import pysqlite3 as sqlite3
+except ImportError:
+    import sqlite3
+
 from operator_ai.store import get_store
 from operator_ai.tools.registry import tool
 
@@ -48,10 +53,8 @@ async def manage_users(
             store.add_user(username)
         except ValueError as e:
             return f"[error: {e}]"
-        except Exception as e:
-            if "UNIQUE constraint" in str(e):
-                return f"[error: user '{username}' already exists]"
-            return f"[error: {e}]"
+        except sqlite3.IntegrityError:
+            return f"[error: user '{username}' already exists]"
         try:
             store.add_role(username, role)
         except Exception as e:
@@ -73,14 +76,12 @@ async def manage_users(
         if not external_id:
             return "[error: external_id is required]"
         platform_id = f"{transport}:{external_id}"
+        if store.get_user(username) is None:
+            return f"[error: user '{username}' not found]"
         try:
             store.add_identity(username, platform_id)
-        except Exception as e:
-            if "FOREIGN KEY" in str(e):
-                return f"[error: user '{username}' not found]"
-            if "UNIQUE constraint" in str(e):
-                return f"[error: identity '{platform_id}' already linked]"
-            return f"[error: {e}]"
+        except sqlite3.IntegrityError:
+            return f"[error: identity '{platform_id}' already linked]"
         return f"Linked {platform_id} to '{username}'."
 
     if action == "unlink":
@@ -100,14 +101,12 @@ async def manage_users(
             return "[error: username is required]"
         if not role:
             return "[error: role is required]"
+        if store.get_user(username) is None:
+            return f"[error: user '{username}' not found]"
         try:
             store.add_role(username, role)
-        except Exception as e:
-            if "FOREIGN KEY" in str(e):
-                return f"[error: user '{username}' not found]"
-            if "UNIQUE constraint" in str(e):
-                return f"[error: user '{username}' already has role '{role}']"
-            return f"[error: {e}]"
+        except sqlite3.IntegrityError:
+            return f"[error: user '{username}' already has role '{role}']"
         return f"Added role '{role}' to '{username}'."
 
     if action == "remove_role":

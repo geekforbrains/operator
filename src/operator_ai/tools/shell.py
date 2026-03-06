@@ -2,10 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
-from operator_ai.tools.registry import tool
+from operator_ai.tools.registry import format_process_output, tool
 from operator_ai.tools.workspace import get_workspace
-
-_MAX_OUTPUT = 16_384  # 16 KB — keeps tool results within ~4K tokens
 
 
 @tool(
@@ -42,16 +40,4 @@ async def run_shell(command: str, timeout: int = 120) -> str:
             await proc.wait()
         return f"[timed out after {timeout}s]"
 
-    out = stdout.decode(errors="replace")
-    err = stderr.decode(errors="replace")
-    parts: list[str] = []
-    if out:
-        parts.append(out)
-    if err:
-        parts.append(f"[stderr]\n{err}")
-    if proc.returncode != 0:
-        parts.append(f"[exit code: {proc.returncode}]")
-    result = "\n".join(parts) or "[no output]"
-    if len(result) > _MAX_OUTPUT:
-        result = result[:_MAX_OUTPUT] + "\n[truncated — output exceeded 16KB]"
-    return result
+    return format_process_output(stdout, stderr, proc.returncode)

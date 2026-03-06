@@ -29,10 +29,10 @@ async def send_message(channel: str = "", text: str = "", thread_id: str = "") -
     if transport is None:
         return "[error: no transport configured for send_message]"
 
-    resolved = await _resolve_channel(ctx, transport, channel)
-    if isinstance(resolved, str) and resolved.startswith("[error"):
-        return resolved
-    channel_id = resolved
+    channel_id = await _resolve_channel(ctx, transport, channel)
+    if channel_id is None:
+        target = f" '{channel}'" if channel else ""
+        return f"[error: could not resolve channel{target}]"
     tid = thread_id or ctx.get("thread_id") or None
 
     try:
@@ -58,10 +58,10 @@ async def send_file(path: str, channel: str = "", thread_id: str = "") -> str:
     if transport is None:
         return "[error: no transport configured for send_file]"
 
-    resolved = await _resolve_channel(ctx, transport, channel)
-    if isinstance(resolved, str) and resolved.startswith("[error"):
-        return resolved
-    channel_id = resolved
+    channel_id = await _resolve_channel(ctx, transport, channel)
+    if channel_id is None:
+        target = f" '{channel}'" if channel else ""
+        return f"[error: could not resolve channel{target}]"
     tid = thread_id or ctx.get("thread_id") or None
 
     try:
@@ -86,14 +86,11 @@ async def send_file(path: str, channel: str = "", thread_id: str = "") -> str:
         return f"[error: failed to send file: {e}]"
 
 
-async def _resolve_channel(ctx: dict, transport: Any, channel: str) -> str:
-    """Resolve channel to an ID, falling back to the current conversation's channel."""
+async def _resolve_channel(ctx: dict, transport: Any, channel: str) -> str | None:
+    """Resolve channel to an ID, falling back to the current conversation's channel.
+
+    Returns the channel ID on success, or ``None`` if resolution fails.
+    """
     if channel:
-        channel_id = await transport.resolve_channel_id(channel)
-        if channel_id is None:
-            return f"[error: could not resolve channel '{channel}']"
-        return channel_id
-    fallback = ctx.get("channel_id")
-    if not fallback:
-        return "[error: no channel specified and no current conversation context]"
-    return fallback
+        return await transport.resolve_channel_id(channel)
+    return ctx.get("channel_id") or None

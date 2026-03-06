@@ -271,12 +271,20 @@ class SlackTransport(Transport):
                 length = resp.content_length
                 if length is not None and length > self._MAX_DOWNLOAD:
                     raise ValueError(f"File too large: {length} bytes (limit {self._MAX_DOWNLOAD})")
-                data = await resp.read()
-                if len(data) > self._MAX_DOWNLOAD:
-                    raise ValueError(
-                        f"File too large: {len(data)} bytes (limit {self._MAX_DOWNLOAD})"
-                    )
-                return data
+                if length is not None:
+                    # Content-Length known and within limits — safe to read at once
+                    return await resp.read()
+                # Unknown size — read incrementally with a cap
+                chunks: list[bytes] = []
+                total = 0
+                async for chunk in resp.content.iter_chunked(1024 * 1024):
+                    total += len(chunk)
+                    if total > self._MAX_DOWNLOAD:
+                        raise ValueError(
+                            f"File too large: >{self._MAX_DOWNLOAD} bytes (limit {self._MAX_DOWNLOAD})"
+                        )
+                    chunks.append(chunk)
+                return b"".join(chunks)
 
     @override
     async def send_file(

@@ -15,6 +15,7 @@ from pathlib import Path
 # Import tools to trigger registration
 import operator_ai.tools  # noqa: F401
 from operator_ai.agent import run_agent
+from operator_ai.commands import CommandContext, dispatch_command
 from operator_ai.config import OPERATOR_DIR, Config, RoleConfig, load_config
 from operator_ai.jobs import JobRunner
 from operator_ai.log_context import RunContextFilter, new_run_id, set_run_context
@@ -122,6 +123,8 @@ async def process_attachments(
 
         try:
             data = await transport.download_file(att)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             logger.warning("Failed to download attachment %s", att.filename, exc_info=True)
             blocks.append({"type": "text", "text": f"[failed to download: {att.filename}]"})
@@ -221,8 +224,19 @@ class RuntimeManager:
         runtime = ConversationRuntime()
         self._runtimes[conversation_id] = runtime
         while len(self._runtimes) > self._MAX_RUNTIMES:
-            self._runtimes.popitem(last=False)
+            self._evict_one()
         return runtime
+
+    def _evict_one(self) -> None:
+        """Evict the oldest non-busy runtime, falling back to oldest if all are busy."""
+        # Try to find the oldest idle runtime
+        for cid, rt in self._runtimes.items():
+            if not rt.busy:
+                del self._runtimes[cid]
+                return
+        # All runtimes are busy — evict the oldest anyway to stay bounded
+        evicted_id, _ = self._runtimes.popitem(last=False)
+        logger.warning("All %d runtimes busy; evicted oldest %s", self._MAX_RUNTIMES, evicted_id)
 
 
 class Dispatcher:
@@ -410,6 +424,8 @@ class Dispatcher:
                         + "\n".join(f"- {line}" for line in lines)
                         + "\n</context_snapshot>"
                     )
+            except asyncio.CancelledError:
+                raise
             except Exception:
                 logger.exception("Memory search failed")
 
@@ -557,8 +573,6 @@ class Dispatcher:
         runtime: ConversationRuntime,
         conversation_id: str,
     ) -> None:
-        from operator_ai.commands import CommandContext, dispatch_command
-
         parts = msg.text.strip().split()
         cmd_name = parts[0][1:].lower()  # strip "!" prefix
         args = parts[1:]
@@ -705,7 +719,7 @@ async def async_main() -> None:
 
         if not store.list_users():
             logger.warning(
-                "No users configured. Run: operator user add <username> --role admin <transport> <id>"
+                "No users configured. Run: operator setup (or operator user add <username> --role admin <transport> <id>)"
             )
 
         runtimes = RuntimeManager()

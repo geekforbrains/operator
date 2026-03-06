@@ -5,21 +5,20 @@ import logging
 import os
 import shlex
 
-from operator_ai.config import OPERATOR_DIR, load_config
+from operator_ai.config import SKILLS_DIR, load_config
 from operator_ai.tools.context import get_skill_filter
-from operator_ai.tools.registry import tool
+from operator_ai.tools.registry import MAX_OUTPUT, format_process_output, safe_name, tool
 from operator_ai.tools.workspace import get_workspace
 
 logger = logging.getLogger("operator.tools.skills_access")
-
-SKILLS_DIR = OPERATOR_DIR / "skills"
-_MAX_OUTPUT = 16_384  # 16 KB
 _SKILL_SUBDIRS = ("scripts/", "references/", "assets/")
 
 
 def _check_skill_access(skill: str) -> str | None:
     """Check if skill is accessible. Returns error string or None."""
-    if not skill or "/" in skill or "\\" in skill or ".." in skill:
+    try:
+        safe_name(skill, "skill")
+    except ValueError:
         return f"[error: invalid skill name: {skill!r}]"
 
     skill_filter = get_skill_filter()
@@ -68,8 +67,8 @@ async def read_skill(skill: str, path: str = "") -> str:
     except Exception as e:
         return f"[error reading file: {e}]"
 
-    if len(content) > _MAX_OUTPUT:
-        content = content[:_MAX_OUTPUT] + "\n[truncated — output exceeded 16KB]"
+    if len(content) > MAX_OUTPUT:
+        content = content[:MAX_OUTPUT] + "\n[truncated — output exceeded 16KB]"
     return content
 
 
@@ -138,6 +137,8 @@ async def run_skill(skill: str, command: str, timeout: int = 120) -> str:
         if key.startswith("OPERATOR_"):
             del env[key]
 
+    proc: asyncio.subprocess.Process | None = None
+
     try:
         proc = await asyncio.create_subprocess_exec(
             *argv,
@@ -147,25 +148,19 @@ async def run_skill(skill: str, command: str, timeout: int = 120) -> str:
             env=env,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except asyncio.CancelledError:
+        if proc is not None:
+            proc.kill()
+            await proc.wait()
+        raise
     except FileNotFoundError:
         return f"[error: command not found: {argv[0]}]"
     except OSError as e:
         return f"[error: {e}]"
     except TimeoutError:
-        proc.kill()
-        await proc.wait()
+        if proc is not None:
+            proc.kill()
+            await proc.wait()
         return f"[timed out after {timeout}s]"
 
-    out = stdout.decode(errors="replace")
-    err_out = stderr.decode(errors="replace")
-    parts: list[str] = []
-    if out:
-        parts.append(out)
-    if err_out:
-        parts.append(f"[stderr]\n{err_out}")
-    if proc.returncode != 0:
-        parts.append(f"[exit code: {proc.returncode}]")
-    result = "\n".join(parts) or "[no output]"
-    if len(result) > _MAX_OUTPUT:
-        result = result[:_MAX_OUTPUT] + "\n[truncated — output exceeded 16KB]"
-    return result
+    return format_process_output(stdout, stderr, proc.returncode)

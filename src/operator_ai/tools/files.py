@@ -3,11 +3,10 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
-from operator_ai.tools.registry import tool
+from operator_ai.tools.registry import MAX_OUTPUT, tool
 from operator_ai.tools.workspace import get_workspace, is_sandboxed
 
 MAX_READ_BYTES = 1_000_000  # 1 MB
-_MAX_OUTPUT = 16_384  # 16 KB — keeps tool results within ~4K tokens
 
 
 def _resolve(path: str) -> Path:
@@ -40,21 +39,27 @@ async def read_file(path: str) -> str:
         p = _resolve(path)
     except ValueError as e:
         return f"[error: {e}]"
-    if not p.exists():
-        return f"[error: file not found: {path}]"
-    try:
-        size = p.stat().st_size
-        data = p.read_bytes()[:MAX_READ_BYTES]
-        text = data.decode(errors="replace")
-        if len(text) > _MAX_OUTPUT:
-            text = (
-                text[:_MAX_OUTPUT] + f"\n[truncated — output exceeded 16KB, file is {size} bytes]"
-            )
-        elif size > MAX_READ_BYTES:
-            text += f"\n[truncated at {MAX_READ_BYTES} bytes, file is {size} bytes]"
-        return text
-    except Exception as e:
-        return f"[error reading file: {e}]"
+
+    def _read_sync() -> str:
+        if not p.exists():
+            return f"[error: file not found: {path}]"
+        try:
+            size = p.stat().st_size
+            with p.open("rb") as f:
+                data = f.read(MAX_READ_BYTES)
+            text = data.decode(errors="replace")
+            if len(text) > MAX_OUTPUT:
+                text = (
+                    text[:MAX_OUTPUT]
+                    + f"\n[truncated — output exceeded 16KB, file is {size} bytes]"
+                )
+            elif size > MAX_READ_BYTES:
+                text += f"\n[truncated at {MAX_READ_BYTES} bytes, file is {size} bytes]"
+            return text
+        except Exception as e:
+            return f"[error reading file: {e}]"
+
+    return await asyncio.to_thread(_read_sync)
 
 
 @tool(description="Write content to a file. Creates parent directories if needed.")
@@ -69,12 +74,16 @@ async def write_file(path: str, content: str) -> str:
         p = _resolve(path)
     except ValueError as e:
         return f"[error: {e}]"
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(content)
-        return f"Wrote {len(content)} bytes to {p}"
-    except Exception as e:
-        return f"[error writing file: {e}]"
+
+    def _write_sync() -> str:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(content)
+            return f"Wrote {len(content)} bytes to {p}"
+        except Exception as e:
+            return f"[error writing file: {e}]"
+
+    return await asyncio.to_thread(_write_sync)
 
 
 @tool(description="List files and directories at the given path.")
