@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from operator_ai.cli import _STARTER_CONFIG, app
+from operator_ai.cli import _STARTER_CONFIG, _generate_plist, _generate_systemd_unit, app
 
 runner = CliRunner()
 
@@ -46,7 +46,7 @@ def test_init_creates_config_and_shows_user_add_reminder(tmp_path: Path):
     assert "reject_response: ignore" in content
 
 
-def test_init_creates_env_file_with_path(tmp_path: Path):
+def test_init_creates_env_file_with_api_key_placeholders(tmp_path: Path):
     op_dir = tmp_path / ".operator"
     op_dir.mkdir()
 
@@ -61,12 +61,28 @@ def test_init_creates_env_file_with_path(tmp_path: Path):
     env_file = op_dir / ".env"
     assert env_file.exists()
     content = env_file.read_text()
-    assert "PATH=" in content
-    # Should contain current PATH value (not empty)
-    assert "PATH=/" in content or "PATH=/usr" in content
+    # Should NOT contain PATH (PATH is embedded in the service definition instead)
+    assert "PATH=" not in content
+    # Should contain API key placeholder comments
+    assert "# ANTHROPIC_API_KEY=sk-..." in content
+    assert "# OPENAI_API_KEY=sk-..." in content
     # Should have restricted permissions
     mode = env_file.stat().st_mode & 0o777
     assert mode == 0o600
+
+
+def test_generate_plist_embeds_path():
+    plist = _generate_plist("/usr/local/bin/operator")
+    assert "<key>EnvironmentVariables</key>" in plist
+    assert "<key>PATH</key>" in plist
+    # The PATH value should be present (at minimum /usr/bin:/bin)
+    assert "/usr" in plist or "/bin" in plist
+
+
+def test_generate_systemd_unit_embeds_path():
+    unit = _generate_systemd_unit("/usr/local/bin/operator")
+    assert "Environment=PATH=" in unit
+    assert "/usr" in unit or "/bin" in unit
 
 
 def test_init_skips_existing_env_file(tmp_path: Path):

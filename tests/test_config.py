@@ -196,14 +196,14 @@ def test_ensure_shared_symlink_skips_non_symlink(tmp_path) -> None:
 # ── _load_env_file ──────────────────────────────────────────
 
 
-def test_load_env_file_overrides_existing(tmp_path, monkeypatch) -> None:
+def test_load_env_file_does_not_override_existing(tmp_path, monkeypatch) -> None:
     env_file = tmp_path / ".env"
     env_file.write_text("MY_TEST_VAR=from_file\n")
     monkeypatch.setenv("MY_TEST_VAR", "original")
 
     _load_env_file(str(env_file))
 
-    assert os.environ["MY_TEST_VAR"] == "from_file"
+    assert os.environ["MY_TEST_VAR"] == "original"
 
 
 def test_load_env_file_strips_quotes(tmp_path, monkeypatch) -> None:

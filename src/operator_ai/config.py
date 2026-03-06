@@ -294,7 +294,7 @@ def ensure_shared_symlink(workspace: Path, shared: Path) -> None:
 
 
 def _load_env_file(env_path: str, *, base_dir: Path | None = None) -> None:
-    """Load KEY=VALUE lines from a file into os.environ (overrides existing)."""
+    """Load KEY=VALUE lines from a file into os.environ (doesn't override existing)."""
     p = Path(env_path).expanduser()
     if not p.is_absolute() and base_dir is not None:
         p = (base_dir / p).resolve()
@@ -312,7 +312,7 @@ def _load_env_file(env_path: str, *, base_dir: Path | None = None) -> None:
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
             value = value[1:-1]
         if key:
-            os.environ[key] = value
+            os.environ.setdefault(key, value)
 
 
 def load_config(path: Path | None = None) -> Config:
