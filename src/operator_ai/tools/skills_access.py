@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import shlex
 
 from operator_ai.config import SKILLS_DIR, ConfigError, load_config
@@ -12,6 +13,18 @@ from operator_ai.tools.workspace import get_workspace
 
 logger = logging.getLogger("operator.tools.skills_access")
 _SKILL_SUBDIRS = ("scripts/", "references/", "assets/")
+_ENV_REF_RE = re.compile(r"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})")
+_ALLOWED_OPERATOR_ENV = {"OPERATOR_HOME"}
+
+
+def _expand_env_refs(value: str, env: dict[str, str]) -> str:
+    """Expand $VAR and ${VAR} placeholders against the provided env mapping."""
+
+    def replace(match: re.Match[str]) -> str:
+        key = match.group(1) or match.group(2)
+        return env.get(key, match.group(0))
+
+    return _ENV_REF_RE.sub(replace, value)
 
 
 def _check_skill_access(skill: str) -> str | None:
@@ -76,7 +89,7 @@ async def read_skill(skill: str, path: str = "") -> str:
     description=(
         "Execute a command in the context of a skill. The command runs with "
         "shell=False (no pipes, redirects, or chaining). Skill scripts/ paths "
-        "are auto-expanded."
+        "and env var references are auto-expanded."
     ),
 )
 async def run_skill(skill: str, command: str, timeout: int = 120) -> str:
@@ -103,13 +116,6 @@ async def run_skill(skill: str, command: str, timeout: int = 120) -> str:
     if not argv:
         return "[error: empty command]"
 
-    # Path expansion: expand skill subdirectory references to absolute paths
-    for i in range(len(argv)):
-        for prefix in _SKILL_SUBDIRS:
-            if argv[i].startswith(prefix):
-                argv[i] = str(skill_dir / argv[i])
-                break
-
     # Build env — os.environ already has the correct PATH from .env loading
     env = os.environ.copy()
     env["SKILL_DIR"] = str(skill_dir)
@@ -134,8 +140,18 @@ async def run_skill(skill: str, command: str, timeout: int = 120) -> str:
 
     # Strip any OPERATOR_* vars
     for key in list(env.keys()):
-        if key.startswith("OPERATOR_"):
+        if key.startswith("OPERATOR_") and key not in _ALLOWED_OPERATOR_ENV:
             del env[key]
+
+    # Expand env references after sanitization so stripped vars stay unavailable.
+    argv = [_expand_env_refs(arg, env) for arg in argv]
+
+    # Path expansion: expand skill subdirectory references to absolute paths
+    for i in range(len(argv)):
+        for prefix in _SKILL_SUBDIRS:
+            if argv[i].startswith(prefix):
+                argv[i] = str(skill_dir / argv[i])
+                break
 
     proc: asyncio.subprocess.Process | None = None
 

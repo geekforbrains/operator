@@ -187,6 +187,50 @@ def test_run_skill_sets_skill_dir_env(tmp_path: Path) -> None:
         assert str(skill_dir) in result
 
 
+def test_run_skill_expands_env_var_refs(tmp_path: Path) -> None:
+    """$VAR and ${VAR} args should expand against the sanitized env."""
+    _make_skill(tmp_path, "my-skill")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    set_workspace(workspace)
+    os.environ["SKILL_TEST_TOKEN"] = "secret123"
+    try:
+        with patch("operator_ai.tools.skills_access.SKILLS_DIR", tmp_path):
+            set_skill_filter(None)
+            result = asyncio.run(
+                run_skill(
+                    "my-skill",
+                    f'{sys.executable} -c "import sys; print(sys.argv[1]); print(sys.argv[2])" '
+                    "'$SKILL_TEST_TOKEN' '${SKILL_TEST_TOKEN}'",
+                )
+            )
+            assert result.splitlines() == ["secret123", "secret123"]
+    finally:
+        os.environ.pop("SKILL_TEST_TOKEN", None)
+
+
+def test_run_skill_preserves_operator_home_env(tmp_path: Path) -> None:
+    """OPERATOR_HOME should remain available to skill commands."""
+    _make_skill(tmp_path, "my-skill")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    set_workspace(workspace)
+    os.environ["OPERATOR_HOME"] = "/tmp/operator-home"
+    try:
+        with patch("operator_ai.tools.skills_access.SKILLS_DIR", tmp_path):
+            set_skill_filter(None)
+            result = asyncio.run(
+                run_skill(
+                    "my-skill",
+                    f"{sys.executable} -c \"import os, sys; print(sys.argv[1]); print(os.environ['OPERATOR_HOME'])\" "
+                    "'$OPERATOR_HOME'",
+                )
+            )
+            assert result.splitlines() == ["/tmp/operator-home", "/tmp/operator-home"]
+    finally:
+        os.environ.pop("OPERATOR_HOME", None)
+
+
 def test_run_skill_filter_blocks(tmp_path: Path) -> None:
     """Skill not in the filter should be blocked."""
     _make_skill(tmp_path, "secret-skill")
@@ -220,5 +264,26 @@ def test_run_skill_strips_operator_env_vars(tmp_path: Path) -> None:
                 )
             )
             assert "not_found" in result
+    finally:
+        os.environ.pop("OPERATOR_TEST_SECRET", None)
+
+
+def test_run_skill_does_not_expand_stripped_operator_env_refs(tmp_path: Path) -> None:
+    """Stripped OPERATOR_* vars should not leak through argv expansion."""
+    _make_skill(tmp_path, "my-skill")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    set_workspace(workspace)
+    os.environ["OPERATOR_TEST_SECRET"] = "should_be_stripped"
+    try:
+        with patch("operator_ai.tools.skills_access.SKILLS_DIR", tmp_path):
+            set_skill_filter(None)
+            result = asyncio.run(
+                run_skill(
+                    "my-skill",
+                    f"{sys.executable} -c \"import sys; print(sys.argv[1])\" '$OPERATOR_TEST_SECRET'",
+                )
+            )
+            assert result.splitlines() == ["$OPERATOR_TEST_SECRET"]
     finally:
         os.environ.pop("OPERATOR_TEST_SECRET", None)
