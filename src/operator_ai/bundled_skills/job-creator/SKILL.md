@@ -14,7 +14,7 @@ metadata:
 # Job Creator
 
 Create well-formed scheduled jobs using `manage_job`. Jobs are cron-scheduled agent conversations
-that run autonomously with full tool access.
+that run autonomously using the selected agent's prompt, tools, skills, and permissions.
 
 ## When to Create a Job
 
@@ -31,15 +31,16 @@ clear recurring schedule.
 3. If the job is already running, the tick is skipped (tracked via `skip_count`)
 4. Optional `prerun` hook can gate execution (non-zero exit = skip, tracked via `gate_count`)
 5. A fresh agent conversation starts — the job body becomes the user message
-6. The agent runs with all tools: shell, files, web, KV, messaging, memory, skills, sub-agents
+6. The agent runs with the selected agent's prompt, tools, skills, sandbox, and permissions
 7. Optional `postrun` hook receives agent output on stdin
 8. Job state (last_run, result, duration, error, counts) is persisted in SQLite
 
 ### Critical Facts
 
-- **Each run is isolated** — no memory of previous runs
+- **Each run starts a fresh conversation** — prompt state does not carry over automatically
 - **The workspace persists** — files written to disk survive across runs
 - **KV store persists** — use it for cross-run state (scoped per agent, not per job)
+- **Agent/global memory can persist** when memory is enabled — useful for durable facts, not operational cursors
 - **Text responses go NOWHERE** — see the send_message rule below
 
 ---
@@ -62,7 +63,6 @@ delivered anywhere. Every job prompt MUST specify:
 name: my-job-name
 description: What this job does
 schedule: "0 8 * * *"
-agent: default
 max_iterations: 10
 enabled: true
 hooks:
@@ -151,7 +151,7 @@ Combine results into a single report and post to #dev.
 
 ## KV Store Patterns
 
-Jobs are isolated per-run but KV persists. **Always use the job name as namespace.**
+Jobs start fresh each run, but KV persists. **Always use the job name as namespace.**
 
 ### Deduplication
 

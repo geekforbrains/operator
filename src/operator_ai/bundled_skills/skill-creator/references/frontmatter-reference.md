@@ -1,6 +1,6 @@
 # SKILL.md Frontmatter Reference
 
-Complete field reference per the [agentskills.io](https://agentskills.io/specification) spec.
+Operator-oriented frontmatter reference for `SKILL.md`.
 
 ## Required fields
 
@@ -30,7 +30,7 @@ What the skill does and when to use it. This is the primary signal agents use fo
 
 ### `license`
 
-License name or reference to a bundled license file.
+Optional informational metadata. Operator does not currently enforce or surface this field.
 
 ```yaml
 license: MIT
@@ -42,9 +42,7 @@ license: Proprietary. See LICENSE.txt for terms.
 
 ### `compatibility`
 
-Environment requirements. Only include if the skill has specific needs.
-
-- Max 500 characters
+Optional informational metadata for environment requirements. Operator does not currently enforce or surface this field.
 
 ```yaml
 compatibility: Requires git, docker, and internet access
@@ -63,15 +61,7 @@ metadata:
     - DATABASE_URL
 ```
 
-**`metadata.env`** (Operator convention): List of environment variable names the skill requires. Operator checks these at startup and warns if any are missing. The user sets actual values in their `.env` file configured via `runtime.env_file` in `operator.yaml`.
-
-### `allowed-tools`
-
-Space-delimited list of pre-approved tools. Experimental — support varies by agent.
-
-```yaml
-allowed-tools: run_shell read_file write_file
-```
+**`metadata.env`** (Operator convention): List of environment variable names the skill requires. Operator checks these and warns if any are missing. The user sets actual values in their `.env` file configured via `runtime.env_file` in `operator.yaml`.
 
 ## Optional directories
 

@@ -7,6 +7,7 @@ from typing import Any
 
 from operator_ai.log_context import get_run_context, new_run_id, set_run_context
 from operator_ai.prompts import assemble_system_prompt, load_prompt
+from operator_ai.tools.context import set_skill_filter
 from operator_ai.tools.registry import tool
 
 logger = logging.getLogger("operator.subagent")
@@ -43,6 +44,7 @@ def _resolve_agent_context(agent_name: str | None, current: dict[str, Any]) -> d
     ctx["max_output_tokens"] = config.agent_max_output_tokens(agent_name)
     ctx["sandboxed"] = config.agent_sandboxed(agent_name)
     ctx["tool_filter"] = config.agent_tool_filter(agent_name)
+    ctx["skill_filter"] = config.agent_skill_filter(agent_name)
     ctx["agent_name"] = agent_name
     return ctx
 
@@ -127,6 +129,7 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
             run_id=parent_ctx.run_id if parent_ctx else new_run_id(),
             depth=depth + 1,
         )
+        set_skill_filter(resolved.get("skill_filter"))
         return await run_agent(
             messages=messages,
             models=resolved["models"],

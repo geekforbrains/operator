@@ -16,6 +16,7 @@ from croniter import croniter
 from operator_ai.config import OPERATOR_DIR, Config
 from operator_ai.job_specs import JOBS_DIR
 from operator_ai.log_context import new_run_id, set_run_context
+from operator_ai.memory import MemoryStore
 from operator_ai.prompts import assemble_system_prompt, load_prompt
 from operator_ai.skills import extract_body, parse_frontmatter
 from operator_ai.store import DB_PATH, Store
@@ -159,12 +160,44 @@ async def _run_hook(
         return 1, f"[hook error: {e}]"
 
 
-def _build_job_prompt(
+def _job_memory_scopes(agent_name: str) -> list[tuple[str, str]]:
+    return [("agent", agent_name), ("global", "global")]
+
+
+async def _job_memory_context(
+    job: Job,
+    agent_name: str,
+    memory_store: MemoryStore | None,
+) -> tuple[list[str], list[str]]:
+    if memory_store is None:
+        return [], []
+
+    pinned_lines: list[str] = []
+    scopes = _job_memory_scopes(agent_name)
+    for scope, scope_id in scopes:
+        for memory in memory_store.get_pinned_memories(scope, scope_id):
+            pinned_lines.append(f"- [{memory['scope']}] {memory['content']}")
+
+    context_sections: list[str] = []
+    relevant = await memory_store.search(job.prompt, scopes)
+    if relevant:
+        context_sections.append(
+            '<context_snapshot source="memories">\n'
+            "Relevant memories from previous work:\n"
+            + "\n".join(f"- {item['content']}" for item in relevant)
+            + "\n</context_snapshot>"
+        )
+
+    return pinned_lines, context_sections
+
+
+async def _build_job_prompt(
     config: Config,
     job: Job,
     agent_name: str,
     prerun_output: str,
     transport: Transport | None,
+    memory_store: MemoryStore | None = None,
 ) -> str:
     """Assemble the system prompt for a job execution."""
     workspace = config.agent_workspace(agent_name)
@@ -178,7 +211,10 @@ def _build_job_prompt(
     )
     job_ctx = load_prompt("job.md").replace("{job_details}", job_details)
 
+    pinned_lines, memory_sections = await _job_memory_context(job, agent_name, memory_store)
+
     context_sections: list[str] = [job_ctx]
+    context_sections.extend(memory_sections)
 
     if prerun_output:
         context_sections.append(f"<prerun_output>\n{prerun_output}\n</prerun_output>")
@@ -186,6 +222,7 @@ def _build_job_prompt(
         config=config,
         agent_name=agent_name,
         context_sections=context_sections,
+        pinned_memory_lines=pinned_lines,
         transport_extra=transport.get_prompt_extra() if transport else "",
         skill_filter=config.agent_skill_filter(agent_name),
     )
@@ -226,6 +263,7 @@ async def _execute_job(
     config: Config,
     transports: dict[str, Transport],
     store: Store,
+    memory_store: MemoryStore | None = None,
 ) -> None:
     """Full execution: prerun gate -> agent -> postrun -> state."""
     start_time = time.time()
@@ -259,10 +297,19 @@ async def _execute_job(
         # jobs -> agent -> tools/__init__ -> tools/jobs -> jobs
         from operator_ai.agent import run_agent
         from operator_ai.tools import kv as kv_tools
+        from operator_ai.tools import memory as memory_tools
         from operator_ai.tools import messaging
+        from operator_ai.tools.context import set_skill_filter
 
         transport = transports.get(agent_name)
-        system_prompt = _build_job_prompt(config, job, agent_name, prerun_output, transport)
+        system_prompt = await _build_job_prompt(
+            config,
+            job,
+            agent_name,
+            prerun_output,
+            transport,
+            memory_store=memory_store,
+        )
         store.ensure_conversation(
             conversation_id=conversation_id,
             transport_name="job",
@@ -281,6 +328,15 @@ async def _execute_job(
         # Configure tools with execution context
         messaging.configure({"transport": transport})
         kv_tools.configure({"agent_name": agent_name})
+        memory_tools.configure(
+            {
+                "memory_store": memory_store,
+                "user_id": "",
+                "agent_name": agent_name,
+                "allow_user_scope": False,
+            }
+        )
+        set_skill_filter(config.agent_skill_filter(agent_name))
 
         models = [job.model] if job.model else config.agent_models(agent_name)
         max_iter = job.max_iterations or config.agent_max_iterations(agent_name)
@@ -335,10 +391,17 @@ async def _execute_job(
 class JobRunner:
     """Ticks every 60s, fires jobs whose cron schedule matches."""
 
-    def __init__(self, config: Config, transports: dict[str, Transport], store: Store):
+    def __init__(
+        self,
+        config: Config,
+        transports: dict[str, Transport],
+        store: Store,
+        memory_store: MemoryStore | None = None,
+    ):
         self._config = config
         self._transports = transports
         self._store = store
+        self._memory_store = memory_store
         self._running: set[str] = set()
         self._tasks: set[asyncio.Task] = set()
         self._loop_task: asyncio.Task | None = None
@@ -388,7 +451,13 @@ class JobRunner:
             logger.info("Firing job '%s' (schedule: %s)", job.name, job.schedule)
             self._spawn(
                 job.name,
-                _execute_job(job, self._config, self._transports, self._store),
+                _execute_job(
+                    job,
+                    self._config,
+                    self._transports,
+                    self._store,
+                    self._memory_store,
+                ),
             )
 
     def _spawn(self, name: str, coro: Coroutine[Any, Any, None]) -> None:
@@ -418,6 +487,7 @@ async def run_job_now(
     config: Config,
     store: Store,
     transports: dict[str, Transport] | None = None,
+    memory_store: MemoryStore | None = None,
 ) -> Job:
     """Run a single job by name outside scheduler ticks.
 
@@ -428,5 +498,5 @@ async def run_job_now(
     if job is None:
         raise ValueError(f"job '{name}' not found")
 
-    await _execute_job(job, config, transports or {}, store)
+    await _execute_job(job, config, transports or {}, store, memory_store)
     return job

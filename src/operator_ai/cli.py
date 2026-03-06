@@ -35,6 +35,7 @@ from operator_ai.job_specs import find_job_spec, scan_job_specs
 from operator_ai.jobs import run_job_now
 from operator_ai.log_context import RunContextFilter
 from operator_ai.main import async_main
+from operator_ai.memory import MemoryStore
 from operator_ai.prompts import load_prompt
 from operator_ai.skills import (
     install_bundled_skills,
@@ -1178,7 +1179,12 @@ def job_run(
     except ConfigError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(code=1) from None
-    store = get_store()
+    store = (
+        get_store(embed_dimensions=config.memory.embed_dimensions)
+        if config.memory.enabled
+        else get_store()
+    )
+    memory_store = MemoryStore(store, config.memory) if config.memory.enabled else None
 
     job = next((job for job in _scan_jobs() if job.name == name), None)
     if not job:
@@ -1194,7 +1200,11 @@ def job_run(
     async def _run() -> None:
         try:
             await run_job_now(
-                name=name, config=config, store=store, transports={agent_name: transport}
+                name=name,
+                config=config,
+                store=store,
+                transports={agent_name: transport},
+                memory_store=memory_store,
             )
         except ValueError as e:
             print(str(e))

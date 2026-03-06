@@ -35,7 +35,7 @@ my-skill/
 └── assets/            # Optional: templates, data files
 ```
 
-**Progressive disclosure:** Only the `name` and `description` are loaded at startup. The full `SKILL.md` body is loaded when the skill activates. Files in `scripts/`, `references/`, and `assets/` are loaded only when explicitly read. This keeps context efficient.
+**Progressive disclosure:** Only lightweight skill metadata is loaded into the system prompt at startup. The full `SKILL.md` body is loaded when the skill activates. Files in `scripts/`, `references/`, and `assets/` are loaded only when explicitly read. This keeps context efficient.
 
 ## Creating a skill
 
@@ -53,7 +53,7 @@ Required fields:
 - **`name`**: Lowercase alphanumeric + hyphens. 1-64 chars. Must match the directory name. No leading/trailing/consecutive hyphens.
 - **`description`**: 1-1024 chars. Write in **third person**. Include what it does AND when to use it. Be specific — this is how the agent decides to activate the skill.
 
-Optional fields: `license`, `compatibility`, `metadata`, `allowed-tools`. See [references/frontmatter-reference.md](references/frontmatter-reference.md) for details.
+Optional fields: `metadata`, plus informational fields like `license` or `compatibility`. Operator actively checks `metadata.env`; the rest are descriptive unless your own workflow uses them. See [references/frontmatter-reference.md](references/frontmatter-reference.md) for details.
 
 ### Good description
 
@@ -104,7 +104,7 @@ Never put API keys, tokens, passwords, or credentials in SKILL.md. Instead:
    Authenticate using `$GITHUB_TOKEN` in shell commands.
    ```
 
-2. List required env vars in frontmatter so Operator validates them at startup:
+2. List required env vars in frontmatter so Operator can warn when they are missing:
    ```yaml
    metadata:
      env:

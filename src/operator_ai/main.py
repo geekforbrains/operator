@@ -744,7 +744,7 @@ async def async_main() -> None:
             dispatcher.register_transport(transport)
 
         # Start job runner and memory services.
-        job_runner = JobRunner(config, dispatcher.transports, store)
+        job_runner = JobRunner(config, dispatcher.transports, store, memory_store=memory_store)
         job_runner.start()
         if harvester:
             harvester.start()

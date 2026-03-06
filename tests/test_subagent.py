@@ -65,6 +65,11 @@ class FakeConfig:
     def agent_tool_filter(self, name: str):  # noqa: ARG002
         return None
 
+    def agent_skill_filter(self, name: str):
+        if name == "researcher":
+            return lambda skill: skill == "research"
+        return None
+
 
 def test_resolve_none_returns_current() -> None:
     current = {"models": ["m1"], "workspace": "/ws"}
@@ -90,6 +95,9 @@ def test_resolve_known_agent() -> None:
     assert result["context_ratio"] == 0.5
     assert result["max_output_tokens"] is None
     assert result["tool_filter"] is None
+    assert result["skill_filter"] is not None
+    assert result["skill_filter"]("research") is True
+    assert result["skill_filter"]("other") is False
     assert result["agent_name"] == "researcher"
 
 

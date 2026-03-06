@@ -15,7 +15,7 @@ from operator_ai.prompts import CACHE_BOUNDARY
 from operator_ai.request_context import inject_current_time
 from operator_ai.tools import registry as tool_registry
 from operator_ai.tools import set_workspace, subagent
-from operator_ai.tools.context import ROLE_GATED_TOOLS, get_user_context
+from operator_ai.tools.context import ROLE_GATED_TOOLS, get_skill_filter, get_user_context
 from operator_ai.tools.registry import ToolDef
 from operator_ai.truncation import prepare_messages_for_model
 from operator_ai.utils import truncate
@@ -267,6 +267,7 @@ async def run_agent(
             "extra_tools": extra_tools,
             "usage": usage,
             "tool_filter": tool_filter,
+            "skill_filter": get_skill_filter(),
             "shared_dir": shared_dir,
             "sandboxed": sandboxed,
             "config": config,
