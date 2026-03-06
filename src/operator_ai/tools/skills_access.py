@@ -147,6 +147,10 @@ async def run_skill(skill: str, command: str, timeout: int = 120) -> str:
             env=env,
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+    except FileNotFoundError:
+        return f"[error: command not found: {argv[0]}]"
+    except OSError as e:
+        return f"[error: {e}]"
     except TimeoutError:
         proc.kill()
         await proc.wait()

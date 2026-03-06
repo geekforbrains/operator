@@ -308,7 +308,7 @@ async def run_agent(
                         raw_result = await tool_def.func(**args)
                     except Exception as e:
                         result = f"[error: {e}]"
-                        logger.exception("%s tool %s failed: %s", step, func_name, e)
+                        logger.error("%s tool %s failed: %s", step, func_name, e)
                     else:
                         result = _normalize_tool_result(raw_result)
                         logger.info("%s tool %s → %d chars", step, func_name, len(result))
