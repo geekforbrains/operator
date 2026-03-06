@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "operator-ai"
-version = "0.5.1"
+version = "0.6.0"
 description = "Local AI agent connecting chat platforms to LLMs via LiteLLM"
 readme = "README.md"
 requires-python = ">=3.11"

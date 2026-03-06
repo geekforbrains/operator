@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-03-06
+
+### Added
+
+- Guided onboarding via `operator setup` — picks a provider, detects timezone, stores credentials in `.env`, creates the first admin user, and can start the runtime immediately with `--run`
+- `python -m operator_ai` entrypoint for environments where the `operator` script is not yet on `PATH`
+- Simple reasoning control via `thinking: off|low|medium|high` at the defaults and per-agent level
+- Memory retention classes (`candidate` and `durable`) plus `memory.candidate_ttl_days` for retention-aware recall and expiry
+
+### Changed
+
+- Runtime/process settings now live under `runtime` in `operator.yaml` (`timezone`, `env_file`, `show_usage`, and `reject_response`)
+- Current time is injected just in time for live model requests in chats, jobs, and sub-agents while the stable system prompt now carries only the timezone contract
+- Jobs and sub-agents inherit the resolved agent thinking level, runtime prompt, and skill filter more consistently
+- Memory recall is stricter about scope and retention — public contexts no longer list user-scoped memories, and private contexts only expose the current user's memories
+- Legacy memory tables are reset on first run of this release to support retention/expiry metadata; existing memories and memory worker state are discarded
+- Harvester and cleaner prompts are stricter about rejecting short-lived conversational noise and preserving retention metadata
+
+### Fixed
+
+- `run_skill` now expands environment variable references in arguments after env sanitization, while still preserving `$OPERATOR_HOME`
+- Cross-provider fallbacks drop reasoning metadata before each model call so retries stay compatible across providers
+- Config loading now raises `ConfigError` internally instead of terminating via `SystemExit`
+- Slack thread timestamps now render in the configured runtime timezone
+- Same-agent `spawn_agent(...)` calls once again inherit the current agent's full prompt/runtime context even when no explicit `agent=` override is provided
+
 ## [0.5.1] - 2026-03-05
 
 ### Fixed
