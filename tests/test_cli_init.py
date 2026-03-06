@@ -30,6 +30,7 @@ def test_init_creates_config_and_shows_setup_reminder(tmp_path: Path):
     op_dir.mkdir()
 
     with (
+        patch("operator_ai.cli._detect_local_timezone", return_value="America/Vancouver"),
         patch("operator_ai.cli.OPERATOR_DIR", op_dir),
         patch("operator_ai.skills.install_bundled_skills", return_value=[]),
     ):
@@ -46,6 +47,7 @@ def test_init_creates_config_and_shows_setup_reminder(tmp_path: Path):
     assert "roles:" in content
     assert "settings:" in content
     assert "reject_response: ignore" in content
+    assert 'timezone: "America/Vancouver"' in content
 
 
 def test_init_creates_env_file_with_api_key_placeholders(tmp_path: Path):
@@ -53,6 +55,7 @@ def test_init_creates_env_file_with_api_key_placeholders(tmp_path: Path):
     op_dir.mkdir()
 
     with (
+        patch("operator_ai.cli._detect_local_timezone", return_value="America/Vancouver"),
         patch("operator_ai.cli.OPERATOR_DIR", op_dir),
         patch("operator_ai.skills.install_bundled_skills", return_value=[]),
     ):
@@ -66,8 +69,10 @@ def test_init_creates_env_file_with_api_key_placeholders(tmp_path: Path):
     # Should NOT contain PATH (PATH is embedded in the service definition instead)
     assert "PATH=" not in content
     # Should contain API key placeholder comments
-    assert "# ANTHROPIC_API_KEY=sk-..." in content
+    assert "# ANTHROPIC_API_KEY=sk-ant-..." in content
     assert "# OPENAI_API_KEY=sk-..." in content
+    assert "# GEMINI_API_KEY=..." in content
+    assert "# GOOGLE_API_KEY=..." in content
     # Should have restricted permissions
     mode = env_file.stat().st_mode & 0o777
     assert mode == 0o600
@@ -94,6 +99,7 @@ def test_init_skips_existing_env_file(tmp_path: Path):
     env_file.write_text("EXISTING=yes\n")
 
     with (
+        patch("operator_ai.cli._detect_local_timezone", return_value="America/Vancouver"),
         patch("operator_ai.cli.OPERATOR_DIR", op_dir),
         patch("operator_ai.skills.install_bundled_skills", return_value=[]),
     ):
@@ -109,6 +115,7 @@ def test_setup_creates_env_and_admin_user(tmp_path: Path):
     store = Store(path=tmp_path / "setup.db")
 
     with (
+        patch("operator_ai.cli._detect_local_timezone", return_value="America/Vancouver"),
         patch("operator_ai.cli.OPERATOR_DIR", op_dir),
         patch("operator_ai.cli._store", return_value=store),
         patch("operator_ai.cli.getpass.getuser", return_value="gavin"),
@@ -117,7 +124,7 @@ def test_setup_creates_env_and_admin_user(tmp_path: Path):
         result = runner.invoke(
             app,
             ["setup", "--no-run"],
-            input="\nsk-ant-key\nxoxb-bot-token\nxapp-app-token\n<@U123ABC45>\n",
+            input="\n\n\nsk-ant-key\nxoxb-bot-token\nxapp-app-token\nU123ABC45\n",
         )
 
     assert result.exit_code == 0
@@ -133,6 +140,7 @@ def test_setup_creates_env_and_admin_user(tmp_path: Path):
     assert "ANTHROPIC_API_KEY=sk-ant-key" in env_content
     assert "SLACK_BOT_TOKEN=xoxb-bot-token" in env_content
     assert "SLACK_APP_TOKEN=xapp-app-token" in env_content
+    assert 'timezone: "America/Vancouver"' in config_file.read_text()
 
     user = store.get_user("gavin")
     assert user is not None
@@ -155,19 +163,68 @@ def test_setup_run_invokes_runtime(tmp_path: Path):
             app,
             [
                 "setup",
+                "--provider",
+                "openai",
+                "--timezone",
+                "Europe/London",
                 "--username",
                 "gavin",
-                "--anthropic-api-key",
-                "sk-ant-key",
+                "--api-key",
+                "sk-openai-key",
                 "--slack-bot-token",
                 "xoxb-bot-token",
                 "--slack-app-token",
                 "xapp-app-token",
                 "--slack-user",
-                "<@U123ABC45>",
+                "U123ABC45",
                 "--run",
             ],
         )
 
     assert result.exit_code == 0
     async_main.assert_awaited_once()
+
+    env_content = (op_dir / ".env").read_text()
+    assert "OPENAI_API_KEY=sk-openai-key" in env_content
+
+    config_content = (op_dir / "operator.yaml").read_text()
+    assert '    - "openai/gpt-4.1"' in config_content
+    assert 'timezone: "Europe/London"' in config_content
+
+
+def test_setup_gemini_uses_google_api_key_from_env_file(tmp_path: Path):
+    op_dir = tmp_path / ".operator"
+    op_dir.mkdir()
+    (op_dir / ".env").write_text("GOOGLE_API_KEY=google-key\n")
+    store = Store(path=tmp_path / "setup.db")
+
+    with (
+        patch("operator_ai.cli.OPERATOR_DIR", op_dir),
+        patch("operator_ai.cli._store", return_value=store),
+        patch("operator_ai.skills.install_bundled_skills", return_value=[]),
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "setup",
+                "--provider",
+                "gemini",
+                "--timezone",
+                "America/Toronto",
+                "--username",
+                "gavin",
+                "--slack-user",
+                "U123ABC45",
+                "--slack-bot-token",
+                "xoxb-bot-token",
+                "--slack-app-token",
+                "xapp-app-token",
+                "--no-run",
+            ],
+        )
+
+    assert result.exit_code == 0
+    env_content = (op_dir / ".env").read_text()
+    assert "GOOGLE_API_KEY=google-key" in env_content
+    assert "GEMINI_API_KEY=" not in env_content
+    assert 'timezone: "America/Toronto"' in (op_dir / "operator.yaml").read_text()

@@ -28,6 +28,8 @@ operator setup
 `operator setup` takes you from a fresh install to a working Slack-backed agent:
 
 - scaffolds `~/.operator/`
+- asks which model provider you want to use: Anthropic, OpenAI, or Gemini
+- detects your local timezone and lets you confirm or change it
 - saves the API keys and Slack tokens operator needs
 - creates your first admin user
 - leaves you one command away from the first message
@@ -42,10 +44,12 @@ python3 -m operator_ai setup --run
 
 ### What setup asks for
 
-- `ANTHROPIC_API_KEY`
-- `SLACK_BOT_TOKEN`
-- `SLACK_APP_TOKEN`
-- your Slack user ID or a mention like `<@U123ABC45>`
+- your model provider: Anthropic, OpenAI, or Gemini
+- your timezone, defaulting to the current system timezone
+- the matching API key for that provider
+- `SLACK_BOT_TOKEN` (`xoxb-*`)
+- `SLACK_APP_TOKEN` (`xapp-*`)
+- your Slack user ID
 
 ### Manual setup
 
