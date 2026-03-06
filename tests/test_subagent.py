@@ -11,6 +11,7 @@ class FakeAgentConfig:
     def __init__(self, sandbox: bool = True) -> None:
         self.sandbox = sandbox
         self.models = ["anthropic/claude-sonnet-4-6"]
+        self.thinking = "high"
         self.max_iterations = None
         self.context_ratio = None
         self.max_output_tokens = None
@@ -24,6 +25,7 @@ class FakeConfig:
             (),
             {
                 "models": ["openai/gpt-4.1"],
+                "thinking": "off",
                 "max_iterations": 25,
                 "context_ratio": 0.5,
                 "max_output_tokens": None,
@@ -40,6 +42,10 @@ class FakeConfig:
     def agent_max_iterations(self, name: str) -> int:
         a = self.agents.get(name)
         return a.max_iterations if a and a.max_iterations else self.defaults.max_iterations
+
+    def agent_thinking(self, name: str) -> str:
+        a = self.agents.get(name)
+        return a.thinking if a and a.thinking else self.defaults.thinking
 
     def agent_workspace(self, name: str) -> str:
         return f"/home/.operator/agents/{name}/workspace"
@@ -80,6 +86,7 @@ def test_resolve_known_agent() -> None:
     assert "researcher" in result["workspace"]
     assert result["sandboxed"] is False
     assert result["max_iterations"] == 25
+    assert result["thinking"] == "high"
     assert result["context_ratio"] == 0.5
     assert result["max_output_tokens"] is None
     assert result["tool_filter"] is None

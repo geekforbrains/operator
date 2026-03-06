@@ -16,6 +16,7 @@ Built for teams, not just individuals. Multi-user auth, role-based access, isola
 - **Team-native.** Multi-user auth with roles. Control who can talk to which agents. Isolated per-user memories. Not a single-player toy.
 - **Markdown-driven.** Agents, jobs, and skills are markdown files with YAML frontmatter. Version them in git, review them in PRs, edit them in your editor. No dashboards, no YAML hellscapes.
 - **Time-aware without history churn.** Every live model request gets request-only current-time context in your configured timezone, without changing the stable system prompt or polluting stored history and memory inputs with synthetic timestamps.
+- **Portable thinking controls.** Set `thinking: off|low|medium|high` instead of provider-specific reasoning budgets. Operator maps it when the concrete model supports reasoning and drops it safely when it does not.
 - **Model-agnostic.** Supports 100+ LLM providers out of the box. Define fallback chains so if your primary model is down, the next one picks up automatically.
 - **Runs on your machine.** No SaaS, no cloud dependency, no data leaving your network. Install it, run it, own it.
 
@@ -72,6 +73,7 @@ runtime:
 defaults:
   models:
     - "anthropic/claude-sonnet-4-6"
+  thinking: medium
   max_iterations: 25
 
 agents:
@@ -167,6 +169,40 @@ defaults:
     - "anthropic/claude-sonnet-4-6"
     - "openai/gpt-4.1"
 ```
+
+### Thinking
+
+Use `thinking` to request a simple reasoning level without exposing provider-specific knobs:
+
+```yaml
+defaults:
+  thinking: off
+
+agents:
+  researcher:
+    models:
+      - "anthropic/claude-sonnet-4-6"
+    thinking: high
+
+  planner:
+    models:
+      - "openai/o3"
+    thinking: medium
+
+  fast-bot:
+    models:
+      - "gemini/gemini-2.5-flash"
+    thinking: low
+```
+
+Supported values:
+
+- `off`
+- `low`
+- `medium`
+- `high`
+
+Operator maps these to LiteLLM `reasoning_effort` when the selected model supports it. If a fallback model does not support reasoning control, Operator omits the param and continues normally. Jobs inherit the agent's thinking level; there is no per-job thinking override.
 
 ## CLI
 

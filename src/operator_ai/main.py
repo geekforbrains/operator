@@ -503,6 +503,7 @@ class Dispatcher:
                 on_tool_call=on_tool_call,
                 context_ratio=self.config.agent_context_ratio(agent_name),
                 max_output_tokens=self.config.agent_max_output_tokens(agent_name),
+                thinking=self.config.agent_thinking(agent_name),
                 extra_tools=transport.get_tools(),
                 usage=usage,
                 tool_filter=self.config.agent_tool_filter(agent_name),

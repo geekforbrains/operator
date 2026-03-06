@@ -38,6 +38,7 @@ def _resolve_agent_context(agent_name: str | None, current: dict[str, Any]) -> d
     ctx["models"] = config.agent_models(agent_name)
     ctx["max_iterations"] = config.agent_max_iterations(agent_name)
     ctx["workspace"] = str(config.agent_workspace(agent_name))
+    ctx["thinking"] = config.agent_thinking(agent_name)
     ctx["context_ratio"] = config.agent_context_ratio(agent_name)
     ctx["max_output_tokens"] = config.agent_max_output_tokens(agent_name)
     ctx["sandboxed"] = config.agent_sandboxed(agent_name)
@@ -134,6 +135,7 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
             depth=depth + 1,
             context_ratio=resolved.get("context_ratio", 0.0),
             max_output_tokens=resolved.get("max_output_tokens"),
+            thinking=resolved.get("thinking", "off"),
             extra_tools=resolved.get("extra_tools"),
             usage=resolved.get("usage"),
             tool_filter=resolved.get("tool_filter"),

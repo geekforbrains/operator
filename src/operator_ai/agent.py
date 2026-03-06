@@ -4,12 +4,13 @@ import asyncio
 import json
 import logging
 from collections.abc import Awaitable, Callable
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import litellm
 
-from operator_ai.config import Config, ensure_shared_symlink
+from operator_ai.config import Config, ThinkingLevel, ensure_shared_symlink
 from operator_ai.prompts import CACHE_BOUNDARY
 from operator_ai.request_context import inject_current_time
 from operator_ai.tools import registry as tool_registry
@@ -20,6 +21,132 @@ from operator_ai.truncation import prepare_messages_for_model
 from operator_ai.utils import truncate
 
 logger = logging.getLogger("operator.agent")
+
+_REASONING_EFFORT_BY_THINKING: dict[ThinkingLevel, str] = {
+    "off": "none",
+    "low": "low",
+    "medium": "medium",
+    "high": "high",
+}
+_REASONING_MESSAGE_KEYS = frozenset(
+    {"reasoning_content", "thinking_blocks", "provider_specific_fields"}
+)
+_REASONING_CONTENT_TYPES = frozenset({"thinking", "redacted_thinking"})
+
+
+def _is_reasoning_content_block(block: Any) -> bool:
+    return isinstance(block, dict) and block.get("type") in _REASONING_CONTENT_TYPES
+
+
+def _sanitize_reasoning_history(
+    messages: list[dict[str, Any]],
+    *,
+    model: str,
+) -> list[dict[str, Any]]:
+    sanitized: list[dict[str, Any]] = []
+    stripped_messages = 0
+    stripped_items = 0
+
+    for message in messages:
+        cleaned = message
+        removed = 0
+
+        if message.get("role") == "assistant":
+            for key in _REASONING_MESSAGE_KEYS:
+                if key in cleaned:
+                    if cleaned is message:
+                        cleaned = dict(message)
+                    cleaned.pop(key, None)
+                    removed += 1
+
+            content = cleaned.get("content")
+            if isinstance(content, list):
+                filtered_content = [
+                    block for block in content if not _is_reasoning_content_block(block)
+                ]
+                removed_blocks = len(content) - len(filtered_content)
+                if removed_blocks:
+                    if cleaned is message:
+                        cleaned = dict(message)
+                    cleaned["content"] = filtered_content if filtered_content else ""
+                    removed += removed_blocks
+
+        if removed:
+            stripped_messages += 1
+            stripped_items += removed
+        sanitized.append(cleaned)
+
+    if stripped_messages:
+        logger.debug(
+            "history for %s dropped %d reasoning metadata item(s) from %d assistant message(s)",
+            model,
+            stripped_items,
+            stripped_messages,
+        )
+
+    return sanitized
+
+
+@lru_cache(maxsize=256)
+def _supports_reasoning_effort(model: str) -> bool | None:
+    try:
+        supported_params = litellm.get_supported_openai_params(model=model) or []
+    except Exception:
+        logger.warning(
+            "capabilities: get_supported_openai_params failed for %s", model, exc_info=True
+        )
+        return None
+    return "reasoning_effort" in supported_params
+
+
+def _apply_reasoning_effort(
+    *,
+    kwargs: dict[str, Any],
+    model: str,
+    thinking: ThinkingLevel,
+    step: str,
+) -> None:
+    reasoning_effort = _REASONING_EFFORT_BY_THINKING[thinking]
+    supports_reasoning_effort = _supports_reasoning_effort(model)
+
+    if supports_reasoning_effort is True:
+        kwargs["reasoning_effort"] = reasoning_effort
+        if thinking == "off":
+            logger.debug("%s model %s thinking=off -> reasoning_effort=none", step, model)
+        else:
+            logger.info(
+                "%s model %s thinking=%s -> reasoning_effort=%s",
+                step,
+                model,
+                thinking,
+                reasoning_effort,
+            )
+        return
+
+    if supports_reasoning_effort is False:
+        if thinking == "off":
+            logger.debug(
+                "%s model %s reasoning control unsupported; omitting reasoning_effort=none",
+                step,
+                model,
+            )
+        else:
+            logger.info(
+                "%s model %s requested thinking=%s but reasoning control unsupported; continuing without reasoning_effort",
+                step,
+                model,
+                thinking,
+            )
+        return
+
+    if thinking == "off":
+        logger.debug(
+            "%s model %s capability lookup failed; dropping reasoning_effort=none", step, model
+        )
+    else:
+        logger.warning(
+            "%s model %s capability lookup failed; dropping thinking=%s", step, model, thinking
+        )
 
 
 def _apply_cache_control(messages: list[dict[str, Any]], model: str) -> list[dict[str, Any]]:
@@ -106,6 +233,7 @@ async def run_agent(
     depth: int = 0,
     context_ratio: float = 0.0,
     max_output_tokens: int | None = None,
+    thinking: ThinkingLevel = "off",
     extra_tools: list[ToolDef] | None = None,
     usage: dict[str, int] | None = None,
     tool_filter: Callable[[str], bool] | None = None,
@@ -135,6 +263,7 @@ async def run_agent(
             "depth": depth,
             "context_ratio": context_ratio,
             "max_output_tokens": max_output_tokens,
+            "thinking": thinking,
             "extra_tools": extra_tools,
             "usage": usage,
             "tool_filter": tool_filter,
@@ -179,6 +308,7 @@ async def run_agent(
             model_messages = (
                 inject_current_time(messages, config) if config is not None else list(messages)
             )
+            model_messages = _sanitize_reasoning_history(model_messages, model=model)
             model_messages = prepare_messages_for_model(model_messages, model, context_ratio)
             model_messages = _apply_cache_control(model_messages, model)
             logger.debug("%s calling %s", step, model)
@@ -203,6 +333,8 @@ async def run_agent(
                     logger.warning(
                         "%s get_model_info failed for %s, max_tokens not set", step, model
                     )
+
+            _apply_reasoning_effort(kwargs=kwargs, model=model, thinking=thinking, step=step)
 
             try:
                 response = await litellm.acompletion(**kwargs)

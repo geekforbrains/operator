@@ -293,6 +293,7 @@ async def _execute_job(
             workspace=str(config.agent_workspace(agent_name)),
             context_ratio=config.agent_context_ratio(agent_name),
             max_output_tokens=config.agent_max_output_tokens(agent_name),
+            thinking=config.agent_thinking(agent_name),
             extra_tools=extra_tools,
             tool_filter=config.agent_tool_filter(agent_name),
             shared_dir=config.shared_dir,
