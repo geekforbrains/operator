@@ -9,6 +9,7 @@ import operator_ai.agent as agent_module
 from operator_ai.agent import run_agent
 from operator_ai.config import Config
 from operator_ai.request_context import CURRENT_TIME_HEADER, inject_current_time
+from operator_ai.tools.registry import ToolDef
 
 
 class _FakeAssistantMessage:
@@ -29,6 +30,10 @@ class _FakeResponse:
     def __init__(self, content: str) -> None:
         self.choices = [_FakeChoice(content)]
         self.usage = None
+
+
+async def _fake_tool(query: str) -> str:
+    return query
 
 
 def _config(timezone: str = "America/Vancouver") -> Config:
@@ -211,6 +216,56 @@ def test_run_agent_omits_reasoning_effort_for_anthropic_when_thinking_off(
     assert result == "done"
     assert "reasoning_effort" not in captured
     assert "omitting reasoning_effort for Anthropic compatibility" in caplog.text
+
+
+def test_run_agent_routes_openai_tool_reasoning_calls_through_responses_bridge(
+    monkeypatch,
+    tmp_path: Path,
+    caplog,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        return _FakeResponse("done")
+
+    agent_module._supports_reasoning_effort.cache_clear()
+    agent_module._get_llm_provider.cache_clear()
+    monkeypatch.setattr(
+        "operator_ai.agent.tool_registry.get_tools",
+        lambda: [ToolDef(_fake_tool, "Echo the query back")],
+    )
+    monkeypatch.setattr("operator_ai.agent.litellm.acompletion", fake_acompletion)
+    monkeypatch.setattr(
+        "operator_ai.agent.litellm.get_supported_openai_params",
+        lambda *_args, **_kwargs: ["reasoning_effort", "tools"],
+    )
+    monkeypatch.setattr(
+        "operator_ai.agent.litellm.get_llm_provider",
+        lambda *_args, **_kwargs: ("gpt-5.4", "openai", None, None),
+    )
+
+    with caplog.at_level(logging.INFO, logger="operator.agent"):
+        result = asyncio.run(
+            run_agent(
+                messages=[
+                    {"role": "system", "content": "# System"},
+                    {"role": "user", "content": "Plan this"},
+                ],
+                models=["openai/gpt-5.4"],
+                max_iterations=1,
+                workspace=str(tmp_path),
+                context_ratio=0.0,
+                max_output_tokens=64,
+                thinking="high",
+            )
+        )
+
+    assert result == "done"
+    assert captured["model"] == "openai/responses/gpt-5.4"
+    assert captured["reasoning_effort"] == "high"
+    assert "tools" in captured
+    assert "using LiteLLM Responses bridge via openai/responses/gpt-5.4" in caplog.text
 
 
 def test_run_agent_fallback_omits_reasoning_effort_and_sanitizes_history(

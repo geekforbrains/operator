@@ -99,6 +99,49 @@ def _supports_reasoning_effort(model: str) -> bool | None:
     return "reasoning_effort" in supported_params
 
 
+@lru_cache(maxsize=256)
+def _get_llm_provider(model: str) -> str | None:
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(model=model)
+    except Exception:
+        logger.warning("capabilities: get_llm_provider failed for %s", model, exc_info=True)
+        return None
+    return provider
+
+
+def _responses_bridge_model(model: str) -> str:
+    if model.startswith("openai/responses/"):
+        return model
+    if model.startswith("responses/"):
+        return f"openai/{model}"
+    if model.startswith("openai/"):
+        return f"openai/responses/{model.removeprefix('openai/')}"
+    return f"openai/responses/{model}"
+
+
+def _select_request_model(
+    *,
+    model: str,
+    has_tools: bool,
+    step: str,
+) -> str:
+    if not has_tools or _supports_reasoning_effort(model) is not True:
+        return model
+
+    if _get_llm_provider(model) != "openai":
+        return model
+
+    request_model = _responses_bridge_model(model)
+    if request_model != model:
+        logger.info(
+            "%s model %s with tools+reasoning control -> using LiteLLM Responses bridge via %s",
+            step,
+            model,
+            request_model,
+        )
+    return request_model
+
+
 def _apply_reasoning_effort(
     *,
     kwargs: dict[str, Any],
@@ -324,10 +367,15 @@ async def run_agent(
             model_messages = _sanitize_reasoning_history(model_messages, model=model)
             model_messages = prepare_messages_for_model(model_messages, model, context_ratio)
             model_messages = _apply_cache_control(model_messages, model)
-            logger.debug("%s calling %s", step, model)
+            request_model = _select_request_model(
+                model=model,
+                has_tools=bool(tool_defs),
+                step=step,
+            )
+            logger.debug("%s calling %s", step, request_model)
 
             kwargs: dict[str, Any] = {
-                "model": model,
+                "model": request_model,
                 "messages": model_messages,
             }
             if tool_defs:

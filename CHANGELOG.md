@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-03-06
+
+### Fixed
+
+- OpenAI reasoning models with tool calls now route through LiteLLM's Responses bridge when `reasoning_effort` is enabled, avoiding the `gpt-5.4` `/v1/chat/completions` `BadRequestError` that required `/v1/responses`
+
 ## [0.6.1] - 2026-03-06
 
 ### Fixed
