@@ -76,6 +76,12 @@ defaults:
   thinking: medium
   max_iterations: 25
 
+memory:
+  embed_model: "openai/text-embedding-3-small"
+  inject_top_k: 3
+  inject_min_relevance: 0.3
+  candidate_ttl_days: 14
+
 agents:
   operator:
     transport:
@@ -142,6 +148,14 @@ Reusable capabilities at `~/.operator/skills/<name>/SKILL.md` — scripts, refer
 ### Memory
 
 Vector memory with automatic harvesting. Operator extracts facts from conversations, stores them as embeddings, and injects relevant context into future messages. Memories are scoped per-user, per-agent, and globally — so agents remember your preferences without leaking them to your teammates.
+
+Memories can be:
+
+- `candidate`: short-lived recall that auto-expires after `memory.candidate_ttl_days`
+- `durable`: long-lived memory until explicitly removed
+- `pinned`: separate from retention and always injected into the system prompt
+
+Tune recall with `memory.inject_top_k`, `memory.inject_min_relevance`, and `memory.candidate_ttl_days`. Inspect live memory state with `operator memories` and `operator memories stats`.
 
 ### Permissions
 

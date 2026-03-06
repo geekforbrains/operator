@@ -24,6 +24,15 @@ logger = logging.getLogger("operator.store")
 
 
 _USERNAME_RE = re.compile(r"^[a-z0-9.\-]{1,64}$")
+_MEMORY_RETENTIONS = frozenset({"candidate", "durable"})
+_MEMORY_SCHEMA_VERSION = "2"
+_ACTIVE_MEMORY_CLAUSE = (
+    "(pinned = 1 OR expires_at IS NULL OR expires_at > strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
+)
+_ACTIVE_MEMORY_CLAUSE_WITH_ALIAS = (
+    "(m.pinned = 1 OR m.expires_at IS NULL OR m.expires_at > strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
+)
+_UNSET = object()
 
 
 def _validate_username(username: str) -> None:
@@ -134,31 +143,6 @@ class Store:
             """
         )
 
-        # Memory tables
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS memories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                content TEXT NOT NULL,
-                scope TEXT NOT NULL,
-                scope_id TEXT NOT NULL,
-                pinned INTEGER NOT NULL DEFAULT 0
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_memories_scope
-            ON memories(scope, scope_id)
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_memories_scope_pinned
-            ON memories(scope, scope_id, pinned, id)
-            """
-        )
-
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS schema_meta (
@@ -167,35 +151,7 @@ class Store:
             )
             """
         )
-        self._assert_embed_dimensions_compatible()
-
-        self._conn.execute(
-            f"""
-            CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
-                memory_id INTEGER PRIMARY KEY,
-                embedding float[{self._embed_dimensions}],
-                scope TEXT partition key,
-                scope_id TEXT partition key
-            )
-            """
-        )
-
-        self._conn.execute(
-            """
-            INSERT INTO schema_meta(key, value) VALUES('embed_dimensions', ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            """,
-            (str(self._embed_dimensions),),
-        )
-
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS memory_state (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
+        self._ensure_memory_schema()
 
         self._conn.execute(
             """
@@ -249,39 +205,144 @@ class Store:
 
         self._conn.commit()
 
-    def _assert_embed_dimensions_compatible(self) -> None:
-        configured = self._conn.execute(
-            "SELECT value FROM schema_meta WHERE key = 'embed_dimensions'"
-        ).fetchone()
-        if configured is not None:
-            current = int(configured["value"])
-            if current != self._embed_dimensions:
-                msg = (
-                    "Database embedding dimensions mismatch: "
-                    f"database={current}, requested={self._embed_dimensions}. "
-                    "Use a database created for this dimension or reset ~/.operator/state/operator.db."
+    def _ensure_memory_schema(self) -> None:
+        if self._memory_schema_needs_reset():
+            logger.warning(
+                "Resetting legacy memory schema; existing memories and memory worker state will be discarded"
+            )
+            with self._conn:
+                self._conn.execute("DROP TABLE IF EXISTS vec_memories")
+                self._conn.execute("DROP TABLE IF EXISTS memories")
+                self._conn.execute("DROP TABLE IF EXISTS memory_state")
+                self._conn.execute(
+                    "DELETE FROM schema_meta WHERE key IN ('embed_dimensions', 'memory_schema_version')"
                 )
-                raise ValueError(msg)
-            return
+
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                content TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                scope_id TEXT NOT NULL,
+                retention TEXT NOT NULL CHECK(retention IN ('candidate', 'durable')),
+                pinned INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
+                expires_at TEXT
+            )
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_memories_scope
+            ON memories(scope, scope_id)
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_memories_scope_pinned
+            ON memories(scope, scope_id, pinned, id)
+            """
+        )
+        self._conn.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_memories_expires_at
+            ON memories(expires_at) WHERE expires_at IS NOT NULL
+            """
+        )
+
+        self._conn.execute(
+            f"""
+            CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
+                memory_id INTEGER PRIMARY KEY,
+                embedding float[{self._embed_dimensions}],
+                scope TEXT partition key,
+                scope_id TEXT partition key
+            )
+            """
+        )
+
+        self._conn.execute(
+            """
+            INSERT INTO schema_meta(key, value) VALUES('embed_dimensions', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (str(self._embed_dimensions),),
+        )
+        self._conn.execute(
+            """
+            INSERT INTO schema_meta(key, value) VALUES('memory_schema_version', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (_MEMORY_SCHEMA_VERSION,),
+        )
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS memory_state (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+            """
+        )
+        self.sweep_expired_memories()
+
+    def _memory_schema_needs_reset(self) -> bool:
+        memories_exists = self._table_exists("memories")
+        vec_exists = self._table_exists("vec_memories")
+
+        if memories_exists != vec_exists:
+            return True
+        if not memories_exists:
+            return False
+
+        expected_columns = {
+            "id",
+            "content",
+            "scope",
+            "scope_id",
+            "retention",
+            "pinned",
+            "created_at",
+            "expires_at",
+        }
+        columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(memories)").fetchall()
+        }
+        if not expected_columns.issubset(columns):
+            return True
+
+        version = self._get_schema_meta("memory_schema_version")
+        if version not in (None, _MEMORY_SCHEMA_VERSION):
+            return True
+
+        configured_dims = self._get_schema_meta("embed_dimensions")
+        if configured_dims is not None and int(configured_dims) != self._embed_dimensions:
+            return True
 
         row = self._conn.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='vec_memories'"
         ).fetchone()
         if row is None or not row["sql"]:
-            return
+            return True
 
         match = re.search(r"embedding\s+float\[(\d+)\]", row["sql"])
         if not match:
-            return
+            return True
+        return int(match.group(1)) != self._embed_dimensions
 
-        table_dims = int(match.group(1))
-        if table_dims != self._embed_dimensions:
-            msg = (
-                "Existing vec_memories schema dimension mismatch: "
-                f"table={table_dims}, requested={self._embed_dimensions}. "
-                "Use a matching database or reset ~/.operator/state/operator.db."
-            )
-            raise ValueError(msg)
+    def _table_exists(self, name: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
+            (name,),
+        ).fetchone()
+        return row is not None
+
+    def _get_schema_meta(self, key: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT value FROM schema_meta WHERE key = ?",
+            (key,),
+        ).fetchone()
+        return row["value"] if row else None
 
     def close(self) -> None:
         self._conn.close()
@@ -466,12 +527,19 @@ class Store:
         scope: str,
         scope_id: str,
         embedding_bytes: bytes,
+        retention: str,
         pinned: bool = False,
+        expires_at: str | None = None,
     ) -> int:
+        if retention not in _MEMORY_RETENTIONS:
+            raise ValueError(f"Invalid memory retention: {retention!r}")
         with self._conn:
             cur = self._conn.execute(
-                "INSERT INTO memories (content, scope, scope_id, pinned) VALUES (?, ?, ?, ?)",
-                (content, scope, scope_id, int(pinned)),
+                """
+                INSERT INTO memories (content, scope, scope_id, retention, pinned, expires_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (content, scope, scope_id, retention, int(pinned), expires_at),
             )
             memory_id = cur.lastrowid
             self._conn.execute(
@@ -480,9 +548,34 @@ class Store:
             )
         return memory_id  # type: ignore[return-value]
 
-    def update_memory(self, memory_id: int, content: str, embedding_bytes: bytes) -> None:
+    def update_memory(
+        self,
+        memory_id: int,
+        content: str,
+        embedding_bytes: bytes,
+        *,
+        retention: str | None = None,
+        pinned: bool | None = None,
+        expires_at: str | None | object = _UNSET,
+    ) -> None:
+        assignments = ["content = ?"]
+        params: list[Any] = [content]
+        if retention is not None:
+            if retention not in _MEMORY_RETENTIONS:
+                raise ValueError(f"Invalid memory retention: {retention!r}")
+            assignments.append("retention = ?")
+            params.append(retention)
+        if pinned is not None:
+            assignments.append("pinned = ?")
+            params.append(int(pinned))
+        if expires_at is not _UNSET:
+            assignments.append("expires_at = ?")
+            params.append(expires_at)
         with self._conn:
-            self._conn.execute("UPDATE memories SET content = ? WHERE id = ?", (content, memory_id))
+            self._conn.execute(
+                f"UPDATE memories SET {', '.join(assignments)} WHERE id = ?",
+                (*params, memory_id),
+            )
             self._conn.execute(
                 "UPDATE vec_memories SET embedding = ? WHERE memory_id = ?",
                 (embedding_bytes, memory_id),
@@ -501,15 +594,27 @@ class Store:
         scope_id: str,
         top_k: int = 5,
     ) -> list[dict[str, Any]]:
+        if top_k <= 0:
+            return []
         rows = self._conn.execute(
-            """
-            SELECT v.memory_id, v.distance, m.content, m.scope, m.scope_id
+            f"""
+            SELECT
+                v.memory_id,
+                v.distance,
+                m.content,
+                m.scope,
+                m.scope_id,
+                m.retention,
+                m.pinned,
+                m.created_at,
+                m.expires_at
             FROM vec_memories v
             JOIN memories m ON m.id = v.memory_id
             WHERE v.embedding MATCH ? AND v.scope = ? AND v.scope_id = ? AND k = ?
+              AND m.scope = ? AND m.scope_id = ? AND {_ACTIVE_MEMORY_CLAUSE_WITH_ALIAS}
             ORDER BY v.distance
             """,
-            (embedding_bytes, scope, scope_id, top_k),
+            (embedding_bytes, scope, scope_id, top_k, scope, scope_id),
         ).fetchall()
         return [dict(row) for row in rows]
 
@@ -523,19 +628,23 @@ class Store:
         for scope, scope_id in scopes:
             results.extend(self.search_memories_vec(embedding_bytes, scope, scope_id, top_k))
         results.sort(key=lambda r: r["distance"])
-        return results[:top_k]
+        return results
 
     def count_memories(self, scope: str, scope_id: str) -> int:
         row = self._conn.execute(
-            "SELECT COUNT(*) AS cnt FROM memories WHERE scope = ? AND scope_id = ?",
+            f"""
+            SELECT COUNT(*) AS cnt
+            FROM memories
+            WHERE scope = ? AND scope_id = ? AND {_ACTIVE_MEMORY_CLAUSE}
+            """,
             (scope, scope_id),
         ).fetchone()
         return row["cnt"] if row else 0
 
     def update_memory_pinned(self, memory_id: int, pinned: bool) -> bool:
         cur = self._conn.execute(
-            "UPDATE memories SET pinned = ? WHERE id = ?",
-            (int(pinned), memory_id),
+            "UPDATE memories SET pinned = ?, expires_at = CASE WHEN ? = 1 THEN NULL ELSE expires_at END WHERE id = ?",
+            (int(pinned), int(pinned), memory_id),
         )
         self._conn.commit()
         return cur.rowcount > 0
@@ -547,17 +656,19 @@ class Store:
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        query = "SELECT id, content, scope, scope_id, pinned FROM memories"
+        query = (
+            "SELECT id, content, scope, scope_id, retention, pinned, created_at, expires_at "
+            "FROM memories"
+        )
         params: list[Any] = []
-        conditions: list[str] = []
+        conditions: list[str] = [_ACTIVE_MEMORY_CLAUSE]
         if scope:
             conditions.append("scope = ?")
             params.append(scope)
         if scope_id:
             conditions.append("scope_id = ?")
             params.append(scope_id)
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
+        query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY id LIMIT ? OFFSET ?"
         params.extend([limit, offset])
         rows = self._conn.execute(query, params).fetchall()
@@ -565,41 +676,100 @@ class Store:
 
     def get_pinned_memories(self, scope: str, scope_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
-            "SELECT id, content, scope, scope_id, pinned FROM memories WHERE scope = ? AND scope_id = ? AND pinned = 1 ORDER BY id",
+            f"""
+            SELECT id, content, scope, scope_id, retention, pinned, created_at, expires_at
+            FROM memories
+            WHERE scope = ? AND scope_id = ? AND pinned = 1 AND {_ACTIVE_MEMORY_CLAUSE}
+            ORDER BY id
+            """,
             (scope, scope_id),
         ).fetchall()
         return [dict(row) for row in rows]
 
     def get_all_memories_for_scope(self, scope: str, scope_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
-            "SELECT id, content, scope, scope_id, pinned FROM memories WHERE scope = ? AND scope_id = ? ORDER BY id",
+            f"""
+            SELECT id, content, scope, scope_id, retention, pinned, created_at, expires_at
+            FROM memories
+            WHERE scope = ? AND scope_id = ? AND {_ACTIVE_MEMORY_CLAUSE}
+            ORDER BY id
+            """,
             (scope, scope_id),
         ).fetchall()
         return [dict(row) for row in rows]
 
     def count_all_memories_by_scope(self) -> list[dict[str, Any]]:
         rows = self._conn.execute(
-            "SELECT scope, scope_id, COUNT(*) AS count, SUM(pinned) AS pinned FROM memories GROUP BY scope, scope_id ORDER BY scope, scope_id"
+            f"""
+            SELECT
+                scope,
+                scope_id,
+                COUNT(*) AS count,
+                SUM(CASE WHEN retention = 'candidate' THEN 1 ELSE 0 END) AS candidate_count,
+                SUM(CASE WHEN retention = 'durable' THEN 1 ELSE 0 END) AS durable_count,
+                SUM(pinned) AS pinned
+            FROM memories
+            WHERE {_ACTIVE_MEMORY_CLAUSE}
+            GROUP BY scope, scope_id
+            ORDER BY scope, scope_id
+            """
         ).fetchall()
         return [dict(row) for row in rows]
 
     def get_distinct_scopes(self) -> list[tuple[str, str]]:
-        rows = self._conn.execute("SELECT DISTINCT scope, scope_id FROM memories").fetchall()
+        rows = self._conn.execute(
+            f"SELECT DISTINCT scope, scope_id FROM memories WHERE {_ACTIVE_MEMORY_CLAUSE}"
+        ).fetchall()
         return [(row["scope"], row["scope_id"]) for row in rows]
 
     def memories_exist_since(self, scope: str, scope_id: str, since_id: int) -> bool:
         row = self._conn.execute(
-            "SELECT 1 FROM memories WHERE scope = ? AND scope_id = ? AND id > ? LIMIT 1",
+            f"""
+            SELECT 1
+            FROM memories
+            WHERE scope = ? AND scope_id = ? AND id > ? AND {_ACTIVE_MEMORY_CLAUSE}
+            LIMIT 1
+            """,
             (scope, scope_id, since_id),
         ).fetchone()
         return row is not None
 
     def get_max_memory_id(self, scope: str, scope_id: str) -> int:
         row = self._conn.execute(
-            "SELECT MAX(id) AS max_id FROM memories WHERE scope = ? AND scope_id = ?",
+            f"""
+            SELECT MAX(id) AS max_id
+            FROM memories
+            WHERE scope = ? AND scope_id = ? AND {_ACTIVE_MEMORY_CLAUSE}
+            """,
             (scope, scope_id),
         ).fetchone()
         return row["max_id"] or 0
+
+    def sweep_expired_memories(self) -> int:
+        rows = self._conn.execute(
+            """
+            SELECT id
+            FROM memories
+            WHERE pinned = 0
+              AND expires_at IS NOT NULL
+              AND expires_at <= strftime('%Y-%m-%dT%H:%M:%SZ','now')
+            """
+        ).fetchall()
+        memory_ids = [row["id"] for row in rows]
+        if not memory_ids:
+            return 0
+
+        placeholders = ", ".join("?" for _ in memory_ids)
+        with self._conn:
+            self._conn.execute(
+                f"DELETE FROM vec_memories WHERE memory_id IN ({placeholders})",
+                memory_ids,
+            )
+            cur = self._conn.execute(
+                f"DELETE FROM memories WHERE id IN ({placeholders})",
+                memory_ids,
+            )
+        return cur.rowcount
 
     # ── Agent KV store ────────────────────────────────────────────
 

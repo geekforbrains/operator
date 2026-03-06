@@ -6,6 +6,12 @@ You are a memory maintenance assistant. Below is the full list of memories for a
 4. Normalize wording for clarity and consistency.
 5. Never delete pinned memories (`[PINNED]`).
 
+Metadata notes:
+- Memories may include retention tags like `[candidate]` or `[durable]`.
+- Treat retention tags as metadata, not part of the memory content.
+- Kept memories preserve their existing retention automatically.
+- New `add` memories should only be introduced when the split-out fact is worth durable storage.
+
 Do NOT invent new facts. Only reorganize what exists.
 Return only valid JSON. No markdown, no prose, no code fences.
 

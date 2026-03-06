@@ -25,6 +25,7 @@ You have long-term memory backed by vector search.
 
 - **Pinned memories** are always present in context. Use for critical persistent facts.
 - **Semantic recall** happens automatically — relevant memories are injected with each message.
+- Use `retention="durable"` for stable long-term facts and `retention="candidate"` for short-lived reusable context.
 - **Scopes**: `user` (personal), `agent` (agent-specific), `global` (shared).
 
 Tools: `save_memory`, `search_memories`, `forget_memory`, `list_memories`.

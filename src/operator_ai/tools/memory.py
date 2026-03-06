@@ -29,12 +29,18 @@ def _scope_id(scope: str, ctx: dict[str, Any]) -> str:
 @tool(
     description="Save a memory for future reference. Memories persist across conversations.",
 )
-async def save_memory(content: str, scope: str = "user", pinned: bool = False) -> str:
+async def save_memory(
+    content: str,
+    scope: str = "user",
+    retention: str = "durable",
+    pinned: bool = False,
+) -> str:
     """Save a fact or piece of information to long-term memory.
 
     Args:
         content: The fact or information to remember.
         scope: One of "user" (personal), "agent" (agent-specific), or "global" (shared).
+        retention: One of "durable" (long-lived) or "candidate" (auto-expires by TTL).
         pinned: If true, the memory is always injected into the system prompt.
     """
     ctx = _context_var.get({})
@@ -44,6 +50,8 @@ async def save_memory(content: str, scope: str = "user", pinned: bool = False) -
 
     if scope not in ("user", "agent", "global"):
         return f"[error: invalid scope '{scope}', must be user/agent/global]"
+    if retention not in ("candidate", "durable"):
+        return f"[error: invalid retention '{retention}', must be candidate/durable]"
     if scope == "user" and not _allow_user_scope():
         return "[error: user-scoped memory is only allowed in private conversations]"
 
@@ -51,13 +59,20 @@ async def save_memory(content: str, scope: str = "user", pinned: bool = False) -
     if not scope_id:
         return "[error: no user_id available for user-scoped memory]"
 
-    result = await memory_store.save(content, scope, scope_id, pinned=pinned)
+    result = await memory_store.save(content, scope, scope_id, pinned=pinned, retention=retention)
     if result is None:
         logger.warning("save_memory: cap reached for %s/%s", scope, scope_id)
         return "[memory cap reached, memory not saved]"
     label = "pinned " if pinned else ""
-    logger.info("save_memory: id=%d %sscope=%s/%s", result, label, scope, scope_id)
-    return f"Memory saved (id={result}{', pinned' if pinned else ''})"
+    logger.info(
+        "save_memory: id=%d %sscope=%s/%s retention=%s",
+        result,
+        label,
+        scope,
+        scope_id,
+        retention,
+    )
+    return f"Memory saved (id={result}, retention={retention}{', pinned' if pinned else ''})"
 
 
 @tool(
@@ -97,7 +112,8 @@ async def search_memories(query: str, scope: str = "", top_k: int = 5) -> str:
     lines = []
     for r in results:
         lines.append(
-            f"[id={r['memory_id']}] [{r['scope']}] {r['content']} (relevance={r['relevance']})"
+            f"[id={r['memory_id']}] [{r['scope']}] [{r['retention']}] "
+            f"{r['content']} (relevance={r['relevance']})"
         )
     return "\n".join(lines)
 
@@ -146,16 +162,18 @@ async def list_memories(scope: str = "", limit: int = 50, offset: int = 0) -> st
             return "[error: user-scoped memory is only allowed in private conversations]"
         results = memory_store.list_memories(scope, _scope_id(scope, ctx), limit, offset)
     else:
+        scopes = [("agent", _scope_id("agent", ctx)), ("global", "global")]
         if _allow_user_scope():
-            results = memory_store.list_memories(limit=limit, offset=offset)
-        else:
-            # Public conversations should not expose user-scoped memories.
-            agent_name = ctx.get("agent_name", "default")
-            pool_size = max(limit + offset, limit)
-            results = memory_store.list_memories("agent", agent_name, pool_size, 0)
-            results.extend(memory_store.list_memories("global", "global", pool_size, 0))
-            results.sort(key=lambda m: int(m["id"]))
-            results = results[offset : offset + limit]
+            user_scope_id = _scope_id("user", ctx)
+            if user_scope_id:
+                scopes.insert(0, ("user", user_scope_id))
+
+        pool_size = max(limit + offset, limit)
+        results = []
+        for scoped_name, scoped_id in scopes:
+            results.extend(memory_store.list_memories(scoped_name, scoped_id, pool_size, 0))
+        results.sort(key=lambda m: int(m["id"]))
+        results = results[offset : offset + limit]
 
     if not results:
         return "No memories found."
@@ -163,5 +181,8 @@ async def list_memories(scope: str = "", limit: int = 50, offset: int = 0) -> st
     lines = []
     for m in results:
         pin = " [PINNED]" if m.get("pinned") else ""
-        lines.append(f"[id={m['id']}] [{m['scope']}] {m['content']}{pin}")
+        expires = f" [expires {m['expires_at']}]" if m.get("expires_at") else ""
+        lines.append(
+            f"[id={m['id']}] [{m['scope']}] [{m['retention']}] {m['content']}{pin}{expires}"
+        )
     return "\n".join(lines)

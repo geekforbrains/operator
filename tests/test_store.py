@@ -9,7 +9,7 @@ try:
 except ImportError:
     import sqlite3
 
-from operator_ai.store import Store, User, _validate_username
+from operator_ai.store import Store, User, _validate_username, serialize_float32
 
 
 @pytest.fixture
@@ -187,6 +187,75 @@ def test_user_dataclass() -> None:
     assert u.username == "alice"
     assert u.identities == ["slack:X"]
     assert u.roles == ["admin"]
+
+
+# ── Memory retention / expiry ───────────────────────────────
+
+
+def test_list_memories_excludes_expired_candidates(tmp_path: Path) -> None:
+    store = Store(path=tmp_path / "memory.db", embed_dimensions=3)
+    vec = serialize_float32([1.0, 0.0, 0.0])
+    store.insert_memory(
+        "durable note",
+        "agent",
+        "operator",
+        vec,
+        retention="durable",
+    )
+    store.insert_memory(
+        "expired note",
+        "agent",
+        "operator",
+        vec,
+        retention="candidate",
+        expires_at="2000-01-01T00:00:00Z",
+    )
+
+    rows = store.list_memories("agent", "operator")
+
+    assert [row["content"] for row in rows] == ["durable note"]
+
+
+def test_search_memories_excludes_expired_candidates(tmp_path: Path) -> None:
+    store = Store(path=tmp_path / "memory.db", embed_dimensions=3)
+    vec = serialize_float32([1.0, 0.0, 0.0])
+    store.insert_memory(
+        "durable note",
+        "agent",
+        "operator",
+        vec,
+        retention="durable",
+    )
+    store.insert_memory(
+        "expired note",
+        "agent",
+        "operator",
+        vec,
+        retention="candidate",
+        expires_at="2000-01-01T00:00:00Z",
+    )
+
+    rows = store.search_memories_vec(vec, "agent", "operator", top_k=5)
+
+    assert [row["content"] for row in rows] == ["durable note"]
+
+
+def test_sweep_expired_memories_removes_candidate_rows(tmp_path: Path) -> None:
+    store = Store(path=tmp_path / "memory.db", embed_dimensions=3)
+    vec = serialize_float32([1.0, 0.0, 0.0])
+    store.insert_memory(
+        "expired note",
+        "agent",
+        "operator",
+        vec,
+        retention="candidate",
+        expires_at="2000-01-01T00:00:00Z",
+    )
+
+    removed = store.sweep_expired_memories()
+
+    assert removed == 1
+    assert store.list_memories("agent", "operator") == []
 
 
 def test_load_messages_trims_incomplete_tool_turns(store: Store) -> None:

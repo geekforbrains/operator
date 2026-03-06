@@ -171,6 +171,7 @@ class MemoryConfig(StrictConfigModel):
     max_memories: int = Field(default=10000, gt=0)
     inject_top_k: int = Field(default=5, ge=0)
     inject_min_relevance: float = Field(default=0.1, ge=0.0, le=1.0)
+    candidate_ttl_days: int = Field(default=14, gt=0)
     harvester: HarvesterConfig = Field(default_factory=HarvesterConfig)
     cleaner: CleanerConfig = Field(default_factory=CleanerConfig)
 

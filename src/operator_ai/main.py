@@ -19,7 +19,7 @@ from operator_ai.commands import CommandContext, dispatch_command
 from operator_ai.config import OPERATOR_DIR, Config, ConfigError, RoleConfig, load_config
 from operator_ai.jobs import JobRunner
 from operator_ai.log_context import RunContextFilter, new_run_id, set_run_context
-from operator_ai.memory import MemoryCleaner, MemoryHarvester, MemoryStore
+from operator_ai.memory import MemoryCleaner, MemoryHarvester, MemoryStore, format_retention_mix
 from operator_ai.messages import trim_incomplete_tool_turns
 from operator_ai.prompts import SKILLS_DIR, assemble_system_prompt
 from operator_ai.skills import install_bundled_skills
@@ -415,7 +415,11 @@ class Dispatcher:
             )
             try:
                 relevant = await self.memory_store.search(msg.text, scopes)
-                logger.debug("Memory search returned %d results", len(relevant))
+                logger.info(
+                    "memory injection: injected=%d retention_mix=%s",
+                    len(relevant),
+                    format_retention_mix(relevant),
+                )
                 if relevant:
                     lines = [r["content"] for r in relevant]
                     context_parts.append(

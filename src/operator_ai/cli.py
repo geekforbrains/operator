@@ -279,6 +279,9 @@ def _build_starter_config(
         # memory:
         #   embed_model: "openai/text-embedding-3-small"
         #   embed_dimensions: 1536
+        #   inject_top_k: 3
+        #   inject_min_relevance: 0.3
+        #   candidate_ttl_days: 14
         #   harvester:
         #     enabled: true
         #     schedule: "*/30 * * * *"
@@ -1276,6 +1279,8 @@ def memories_main(
     table = Table(show_header=True, show_edge=False, pad_edge=False)
     table.add_column("ID", justify="right", style="dim")
     table.add_column("Scope")
+    table.add_column("Retention", style="magenta")
+    table.add_column("Expires", style="dim")
     table.add_column("Content")
     table.add_column("", width=1)  # pin marker
     for row in rows:
@@ -1283,9 +1288,12 @@ def memories_main(
         if len(content) > 100:
             content = content[:97] + "..."
         pin = Text("\u2691", style="yellow") if row["pinned"] else Text("")
+        expires = row["expires_at"] or ""
         table.add_row(
             str(row["id"]),
             Text(f"{row['scope']}/{row['scope_id']}", style="cyan"),
+            row["retention"],
+            expires,
             content,
             pin,
         )
@@ -1304,22 +1312,38 @@ def memories_stats() -> None:
     table = Table(show_header=True, show_edge=False, pad_edge=False)
     table.add_column("Scope", style="cyan")
     table.add_column("Count", justify="right")
+    table.add_column("Candidate", justify="right", style="magenta")
+    table.add_column("Durable", justify="right", style="green")
     table.add_column("Pinned", justify="right", style="yellow")
 
     total = 0
+    total_candidate = 0
+    total_durable = 0
     total_pinned = 0
     for row in rows:
         count = row["count"]
+        candidate_count = row["candidate_count"] or 0
+        durable_count = row["durable_count"] or 0
         pinned_count = row["pinned"] or 0
         total += count
+        total_candidate += candidate_count
+        total_durable += durable_count
         total_pinned += pinned_count
         table.add_row(
             f"{row['scope']}/{row['scope_id']}",
             str(count),
+            str(candidate_count) if candidate_count else "",
+            str(durable_count) if durable_count else "",
             str(pinned_count) if pinned_count else "",
         )
     table.add_section()
-    table.add_row(Text("Total", style="bold"), Text(str(total), style="bold"), str(total_pinned))
+    table.add_row(
+        Text("Total", style="bold"),
+        Text(str(total), style="bold"),
+        str(total_candidate),
+        str(total_durable),
+        str(total_pinned),
+    )
     console.print(table)
 
 

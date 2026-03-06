@@ -7,8 +7,10 @@ import logging
 import math
 import string
 from abc import ABC, abstractmethod
-from datetime import UTC, datetime, tzinfo
-from typing import Any
+from collections import Counter
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta, tzinfo
+from typing import Any, Literal
 
 import litellm
 from croniter import croniter
@@ -22,12 +24,22 @@ logger = logging.getLogger("operator.memory")
 
 # For L2-normalized vectors, cosine similarity 0.9 ≈ L2 distance 0.447
 DEDUP_L2_THRESHOLD = math.sqrt(2 * (1 - 0.9))  # ~0.447
+MemoryRetention = Literal["candidate", "durable"]
 
 # Loaded once from prompts/*.md
 _HARVESTER_TEMPLATE = load_prompt("harvester.md")
 _CLEANER_TEMPLATE = string.Template(load_prompt("cleaner.md"))
-_MEMORY_SCOPE_TAGS = ("[user]", "[agent]", "[global]")
 _MAX_HARVEST_CONVERSATION_CHARS = 8000
+_MEMORY_SCOPE_VALUES = frozenset({"user", "agent", "global"})
+_MEMORY_RETENTION_VALUES = frozenset({"candidate", "durable"})
+
+
+@dataclass(frozen=True)
+class HarvestedMemory:
+    scope: str
+    scope_id: str
+    retention: MemoryRetention
+    content: str
 
 
 def _l2_normalize(vec: list[float]) -> list[float]:
@@ -37,39 +49,93 @@ def _l2_normalize(vec: list[float]) -> list[float]:
     return [x / norm for x in vec]
 
 
-def _parse_harvested_line(
-    raw_line: str,
+def _strip_markdown_fence(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("```"):
+        return stripped
+
+    lines = stripped.splitlines()
+    lines = lines[1:]
+    if lines and lines[-1].strip() == "```":
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def _expires_at(
+    retention: MemoryRetention,
+    *,
+    pinned: bool,
+    candidate_ttl_days: int,
+    now: datetime | None = None,
+) -> str | None:
+    if pinned or retention == "durable":
+        return None
+    now = now or datetime.now(UTC)
+    return (now + timedelta(days=candidate_ttl_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def format_retention_mix(memories: list[dict[str, Any]]) -> str:
+    counts = Counter(str(m.get("retention", "")) for m in memories)
+    return f"candidate={counts['candidate']} durable={counts['durable']}"
+
+
+def _parse_harvested_memories(
+    raw_output: str,
     user_id: str,
     agent_name: str,
     allow_user_scope: bool,
-) -> tuple[str, str, str] | None:
-    line = raw_line.strip()
-    if line.startswith("-"):
-        line = line[1:].strip()
-    if not line:
-        return None
+) -> list[HarvestedMemory]:
+    output = _strip_markdown_fence(raw_output)
+    if output == "NONE" or not output:
+        return []
 
-    for tag in _MEMORY_SCOPE_TAGS:
-        if not line.startswith(tag):
-            continue
-        content = line[len(tag) :].strip()
-        if not content:
-            return None
-        if tag == "[user]":
+    data = json.loads(output)
+    if not isinstance(data, list):
+        raise ValueError("Harvester output must be a JSON array or NONE")
+
+    parsed: list[HarvestedMemory] = []
+    for item in data:
+        if not isinstance(item, dict):
+            raise ValueError("Harvester entries must be JSON objects")
+
+        scope = item.get("scope")
+        retention = item.get("retention")
+        content = item.get("content")
+        if scope not in _MEMORY_SCOPE_VALUES:
+            raise ValueError(f"Invalid harvester scope: {scope!r}")
+        if retention not in _MEMORY_RETENTION_VALUES:
+            raise ValueError(f"Invalid harvester retention: {retention!r}")
+        if not isinstance(content, str) or not content.strip():
+            raise ValueError("Harvester content must be a non-empty string")
+
+        if scope == "user":
             if not allow_user_scope or not user_id:
-                return None
-            return ("user", user_id, content)
-        if tag == "[agent]":
-            return ("agent", agent_name or "default", content)
-        return ("global", "global", content)
+                continue
+            scope_id = user_id
+        elif scope == "agent":
+            scope_id = agent_name or "default"
+        else:
+            scope_id = "global"
 
-    return None
+        parsed.append(
+            HarvestedMemory(
+                scope=scope,
+                scope_id=scope_id,
+                retention=retention,
+                content=content.strip(),
+            )
+        )
+
+    return parsed
 
 
 class MemoryStore:
     def __init__(self, store: Store, config: MemoryConfig):
         self._store = store
         self._config = config
+        expired = self._store.sweep_expired_memories()
+        if expired:
+            logger.info("Swept %d expired candidate memories on startup", expired)
 
     async def embed(self, text: str) -> list[float]:
         resp = await litellm.aembedding(
@@ -86,17 +152,43 @@ class MemoryStore:
         scope: str,
         scope_id: str,
         pinned: bool = False,
+        retention: MemoryRetention = "durable",
     ) -> int | None:
+        expired = self._store.sweep_expired_memories()
+        if expired:
+            logger.debug("Swept %d expired candidate memories before save", expired)
         vec = await self.embed(content)
         vec_bytes = serialize_float32(vec)
 
         # Dedup: search top-1 and update if very similar
         existing = self._store.search_memories_vec(vec_bytes, scope, scope_id, top_k=1)
         if existing and existing[0]["distance"] < DEDUP_L2_THRESHOLD:
-            memory_id = existing[0]["memory_id"]
-            self._store.update_memory(memory_id, content, vec_bytes)
+            existing_row = existing[0]
+            memory_id = existing_row["memory_id"]
+            merged_pinned = bool(existing_row.get("pinned")) or pinned
+            merged_retention: MemoryRetention = (
+                "durable"
+                if existing_row.get("retention") == "durable" or retention == "durable"
+                else "candidate"
+            )
+            self._store.update_memory(
+                memory_id,
+                content,
+                vec_bytes,
+                retention=merged_retention,
+                pinned=merged_pinned,
+                expires_at=_expires_at(
+                    merged_retention,
+                    pinned=merged_pinned,
+                    candidate_ttl_days=self._config.candidate_ttl_days,
+                ),
+            )
             logger.debug(
-                "Dedup-updated memory %d (distance=%.3f)", memory_id, existing[0]["distance"]
+                "Dedup-updated memory %d (distance=%.3f, retention=%s, pinned=%s)",
+                memory_id,
+                existing_row["distance"],
+                merged_retention,
+                merged_pinned,
             )
             return memory_id
 
@@ -116,9 +208,15 @@ class MemoryStore:
             scope=scope,
             scope_id=scope_id,
             embedding_bytes=vec_bytes,
+            retention=retention,
             pinned=pinned,
+            expires_at=_expires_at(
+                retention,
+                pinned=pinned,
+                candidate_ttl_days=self._config.candidate_ttl_days,
+            ),
         )
-        logger.debug("Saved memory %d: %s/%s", memory_id, scope, scope_id)
+        logger.debug("Saved memory %d: %s/%s retention=%s", memory_id, scope, scope_id, retention)
         return memory_id
 
     async def search(
@@ -128,10 +226,21 @@ class MemoryStore:
         top_k: int | None = None,
         min_relevance: float | None = None,
     ) -> list[dict[str, Any]]:
-        top_k = top_k or self._config.inject_top_k
+        expired = self._store.sweep_expired_memories()
+        if expired:
+            logger.debug("Swept %d expired candidate memories before search", expired)
+
+        top_k = self._config.inject_top_k if top_k is None else top_k
         min_relevance = (
             min_relevance if min_relevance is not None else self._config.inject_min_relevance
         )
+        if top_k <= 0:
+            logger.info(
+                "memory recall disabled for query=%r (requested_top_k=%d)",
+                query[:80],
+                top_k,
+            )
+            return []
 
         vec = await self.embed(query)
         vec_bytes = serialize_float32(vec)
@@ -147,7 +256,16 @@ class MemoryStore:
                 r["relevance"] = round(cosine, 3)
                 filtered.append(r)
 
-        return filtered
+        returned = filtered[:top_k]
+        logger.info(
+            "memory recall: requested_top_k=%d raw_matches=%d filtered_matches=%d returned=%d min_relevance=%.3f",
+            top_k,
+            len(results),
+            len(filtered),
+            len(returned),
+            min_relevance,
+        )
+        return returned
 
     def forget(self, memory_id: int) -> bool:
         return self._store.delete_memory(memory_id)
@@ -159,9 +277,15 @@ class MemoryStore:
         limit: int = 50,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
+        expired = self._store.sweep_expired_memories()
+        if expired:
+            logger.debug("Swept %d expired candidate memories before list", expired)
         return self._store.list_memories(scope, scope_id, limit, offset)
 
     def get_pinned_memories(self, scope: str, scope_id: str) -> list[dict[str, Any]]:
+        expired = self._store.sweep_expired_memories()
+        if expired:
+            logger.debug("Swept %d expired candidate memories before pinned lookup", expired)
         return self._store.get_pinned_memories(scope, scope_id)
 
 
@@ -225,6 +349,10 @@ class MemoryHarvester(ScheduledWorker):
         super().__init__(memory_store, store, config, tz)
 
     async def _tick(self) -> None:
+        expired = self._store.sweep_expired_memories()
+        if expired:
+            logger.info("Harvester swept %d expired candidate memories", expired)
+
         watermark_str = self._store.get_memory_state("watermark")
         watermark = float(watermark_str) if watermark_str else 0.0
 
@@ -319,19 +447,25 @@ class MemoryHarvester(ScheduledWorker):
             temperature=0.2,
             max_tokens=1024,
         )
-        output = (resp.choices[0].message.content or "").strip()
+        output = _strip_markdown_fence(resp.choices[0].message.content or "")
 
         if output == "NONE":
             return 0
 
-        count = 0
-        for line in output.splitlines():
-            parsed = _parse_harvested_line(line, user_id, agent_name, allow_user_scope)
-            if parsed is None:
-                continue
+        try:
+            harvested = _parse_harvested_memories(output, user_id, agent_name, allow_user_scope)
+        except (ValueError, json.JSONDecodeError) as exc:
+            logger.warning("Harvester returned invalid output: %s", exc)
+            return 0
 
-            scope, scope_id, content = parsed
-            result = await self._memory_store.save(content, scope, scope_id)
+        count = 0
+        for memory in harvested:
+            result = await self._memory_store.save(
+                memory.content,
+                memory.scope,
+                memory.scope_id,
+                retention=memory.retention,
+            )
             if result is not None:
                 count += 1
 
@@ -351,6 +485,10 @@ class MemoryCleaner(ScheduledWorker):
         super().__init__(memory_store, store, config, tz)
 
     async def _tick(self) -> None:
+        expired = self._store.sweep_expired_memories()
+        if expired:
+            logger.info("Cleaner swept %d expired candidate memories", expired)
+
         scopes = self._store.get_distinct_scopes()
         if not scopes:
             logger.debug("no memory scopes to process")
@@ -382,7 +520,8 @@ class MemoryCleaner(ScheduledWorker):
             return
 
         mem_lines = "\n".join(
-            f"[id={m['id']}] {m['content']}" + (" [PINNED]" if m["pinned"] else "")
+            f"[id={m['id']}] [{m['retention']}] {m['content']}"
+            + (" [PINNED]" if m["pinned"] else "")
             for m in memories
         )
         prompt = _CLEANER_TEMPLATE.safe_substitute(memories=mem_lines)
@@ -393,15 +532,7 @@ class MemoryCleaner(ScheduledWorker):
             temperature=0.2,
             max_tokens=2048,
         )
-        output = (resp.choices[0].message.content or "").strip()
-
-        # Strip markdown fencing if present
-        if output.startswith("```"):
-            lines = output.splitlines()
-            lines = lines[1:]  # drop opening fence
-            if lines and lines[-1].strip() == "```":
-                lines = lines[:-1]
-            output = "\n".join(lines)
+        output = _strip_markdown_fence(resp.choices[0].message.content or "")
 
         try:
             plan = json.loads(output)
@@ -427,7 +558,7 @@ class MemoryCleaner(ScheduledWorker):
 
         # Insert new split-out memories
         for item in added:
-            await self._memory_store.save(item["content"], scope, scope_id)
+            await self._memory_store.save(item["content"], scope, scope_id, retention="durable")
 
         # Delete removed memories
         for mid in deleted:

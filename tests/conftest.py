@@ -11,7 +11,7 @@ class FakeMemoryStore:
     search_results: list[dict[str, Any]] = field(default_factory=list)
     list_all: list[dict[str, Any]] = field(default_factory=list)
     scoped_lists: dict[tuple[str, str], list[dict[str, Any]]] = field(default_factory=dict)
-    saved: list[tuple[str, str, str, bool]] = field(default_factory=list)
+    saved: list[tuple[str, str, str, bool, str]] = field(default_factory=list)
     search_calls: list[dict[str, Any]] = field(default_factory=list)
     list_calls: list[dict[str, Any]] = field(default_factory=list)
 
@@ -21,8 +21,9 @@ class FakeMemoryStore:
         scope: str,
         scope_id: str,
         pinned: bool = False,
+        retention: str = "durable",
     ) -> int | None:
-        self.saved.append((content, scope, scope_id, pinned))
+        self.saved.append((content, scope, scope_id, pinned, retention))
         return len(self.saved)
 
     async def search(

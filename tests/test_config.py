@@ -7,6 +7,7 @@ import pytest
 
 from operator_ai.config import (
     Config,
+    MemoryConfig,
     PermissionsConfig,
     RoleConfig,
     RuntimeConfig,
@@ -180,6 +181,22 @@ def test_runtime_defaults() -> None:
 def test_runtime_reject_response_announce() -> None:
     runtime = RuntimeConfig(reject_response="announce")
     assert runtime.reject_response == "announce"
+
+
+# ── MemoryConfig ─────────────────────────────────────────────
+
+
+def test_memory_config_candidate_ttl_default() -> None:
+    memory = MemoryConfig()
+    assert memory.candidate_ttl_days == 14
+
+
+def test_memory_config_candidate_ttl_override() -> None:
+    config = Config(
+        defaults={"models": ["test/m"]},
+        memory={"candidate_ttl_days": 21},
+    )
+    assert config.memory.candidate_ttl_days == 21
 
 
 # ── Shared symlink ───────────────────────────────────────────
