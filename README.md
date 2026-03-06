@@ -216,7 +216,7 @@ Supported values:
 - `medium`
 - `high`
 
-Operator maps these to LiteLLM `reasoning_effort` when the selected model supports it. If a fallback model does not support reasoning control, Operator omits the param and continues normally. Jobs inherit the agent's thinking level; there is no per-job thinking override.
+Operator maps these to LiteLLM reasoning controls when the selected model supports them. For most reasoning-capable models that means `reasoning_effort`; for Anthropic, `thinking: off` is sent by omitting the control entirely for LiteLLM compatibility. If a fallback model does not support reasoning control, Operator omits the param and continues normally. Jobs inherit the agent's thinking level; there is no per-job thinking override.
 
 ## CLI
 

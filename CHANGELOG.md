@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-03-06
+
+### Fixed
+
+- Anthropic models no longer receive `reasoning_effort="none"` when `thinking: off`, avoiding the LiteLLM 1.82.0 `AttributeError` that previously broke every call with the default thinking setting
+
 ## [0.6.0] - 2026-03-06
 
 ### Added

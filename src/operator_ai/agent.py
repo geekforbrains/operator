@@ -109,6 +109,16 @@ def _apply_reasoning_effort(
     reasoning_effort = _REASONING_EFFORT_BY_THINKING[thinking]
     supports_reasoning_effort = _supports_reasoning_effort(model)
 
+    # LiteLLM 1.82.0 crashes Anthropic requests when reasoning_effort="none".
+    # Omitting the param preserves the intended "thinking off" behavior.
+    if thinking == "off" and model.startswith("anthropic/"):
+        logger.debug(
+            "%s model %s thinking=off -> omitting reasoning_effort for Anthropic compatibility",
+            step,
+            model,
+        )
+        return
+
     if supports_reasoning_effort is True:
         kwargs["reasoning_effort"] = reasoning_effort
         if thinking == "off":

@@ -173,6 +173,46 @@ def test_run_agent_maps_thinking_to_reasoning_effort_when_supported(
     assert "thinking=high -> reasoning_effort=high" in caplog.text
 
 
+def test_run_agent_omits_reasoning_effort_for_anthropic_when_thinking_off(
+    monkeypatch,
+    tmp_path: Path,
+    caplog,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_acompletion(**kwargs):
+        captured.update(kwargs)
+        return _FakeResponse("done")
+
+    agent_module._supports_reasoning_effort.cache_clear()
+    monkeypatch.setattr("operator_ai.agent.tool_registry.get_tools", lambda: [])
+    monkeypatch.setattr("operator_ai.agent.litellm.acompletion", fake_acompletion)
+    monkeypatch.setattr(
+        "operator_ai.agent.litellm.get_supported_openai_params",
+        lambda *_args, **_kwargs: ["reasoning_effort"],
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="operator.agent"):
+        result = asyncio.run(
+            run_agent(
+                messages=[
+                    {"role": "system", "content": "# System"},
+                    {"role": "user", "content": "Plan this"},
+                ],
+                models=["anthropic/claude-sonnet-4-6"],
+                max_iterations=1,
+                workspace=str(tmp_path),
+                context_ratio=0.0,
+                max_output_tokens=64,
+                thinking="off",
+            )
+        )
+
+    assert result == "done"
+    assert "reasoning_effort" not in captured
+    assert "omitting reasoning_effort for Anthropic compatibility" in caplog.text
+
+
 def test_run_agent_fallback_omits_reasoning_effort_and_sanitizes_history(
     monkeypatch,
     tmp_path: Path,
