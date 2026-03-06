@@ -27,6 +27,8 @@ SKILLS_DIR = OPERATOR_DIR / "skills"
 # portably via $OPERATOR_HOME instead of relying on tilde expansion.
 os.environ.setdefault("OPERATOR_HOME", str(OPERATOR_DIR))
 
+ThinkingLevel = Literal["off", "low", "medium", "high"]
+
 
 def _normalize_models(values: Any) -> Any:
     """Allow singular 'model' key as alias for 'models' list."""
@@ -49,6 +51,7 @@ class StrictConfigModel(BaseModel):
 
 class DefaultsConfig(StrictConfigModel):
     models: list[str] = Field(default_factory=list)
+    thinking: ThinkingLevel = "off"
     max_iterations: int = Field(default=25, gt=0)
     context_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
     max_output_tokens: int | None = Field(default=None, gt=0)
@@ -114,6 +117,7 @@ class RoleConfig(StrictConfigModel):
 
 class AgentConfig(StrictConfigModel):
     models: list[str] | None = None
+    thinking: ThinkingLevel | None = None
     max_iterations: int | None = Field(default=None, gt=0)
     context_ratio: float | None = Field(default=None, gt=0.0, le=1.0)
     max_output_tokens: int | None = Field(default=None, gt=0)
@@ -207,6 +211,12 @@ class Config(StrictConfigModel):
         if agent and agent.max_iterations is not None:
             return agent.max_iterations
         return self.defaults.max_iterations
+
+    def agent_thinking(self, agent_name: str) -> ThinkingLevel:
+        agent = self.agents.get(agent_name)
+        if agent and agent.thinking is not None:
+            return agent.thinking
+        return self.defaults.thinking
 
     def agent_context_ratio(self, agent_name: str) -> float:
         agent = self.agents.get(agent_name)

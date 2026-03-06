@@ -36,9 +36,28 @@ def test_config_tz_defaults_to_utc() -> None:
     assert c.tz == ZoneInfo("UTC")
 
 
+def test_agent_thinking_defaults_to_off() -> None:
+    c = Config(defaults={"models": ["test/m"]})
+    assert c.agent_thinking("operator") == "off"
+
+
+def test_agent_thinking_agent_override_wins() -> None:
+    c = Config(
+        defaults={"models": ["test/m"], "thinking": "low"},
+        agents={"operator": {"thinking": "high"}},
+    )
+    assert c.agent_thinking("operator") == "high"
+    assert c.agent_thinking("other") == "low"
+
+
 def test_invalid_timezone_raises() -> None:
     with pytest.raises(ValueError, match="Unknown timezone"):
         RuntimeConfig(timezone="Mars/Olympus")
+
+
+def test_invalid_thinking_level_raises() -> None:
+    with pytest.raises(ValueError, match="thinking"):
+        Config(defaults={"models": ["test/m"], "thinking": "max"})
 
 
 def test_legacy_defaults_timezone_is_rejected() -> None:
