@@ -9,6 +9,8 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from operator_ai.utils import truncate
+
 if TYPE_CHECKING:
     from operator_ai.transport.base import Transport
 
@@ -43,7 +45,7 @@ def _label_write_file(a: dict) -> str:
 
 
 def _label_web_fetch(a: dict) -> str:
-    return f"Fetching {_truncate(a.get('url', ''), 50)}"
+    return f"Fetching {truncate(a.get('url', ''), 50)}"
 
 
 def _label_static(text: str) -> Callable[[dict], str]:
@@ -78,10 +80,6 @@ TOOL_LABELS: dict[str, Callable[[dict], str]] = {
 
 def _basename(path: str) -> str:
     return path.rsplit("/", 1)[-1] if path else "..."
-
-
-def _truncate(s: str, max_len: int) -> str:
-    return s[:max_len] + "..." if len(s) > max_len else s
 
 
 def _humanize(name: str) -> str:

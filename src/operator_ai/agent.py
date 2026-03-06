@@ -16,6 +16,7 @@ from operator_ai.tools import set_workspace, subagent
 from operator_ai.tools.context import ROLE_GATED_TOOLS, get_user_context
 from operator_ai.tools.registry import ToolDef
 from operator_ai.truncation import prepare_messages_for_model
+from operator_ai.utils import truncate
 
 logger = logging.getLogger("operator.agent")
 
@@ -306,7 +307,7 @@ async def run_agent(
                         )
 
                 if not result:
-                    logger.info("%s tool %s(%s)", step, func_name, _truncate(str(args), 150))
+                    logger.info("%s tool %s(%s)", step, func_name, truncate(str(args), 150))
                     try:
                         raw_result = await tool_def.func(**args)
                     except asyncio.CancelledError:
@@ -328,10 +329,6 @@ async def run_agent(
 
     logger.warning("max iterations (%d) reached", max_iterations)
     return "[max iterations reached]"
-
-
-def _truncate(s: str, max_len: int) -> str:
-    return s[:max_len] + "..." if len(s) > max_len else s
 
 
 def _extract_text_content(content: Any) -> str:

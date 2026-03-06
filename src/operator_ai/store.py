@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import contextlib
 import json
 import logging
 import re
@@ -134,11 +133,6 @@ class Store:
             )
             """
         )
-
-        # Migrations — add columns that may not exist in older databases
-        for col, typedef in [("error_count", "INTEGER NOT NULL DEFAULT 0")]:
-            with contextlib.suppress(sqlite3.OperationalError):
-                self._conn.execute(f"ALTER TABLE job_state ADD COLUMN {col} {typedef}")
 
         # Memory tables
         self._conn.execute(
@@ -310,39 +304,22 @@ class Store:
     ) -> None:
         now = time.time()
         meta = json.dumps(metadata if metadata is not None else {})
-        if metadata is not None:
-            self._conn.execute(
-                """
-                INSERT INTO conversations (
-                    conversation_id, transport_name, channel_id, root_thread_id,
-                    updated_at, metadata_json
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(conversation_id) DO UPDATE SET
-                    transport_name=excluded.transport_name,
-                    channel_id=excluded.channel_id,
-                    root_thread_id=excluded.root_thread_id,
-                    updated_at=excluded.updated_at,
-                    metadata_json=excluded.metadata_json
-                """,
-                (conversation_id, transport_name, channel_id, root_thread_id, now, meta),
+        self._conn.execute(
+            """
+            INSERT INTO conversations (
+                conversation_id, transport_name, channel_id, root_thread_id,
+                updated_at, metadata_json
             )
-        else:
-            self._conn.execute(
-                """
-                INSERT INTO conversations (
-                    conversation_id, transport_name, channel_id, root_thread_id,
-                    updated_at, metadata_json
-                )
-                VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(conversation_id) DO UPDATE SET
-                    transport_name=excluded.transport_name,
-                    channel_id=excluded.channel_id,
-                    root_thread_id=excluded.root_thread_id,
-                    updated_at=excluded.updated_at
-                """,
-                (conversation_id, transport_name, channel_id, root_thread_id, now, meta),
-            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(conversation_id) DO UPDATE SET
+                transport_name=excluded.transport_name,
+                channel_id=excluded.channel_id,
+                root_thread_id=excluded.root_thread_id,
+                updated_at=excluded.updated_at,
+                metadata_json=excluded.metadata_json
+            """,
+            (conversation_id, transport_name, channel_id, root_thread_id, now, meta),
+        )
         self._conn.commit()
 
     def ensure_system_message(self, conversation_id: str, system_prompt: str) -> None:
