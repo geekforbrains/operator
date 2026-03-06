@@ -246,6 +246,15 @@ def _build_starter_config(
         # Docs: https://operator.geekforbrains.com
         # Repo: https://github.com/geekforbrains/operator
 
+        runtime:
+          timezone: "{timezone}"
+          env_file: ".env"
+          show_usage: false
+          # How an agent responds when messaged from an unknown user.
+          # - announce: responds with a simple message
+          # - ignore: does not respond at all
+          reject_response: ignore
+
         defaults:
           # Model fallback chain
           # first model is preferred, rest are fallbacks.
@@ -255,8 +264,6 @@ def _build_starter_config(
             # - "some-provider/some-other-model"
           max_iterations: 50
           context_ratio: 0.5
-          timezone: "{timezone}"
-          env_file: ".env"
 
         agents:
           {_DEFAULT_AGENT_NAME}:
@@ -268,12 +275,6 @@ def _build_starter_config(
         roles:
           guest:
             agents: []
-
-        settings:
-          # How an agent responds when messaged from an unknown user.
-          # - announce: responds with a simple message
-          # - ignore: does not respond at all
-          reject_response: ignore
 
         # memory:
         #   embed_model: "openai/text-embedding-3-small"

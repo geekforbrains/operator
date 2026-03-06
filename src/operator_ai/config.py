@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 from croniter import croniter
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger("operator.config")
 
@@ -35,13 +35,23 @@ def _normalize_models(values: Any) -> Any:
     return values
 
 
-class DefaultsConfig(BaseModel):
+def _validate_timezone(value: str) -> str:
+    try:
+        ZoneInfo(value)
+    except (ZoneInfoNotFoundError, KeyError):
+        raise ValueError(f"Unknown timezone: {value!r}") from None
+    return value
+
+
+class StrictConfigModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class DefaultsConfig(StrictConfigModel):
     models: list[str] = Field(default_factory=list)
     max_iterations: int = Field(default=25, gt=0)
     context_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
     max_output_tokens: int | None = Field(default=None, gt=0)
-    timezone: str = "UTC"
-    env_file: str | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -54,16 +64,20 @@ class DefaultsConfig(BaseModel):
             raise ValueError("defaults.models must contain at least one model")
         return self
 
+
+class RuntimeConfig(StrictConfigModel):
+    timezone: str = "UTC"
+    env_file: str | None = None
+    show_usage: bool = False
+    reject_response: Literal["announce", "ignore"] = "ignore"
+
     @model_validator(mode="after")
-    def validate_timezone(self) -> DefaultsConfig:
-        try:
-            ZoneInfo(self.timezone)
-        except (ZoneInfoNotFoundError, KeyError):
-            raise ValueError(f"Unknown timezone: {self.timezone!r}") from None
+    def validate_timezone(self) -> RuntimeConfig:
+        _validate_timezone(self.timezone)
         return self
 
 
-class TransportConfig(BaseModel):
+class TransportConfig(StrictConfigModel):
     type: str
     bot_token_env: str | None = None
     app_token_env: str | None = None
@@ -89,16 +103,16 @@ class TransportConfig(BaseModel):
         return value
 
 
-class PermissionsConfig(BaseModel):
+class PermissionsConfig(StrictConfigModel):
     tools: list[str] | Literal["*"] | None = None  # None = no block = full access
     skills: list[str] | Literal["*"] | None = None
 
 
-class RoleConfig(BaseModel):
+class RoleConfig(StrictConfigModel):
     agents: list[str]
 
 
-class AgentConfig(BaseModel):
+class AgentConfig(StrictConfigModel):
     models: list[str] | None = None
     max_iterations: int | None = Field(default=None, gt=0)
     context_ratio: float | None = Field(default=None, gt=0.0, le=1.0)
@@ -113,7 +127,7 @@ class AgentConfig(BaseModel):
         return _normalize_models(values)
 
 
-class ScheduledTaskConfig(BaseModel):
+class ScheduledTaskConfig(StrictConfigModel):
     enabled: bool = False
     schedule: str = ""
     model: str = ""
@@ -147,7 +161,7 @@ class CleanerConfig(ScheduledTaskConfig):
     pass
 
 
-class MemoryConfig(BaseModel):
+class MemoryConfig(StrictConfigModel):
     embed_model: str = ""
     embed_dimensions: int = Field(default=1536, gt=0)
     max_memories: int = Field(default=10000, gt=0)
@@ -169,17 +183,12 @@ class MemoryConfig(BaseModel):
         return self
 
 
-class SettingsConfig(BaseModel):
-    show_usage: bool = False
-    reject_response: Literal["announce", "ignore"] = "ignore"
-
-
-class Config(BaseModel):
+class Config(StrictConfigModel):
+    runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     agents: dict[str, AgentConfig] = Field(default_factory=dict)
     roles: dict[str, RoleConfig] = Field(default_factory=dict)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
-    settings: SettingsConfig = Field(default_factory=SettingsConfig)
 
     @model_validator(mode="after")
     def validate_no_admin_role(self) -> Config:
@@ -223,7 +232,7 @@ class Config(BaseModel):
     @property
     def tz(self) -> ZoneInfo:
         """Return the configured timezone as a ZoneInfo instance."""
-        return ZoneInfo(self.defaults.timezone)
+        return ZoneInfo(self.runtime.timezone)
 
     @property
     def shared_dir(self) -> Path:
@@ -317,6 +326,6 @@ def load_config(path: Path | None = None) -> Config:
     except Exception as e:
         raise ConfigError(f"Invalid config in {path}: {e}") from e
 
-    if config.defaults.env_file:
-        _load_env_file(config.defaults.env_file, base_dir=path.parent)
+    if config.runtime.env_file:
+        _load_env_file(config.runtime.env_file, base_dir=path.parent)
     return config

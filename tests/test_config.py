@@ -7,27 +7,27 @@ import pytest
 
 from operator_ai.config import (
     Config,
-    DefaultsConfig,
     PermissionsConfig,
     RoleConfig,
-    SettingsConfig,
+    RuntimeConfig,
     _load_env_file,
     ensure_shared_symlink,
+    load_config,
 )
 
 
 def test_timezone_defaults_to_utc() -> None:
-    d = DefaultsConfig(models=["test/model"])
-    assert d.timezone == "UTC"
+    runtime = RuntimeConfig()
+    assert runtime.timezone == "UTC"
 
 
 def test_timezone_override() -> None:
-    d = DefaultsConfig(models=["test/model"], timezone="America/Vancouver")
-    assert d.timezone == "America/Vancouver"
+    runtime = RuntimeConfig(timezone="America/Vancouver")
+    assert runtime.timezone == "America/Vancouver"
 
 
 def test_config_tz_returns_zoneinfo() -> None:
-    c = Config(defaults={"models": ["test/m"], "timezone": "Europe/London"})
+    c = Config(defaults={"models": ["test/m"]}, runtime={"timezone": "Europe/London"})
     assert c.tz == ZoneInfo("Europe/London")
 
 
@@ -38,7 +38,17 @@ def test_config_tz_defaults_to_utc() -> None:
 
 def test_invalid_timezone_raises() -> None:
     with pytest.raises(ValueError, match="Unknown timezone"):
-        DefaultsConfig(models=["test/model"], timezone="Mars/Olympus")
+        RuntimeConfig(timezone="Mars/Olympus")
+
+
+def test_legacy_defaults_timezone_is_rejected() -> None:
+    with pytest.raises(ValueError, match="timezone"):
+        Config(defaults={"models": ["test/m"], "timezone": "Europe/London"})
+
+
+def test_legacy_settings_block_is_rejected() -> None:
+    with pytest.raises(ValueError, match="settings"):
+        Config(defaults={"models": ["test/m"]}, settings={"reject_response": "announce"})
 
 
 # ── Permissions ──────────────────────────────────────────────
@@ -139,17 +149,18 @@ def test_custom_roles_allowed() -> None:
     assert c.roles["developer"].agents == ["alice"]
 
 
-# ── SettingsConfig ───────────────────────────────────────────
+# ── RuntimeConfig ────────────────────────────────────────────
 
 
-def test_reject_response_defaults_to_ignore() -> None:
-    s = SettingsConfig()
-    assert s.reject_response == "ignore"
+def test_runtime_defaults() -> None:
+    runtime = RuntimeConfig()
+    assert runtime.show_usage is False
+    assert runtime.reject_response == "ignore"
 
 
-def test_reject_response_announce() -> None:
-    s = SettingsConfig(reject_response="announce")
-    assert s.reject_response == "announce"
+def test_runtime_reject_response_announce() -> None:
+    runtime = RuntimeConfig(reject_response="announce")
+    assert runtime.reject_response == "announce"
 
 
 # ── Shared symlink ───────────────────────────────────────────
@@ -228,3 +239,17 @@ def test_load_env_file_skips_comments_and_blanks(tmp_path, monkeypatch) -> None:
 
 def test_load_env_file_missing_file_is_noop(tmp_path) -> None:
     _load_env_file(str(tmp_path / "nonexistent.env"))
+
+
+def test_load_config_reads_runtime_env_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.delenv("OPERATOR_RUNTIME_ENV_TEST", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPERATOR_RUNTIME_ENV_TEST=loaded\n")
+    config_path = tmp_path / "operator.yaml"
+    config_path.write_text(
+        'runtime:\n  env_file: ".env"\ndefaults:\n  models:\n    - "test/model"\n'
+    )
+
+    load_config(config_path)
+
+    assert os.environ["OPERATOR_RUNTIME_ENV_TEST"] == "loaded"

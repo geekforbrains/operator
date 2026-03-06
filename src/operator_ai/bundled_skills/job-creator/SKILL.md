@@ -103,7 +103,7 @@ Format: `minute hour day-of-month month day-of-week`
 "0 0 1 * *"          # Monthly on the 1st
 ```
 
-Tips: minute-level is finest granularity, times are system timezone, avoid too-frequent
+Tips: minute-level is finest granularity, times use `runtime.timezone`, avoid too-frequent
 schedules (each run is a full agent conversation with LLM calls).
 
 ---

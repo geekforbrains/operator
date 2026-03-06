@@ -489,7 +489,7 @@ class Dispatcher:
             else:
                 status.clear_tool()
 
-        usage = {} if self.config.settings.show_usage else None
+        usage = {} if self.config.runtime.show_usage else None
 
         try:
             await status.start()
@@ -592,7 +592,7 @@ class Dispatcher:
             await transport.send(msg.channel_id, response, thread_id=msg.root_message_id)
 
     async def _handle_rejection(self, msg: IncomingMessage, transport: Transport) -> None:
-        if self.config.settings.reject_response == "announce":
+        if self.config.runtime.reject_response == "announce":
             await transport.send(
                 msg.channel_id,
                 "You don't have access to this agent.",
@@ -614,6 +614,7 @@ def create_transports(config: Config) -> list[Transport]:
                     agent_name=agent_name,
                     bot_token=tc.resolve_env("bot_token_env", agent_name),
                     app_token=tc.resolve_env("app_token_env", agent_name),
+                    tz=config.tz,
                 )
                 transports.append(transport)
             except ValueError as e:
@@ -781,7 +782,7 @@ async def async_main() -> None:
         logger.info(
             "Operator running with %d transport(s), timezone=%s. Ctrl+C to stop.",
             len(transports),
-            config.defaults.timezone,
+            config.runtime.timezone,
         )
         await stop.wait()
     finally:

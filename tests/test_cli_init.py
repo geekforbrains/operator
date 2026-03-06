@@ -16,9 +16,11 @@ def test_starter_config_contains_roles():
     assert "guest:" in _STARTER_CONFIG
 
 
-def test_starter_config_contains_settings():
-    assert "settings:" in _STARTER_CONFIG
+def test_starter_config_contains_runtime() -> None:
+    assert "runtime:" in _STARTER_CONFIG
+    assert "show_usage: false" in _STARTER_CONFIG
     assert "reject_response: ignore" in _STARTER_CONFIG
+    assert "settings:" not in _STARTER_CONFIG
 
 
 def test_starter_config_references_env_file():
@@ -45,8 +47,10 @@ def test_init_creates_config_and_shows_setup_reminder(tmp_path: Path):
     assert config_file.exists()
     content = config_file.read_text()
     assert "roles:" in content
-    assert "settings:" in content
+    assert "runtime:" in content
+    assert "show_usage: false" in content
     assert "reject_response: ignore" in content
+    assert "settings:" not in content
     assert 'timezone: "America/Vancouver"' in content
 
 

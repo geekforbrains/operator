@@ -112,7 +112,7 @@ Never put API keys, tokens, passwords, or credentials in SKILL.md. Instead:
        - SLACK_WEBHOOK_URL
    ```
 
-3. The user adds actual values to their `.env` file (configured via `defaults.env_file` in `operator.yaml`).
+3. The user adds actual values to their `.env` file (configured via `runtime.env_file` in `operator.yaml`).
 
 ### ALWAYS use $OPERATOR_HOME for paths
 When referencing files under the Operator base directory in skill instructions or scripts, always use `$OPERATOR_HOME` instead of `~/.operator`. Tilde expansion is a shell feature and breaks in non-shell contexts (e.g. `node ~/...` treats `~` as a literal directory name). `$OPERATOR_HOME` is set by the runtime and expands correctly everywhere.

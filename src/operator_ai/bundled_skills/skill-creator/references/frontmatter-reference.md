@@ -63,7 +63,7 @@ metadata:
     - DATABASE_URL
 ```
 
-**`metadata.env`** (Operator convention): List of environment variable names the skill requires. Operator checks these at startup and warns if any are missing. The user sets actual values in their `.env` file configured via `defaults.env_file` in `operator.yaml`.
+**`metadata.env`** (Operator convention): List of environment variable names the skill requires. Operator checks these at startup and warns if any are missing. The user sets actual values in their `.env` file configured via `runtime.env_file` in `operator.yaml`.
 
 ### `allowed-tools`
 

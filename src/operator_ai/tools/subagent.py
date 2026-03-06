@@ -46,6 +46,28 @@ def _resolve_agent_context(agent_name: str | None, current: dict[str, Any]) -> d
     return ctx
 
 
+def _build_subagent_prompt(
+    resolved: dict[str, Any],
+    *,
+    target_agent: str,
+    context: str,
+) -> str:
+    config = resolved.get("config")
+    context_sections = [load_prompt("subagent.md")]
+    if context:
+        context_sections.append(f"## Additional Context\n\n{context}")
+
+    if config is None or not target_agent:
+        return "\n\n".join(context_sections)
+
+    return assemble_system_prompt(
+        config=config,
+        agent_name=target_agent,
+        context_sections=context_sections,
+        skill_filter=config.agent_skill_filter(target_agent),
+    )
+
+
 @tool(
     description="Spawn a sub-agent to handle a focused sub-task. The sub-agent gets its own conversation and runs to completion. Returns the sub-agent's final response.",
 )
@@ -70,17 +92,12 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
     except ValueError as e:
         return f"[error: {e}]"
 
-    # Build system prompt — use the target agent's prompt if spawning a different agent
-    if agent and resolved.get("config"):
-        system_prompt = assemble_system_prompt(
-            config=resolved["config"],
-            agent_name=agent,
-        )
-    else:
-        system_prompt = load_prompt("subagent.md")
-
-    if context:
-        system_prompt += f"\n\nAdditional context:\n{context}"
+    target_agent = str(resolved.get("agent_name") or agent or current_context.get("agent_name") or "")
+    system_prompt = _build_subagent_prompt(
+        resolved,
+        target_agent=target_agent,
+        context=context,
+    )
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
@@ -92,18 +109,18 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
 
     parent_ctx = get_run_context()
     parent_agent = parent_ctx.agent if parent_ctx else "unknown"
-    target_agent = agent or (parent_ctx.agent if parent_ctx else "sub")
+    run_agent_name = target_agent or (parent_ctx.agent if parent_ctx else "sub")
 
     if agent:
         logger.info(
-            "spawning agent '%s' from '%s' (depth %d)", target_agent, parent_agent, depth + 1
+            "spawning agent '%s' from '%s' (depth %d)", run_agent_name, parent_agent, depth + 1
         )
     else:
         logger.info("spawning sub-agent from '%s' (depth %d)", parent_agent, depth + 1)
 
     async def _child() -> str:
         set_run_context(
-            agent=target_agent,
+            agent=run_agent_name,
             run_id=parent_ctx.run_id if parent_ctx else new_run_id(),
             depth=depth + 1,
         )

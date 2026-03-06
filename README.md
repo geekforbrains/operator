@@ -62,6 +62,12 @@ operator init
 Then edit `~/.operator/operator.yaml`:
 
 ```yaml
+runtime:
+  timezone: "America/Vancouver"
+  env_file: ".env"
+  show_usage: false
+  reject_response: ignore
+
 defaults:
   models:
     - "anthropic/claude-sonnet-4-6"

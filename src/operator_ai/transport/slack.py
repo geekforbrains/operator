@@ -5,7 +5,7 @@ import contextlib
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, tzinfo
 
 import aiohttp
 from markdown_to_mrkdwn import SlackMarkdownConverter
@@ -53,12 +53,14 @@ class SlackTransport(Transport):
         agent_name: str,
         bot_token: str,
         app_token: str,
+        tz: tzinfo = UTC,
     ):
         self.name = name
         self.platform = "slack"
         self.agent_name = agent_name
         self._bot_token = bot_token
         self._app_token = app_token
+        self._tz = tz
         self._app: AsyncApp | None = None
         self._handler: AsyncSocketModeHandler | None = None
         self._background_tasks: set[asyncio.Task] = set()
@@ -497,7 +499,7 @@ class SlackTransport(Transport):
             name = await self._resolve_user(user_id)
             try:
                 ts = float(m.get("ts", "0"))
-                dt = datetime.fromtimestamp(ts, tz=UTC).astimezone()
+                dt = datetime.fromtimestamp(ts, tz=UTC).astimezone(self._tz)
                 time_str = dt.strftime("%-I:%M %p")
             except (TypeError, ValueError):
                 time_str = "unknown time"

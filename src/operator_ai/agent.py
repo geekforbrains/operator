@@ -25,7 +25,7 @@ def _apply_cache_control(messages: list[dict[str, Any]], model: str) -> list[dic
     """Add Anthropic cache breakpoints to system prompt and conversation history.
 
     Places up to 3 breakpoints (Anthropic allows 4 max):
-      1. Stable system prompt prefix (SYSTEM.md + AGENT.md + skills)
+      1. Stable system prompt prefix (SYSTEM.md + runtime + AGENT.md + skills)
       2. Penultimate user/assistant message — caches prior conversation history
       3. (reserved for future use)
 
