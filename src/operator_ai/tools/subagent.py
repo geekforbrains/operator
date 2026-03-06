@@ -92,7 +92,9 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
     except ValueError as e:
         return f"[error: {e}]"
 
-    target_agent = str(resolved.get("agent_name") or agent or current_context.get("agent_name") or "")
+    target_agent = str(
+        resolved.get("agent_name") or agent or current_context.get("agent_name") or ""
+    )
     system_prompt = _build_subagent_prompt(
         resolved,
         target_agent=target_agent,
