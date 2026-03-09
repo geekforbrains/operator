@@ -289,6 +289,44 @@ class MemoryStore:
         return self._store.get_pinned_memories(scope, scope_id)
 
 
+async def _completion_with_fallback(
+    models: list[str],
+    *,
+    label: str,
+    **kwargs: Any,
+) -> Any | None:
+    """Call litellm.acompletion with model fallback chain.
+
+    Tries each model in order.  Transient errors (rate-limit, server errors)
+    fall through to the next model.  Returns ``None`` and logs a clean ERROR
+    if all models fail.
+    """
+    if not models:
+        logger.error("[%s] no models configured", label)
+        return None
+
+    last_error: Exception | None = None
+    for model in models:
+        try:
+            resp = await litellm.acompletion(model=model, **kwargs)
+            if last_error is not None:
+                logger.info("[%s] recovered using fallback model %s", label, model)
+            return resp
+        except Exception as e:
+            last_error = e
+            if model != models[-1]:
+                logger.warning(
+                    "[%s] model %s failed (%s: %s), trying next",
+                    label,
+                    model,
+                    type(e).__name__,
+                    e,
+                )
+
+    logger.error("[%s] all models failed (%s: %s)", label, type(last_error).__name__, last_error)
+    return None
+
+
 class ScheduledWorker(ABC):
     _label: str = "worker"
 
@@ -327,8 +365,8 @@ class ScheduledWorker(ABC):
                     continue
                 try:
                     await self._tick()
-                except Exception:
-                    logger.exception("tick failed")
+                except Exception as exc:
+                    logger.error("[%s] tick failed: %s: %s", self._label, type(exc).__name__, exc)
         except asyncio.CancelledError:
             return
 
@@ -398,20 +436,18 @@ class MemoryHarvester(ScheduledWorker):
             if len(conversation_text) > _MAX_HARVEST_CONVERSATION_CHARS:
                 conversation_text = conversation_text[-_MAX_HARVEST_CONVERSATION_CHARS:]
 
-            try:
-                extracted = await self._extract_memories(
-                    conversation_text,
-                    user_id,
-                    agent_name,
-                    allow_user_scope=is_private,
-                )
-                total_extracted += extracted
-            except Exception:
-                logger.exception("Failed to extract memories from %s", conv_id)
+            extracted = await self._extract_memories(
+                conversation_text,
+                user_id,
+                agent_name,
+                allow_user_scope=is_private,
+            )
+            if extracted < 0:
                 extraction_failed = True
                 # Stop at first failure so we do not advance the global watermark past
                 # a conversation that failed extraction.
                 break
+            total_extracted += extracted
 
             new_watermark = max(new_watermark, conv["updated_at"])
 
@@ -441,12 +477,16 @@ class MemoryHarvester(ScheduledWorker):
     ) -> int:
         prompt = _HARVESTER_TEMPLATE.replace("{conversation}", conversation_text)
 
-        resp = await litellm.acompletion(
-            model=self._config.model,
+        resp = await _completion_with_fallback(
+            self._config.models,
+            label="harvester",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
             max_tokens=1024,
         )
+        if resp is None:
+            return -1
+
         output = _strip_markdown_fence(resp.choices[0].message.content or "")
 
         if output == "NONE":
@@ -508,8 +548,10 @@ class MemoryCleaner(ScheduledWorker):
                 new_watermark = self._store.get_max_memory_id(scope, scope_id)
                 self._store.set_memory_state(state_key, str(new_watermark))
                 cleaned += 1
-            except Exception:
-                logger.exception("Cleaner failed for %s/%s", scope, scope_id)
+            except Exception as exc:
+                logger.error(
+                    "Cleaner failed for %s/%s: %s: %s", scope, scope_id, type(exc).__name__, exc
+                )
 
         if cleaned:
             logger.info("Cleaner: processed %d scope(s)", cleaned)
@@ -526,12 +568,16 @@ class MemoryCleaner(ScheduledWorker):
         )
         prompt = _CLEANER_TEMPLATE.safe_substitute(memories=mem_lines)
 
-        resp = await litellm.acompletion(
-            model=self._config.model,
+        resp = await _completion_with_fallback(
+            self._config.models,
+            label="cleaner",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.2,
             max_tokens=2048,
         )
+        if resp is None:
+            return
+
         output = _strip_markdown_fence(resp.choices[0].message.content or "")
 
         try:

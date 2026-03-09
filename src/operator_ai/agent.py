@@ -417,6 +417,12 @@ async def run_agent(
                     )
 
         if last_error is not None:
+            logger.error(
+                "%s all models failed (%s: %s)",
+                step,
+                type(last_error).__name__,
+                last_error,
+            )
             raise last_error
 
         if not getattr(response, "choices", None):

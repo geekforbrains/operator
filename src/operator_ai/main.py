@@ -524,7 +524,7 @@ class Dispatcher:
             logger.info("conversation %s — stopped by user", conversation_id)
             await transport.send(msg.channel_id, "Request stopped.", thread_id=msg.root_message_id)
         except Exception as e:
-            logger.exception("agent error")
+            logger.error("agent error: %s: %s", type(e).__name__, e)
             await transport.send(msg.channel_id, f"[error: {e}]", thread_id=msg.root_message_id)
         finally:
             await status.stop()

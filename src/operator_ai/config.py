@@ -134,7 +134,12 @@ class AgentConfig(StrictConfigModel):
 class ScheduledTaskConfig(StrictConfigModel):
     enabled: bool = False
     schedule: str = ""
-    model: str = ""
+    models: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_models(cls, values: Any) -> Any:
+        return _normalize_models(values)
 
     @model_validator(mode="after")
     def validate_required_when_enabled(self) -> ScheduledTaskConfig:
@@ -144,8 +149,8 @@ class ScheduledTaskConfig(StrictConfigModel):
         missing = []
         if not self.schedule:
             missing.append("schedule")
-        if not self.model:
-            missing.append("model")
+        if not self.models:
+            missing.append("model(s)")
         if missing:
             raise ValueError(
                 f"memory.{label} is enabled but missing required fields: {', '.join(missing)}"
