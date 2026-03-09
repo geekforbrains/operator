@@ -17,6 +17,7 @@ except ImportError:
 import sqlite_vec
 
 from operator_ai.config import OPERATOR_DIR
+from operator_ai.message_timestamps import MESSAGE_CREATED_AT_KEY
 from operator_ai.messages import trim_incomplete_tool_turns
 
 DB_PATH = OPERATOR_DIR / "state" / "operator.db"
@@ -104,6 +105,7 @@ class Store:
             )
             """
         )
+        self._ensure_messages_created_at_column()
         self._conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_messages_conversation
@@ -337,6 +339,13 @@ class Store:
         ).fetchone()
         return row is not None
 
+    def _ensure_messages_created_at_column(self) -> None:
+        columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(messages)").fetchall()
+        }
+        if "created_at" not in columns:
+            self._conn.execute("ALTER TABLE messages ADD COLUMN created_at TEXT")
+
     def _get_schema_meta(self, key: str) -> str | None:
         row = self._conn.execute(
             "SELECT value FROM schema_meta WHERE key = ?",
@@ -409,10 +418,15 @@ class Store:
 
     def load_messages(self, conversation_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
-            "SELECT id, message_json FROM messages WHERE conversation_id = ? ORDER BY id ASC",
+            "SELECT id, message_json, created_at FROM messages WHERE conversation_id = ? ORDER BY id ASC",
             (conversation_id,),
         ).fetchall()
-        messages = [json.loads(row["message_json"]) for row in rows]
+        messages = []
+        for row in rows:
+            message = json.loads(row["message_json"])
+            if row["created_at"]:
+                message[MESSAGE_CREATED_AT_KEY] = row["created_at"]
+            messages.append(message)
         safe_messages = trim_incomplete_tool_turns(messages)
 
         if len(safe_messages) != len(messages):
@@ -434,9 +448,20 @@ class Store:
     def append_messages(self, conversation_id: str, messages: list[dict[str, Any]]) -> None:
         if not messages:
             return
+        rows: list[tuple[str, str, str | None]] = []
+        for message in messages:
+            payload = dict(message)
+            created_at = payload.pop(MESSAGE_CREATED_AT_KEY, None)
+            rows.append(
+                (
+                    conversation_id,
+                    json.dumps(payload),
+                    created_at if isinstance(created_at, str) else None,
+                )
+            )
         self._conn.executemany(
-            "INSERT INTO messages (conversation_id, message_json) VALUES (?, ?)",
-            [(conversation_id, json.dumps(message)) for message in messages],
+            "INSERT INTO messages (conversation_id, message_json, created_at) VALUES (?, ?, ?)",
+            rows,
         )
         self._conn.commit()
 

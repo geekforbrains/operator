@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from operator_ai.config import Config
+from operator_ai.message_timestamps import MESSAGE_CREATED_AT_KEY
 from operator_ai.tools import subagent
 from operator_ai.tools.subagent import _resolve_agent_context, spawn_agent
 
@@ -139,6 +140,7 @@ def test_spawn_agent_without_explicit_target_uses_current_agent_prompt(monkeypat
 
     async def fake_run_agent(**kwargs):
         captured["system_prompt"] = kwargs["messages"][0]["content"]
+        captured["user_message"] = kwargs["messages"][1]
         captured["agent_name"] = kwargs["agent_name"]
         return "done"
 
@@ -172,6 +174,8 @@ def test_spawn_agent_without_explicit_target_uses_current_agent_prompt(monkeypat
 
     assert result == "done"
     assert captured["agent_name"] == "operator"
-    assert "Default timezone: America/Vancouver" in captured["system_prompt"]
     assert "# Agent\n\noperator" in captured["system_prompt"]
     assert "You are a focused sub-agent." in captured["system_prompt"]
+    user_message = captured["user_message"]
+    assert user_message["content"] == "Summarize the release branch."
+    assert user_message[MESSAGE_CREATED_AT_KEY]

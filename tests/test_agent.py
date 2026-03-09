@@ -8,7 +8,7 @@ from pathlib import Path
 import operator_ai.agent as agent_module
 from operator_ai.agent import run_agent
 from operator_ai.config import Config
-from operator_ai.request_context import CURRENT_TIME_HEADER, inject_current_time
+from operator_ai.message_timestamps import attach_message_created_at
 from operator_ai.tools.registry import ToolDef
 
 
@@ -44,7 +44,7 @@ def _config(timezone: str = "America/Vancouver") -> Config:
     )
 
 
-def test_run_agent_injects_current_time_only_into_live_request(
+def test_run_agent_renders_user_message_timestamp_in_live_request(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -56,18 +56,13 @@ def test_run_agent_injects_current_time_only_into_live_request(
 
     monkeypatch.setattr("operator_ai.agent.tool_registry.get_tools", lambda: [])
     monkeypatch.setattr("operator_ai.agent.litellm.acompletion", fake_acompletion)
-    monkeypatch.setattr(
-        "operator_ai.agent.inject_current_time",
-        lambda messages, config: inject_current_time(
-            messages,
-            config,
-            now=datetime(2026, 3, 6, 17, 45, tzinfo=UTC),
-        ),
-    )
 
     messages = [
         {"role": "system", "content": "# System"},
-        {"role": "user", "content": "What time is it?"},
+        attach_message_created_at(
+            {"role": "user", "content": "What time is it?"},
+            created_at=datetime(2026, 3, 6, 17, 45, tzinfo=UTC),
+        ),
     ]
 
     result = asyncio.run(
@@ -84,14 +79,16 @@ def test_run_agent_injects_current_time_only_into_live_request(
 
     assert result == "done"
     assert messages[0]["content"] == "# System"
+    assert messages[1]["content"] == "What time is it?"
 
     request_messages = captured["messages"]
     assert isinstance(request_messages, list)
-    assert CURRENT_TIME_HEADER in request_messages[0]["content"]
-    assert "America/Vancouver" in request_messages[0]["content"]
+    assert request_messages[0]["content"] == "# System"
+    assert request_messages[1]["content"].startswith("[Friday, 2026-03-06T09:45:00-08:00]\n")
+    assert request_messages[1]["content"].endswith("What time is it?")
 
 
-def test_run_agent_keeps_anthropic_cache_boundary_stable(
+def test_run_agent_keeps_anthropic_system_cache_boundary_stable(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -103,20 +100,15 @@ def test_run_agent_keeps_anthropic_cache_boundary_stable(
 
     monkeypatch.setattr("operator_ai.agent.tool_registry.get_tools", lambda: [])
     monkeypatch.setattr("operator_ai.agent.litellm.acompletion", fake_acompletion)
-    monkeypatch.setattr(
-        "operator_ai.agent.inject_current_time",
-        lambda messages, config: inject_current_time(
-            messages,
-            config,
-            now=datetime(2026, 3, 6, 17, 45, tzinfo=UTC),
-        ),
-    )
 
     asyncio.run(
         run_agent(
             messages=[
                 {"role": "system", "content": "# Stable System"},
-                {"role": "user", "content": "Ping"},
+                attach_message_created_at(
+                    {"role": "user", "content": "Ping"},
+                    created_at=datetime(2026, 3, 6, 17, 45, tzinfo=UTC),
+                ),
             ],
             models=["anthropic/claude-sonnet-4-6"],
             max_iterations=1,
@@ -134,8 +126,8 @@ def test_run_agent_keeps_anthropic_cache_boundary_stable(
     assert isinstance(system_content, list)
     assert system_content[0]["text"] == "# Stable System"
     assert system_content[0]["cache_control"] == {"type": "ephemeral"}
-    assert CURRENT_TIME_HEADER in system_content[1]["text"]
-    assert "# Stable System" not in system_content[1]["text"]
+    assert len(system_content) == 1
+    assert request_messages[1]["content"] == "[Friday, 2026-03-06T09:45:00-08:00]\nPing"
 
 
 def test_run_agent_maps_thinking_to_reasoning_effort_when_supported(

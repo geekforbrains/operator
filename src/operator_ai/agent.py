@@ -11,8 +11,8 @@ from typing import Any
 import litellm
 
 from operator_ai.config import Config, ThinkingLevel, ensure_shared_symlink
+from operator_ai.message_timestamps import render_message_timestamps
 from operator_ai.prompts import CACHE_BOUNDARY
-from operator_ai.request_context import inject_current_time
 from operator_ai.tools import registry as tool_registry
 from operator_ai.tools import set_workspace, subagent
 from operator_ai.tools.context import ROLE_GATED_TOOLS, get_skill_filter, get_user_context
@@ -362,7 +362,9 @@ async def run_agent(
         last_error: Exception | None = None
         for model in models:
             model_messages = (
-                inject_current_time(messages, config) if config is not None else list(messages)
+                render_message_timestamps(messages, config)
+                if config is not None
+                else list(messages)
             )
             model_messages = _sanitize_reasoning_history(model_messages, model=model)
             model_messages = prepare_messages_for_model(model_messages, model, context_ratio)

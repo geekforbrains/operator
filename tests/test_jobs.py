@@ -5,6 +5,7 @@ from pathlib import Path
 
 from operator_ai.config import Config
 from operator_ai.jobs import Job, _build_job_prompt, _execute_job, _job_memory_scopes
+from operator_ai.message_timestamps import MESSAGE_CREATED_AT_KEY
 from operator_ai.store import JobState
 from operator_ai.tools import memory as memory_tools
 from operator_ai.tools.context import get_skill_filter
@@ -103,6 +104,8 @@ def test_execute_job_configures_memory_and_skill_filter(monkeypatch, tmp_path: P
         assert skill_filter("allowed-skill") is True
         assert skill_filter("blocked-skill") is False
         assert await memory_tools.search_memories("status") == "No relevant memories found."
+        user_message = _kwargs["messages"][1]
+        assert user_message[MESSAGE_CREATED_AT_KEY]
         return "done"
 
     monkeypatch.setattr("operator_ai.agent.run_agent", fake_run_agent)

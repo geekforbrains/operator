@@ -46,6 +46,13 @@ def _extract_attachments(event: dict) -> list[Attachment]:
     return attachments
 
 
+def _slack_ts_to_datetime(value: str) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(float(value), tz=UTC).replace(microsecond=0)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
 class SlackTransport(Transport):
     def __init__(
         self,
@@ -588,5 +595,6 @@ class SlackTransport(Transport):
             transport_name=self.name,
             is_private=(event.get("channel_type") == "im"),
             attachments=attachments,
+            created_at=_slack_ts_to_datetime(message_id),
         )
         await on_message(msg)

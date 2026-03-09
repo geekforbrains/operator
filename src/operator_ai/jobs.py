@@ -17,6 +17,7 @@ from operator_ai.config import OPERATOR_DIR, Config
 from operator_ai.job_specs import JOBS_DIR
 from operator_ai.log_context import new_run_id, set_run_context
 from operator_ai.memory import MemoryStore
+from operator_ai.message_timestamps import attach_message_created_at
 from operator_ai.prompts import assemble_system_prompt, load_prompt
 from operator_ai.skills import extract_body, parse_frontmatter
 from operator_ai.store import DB_PATH, Store
@@ -320,7 +321,7 @@ async def _execute_job(
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": job.prompt},
+            attach_message_created_at({"role": "user", "content": job.prompt}),
         ]
         store.append_messages(conversation_id, messages)
         persisted_count = len(messages)

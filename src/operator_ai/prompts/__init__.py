@@ -36,18 +36,6 @@ def load_agent_prompt(config: Config, agent_name: str) -> str:
     return load_agent_body(config.agent_prompt_path(agent_name))
 
 
-def build_runtime_prompt(config: Config) -> str:
-    """Build stable runtime instructions shared by chat, jobs, and subagents."""
-    return "\n".join(
-        [
-            "# Runtime",
-            "",
-            f"Default timezone: {config.runtime.timezone}",
-            "Interpret ambiguous times and dates in this timezone unless the user explicitly states otherwise.",
-        ]
-    )
-
-
 def load_skills_prompt(
     skills_dir: Path = SKILLS_DIR,
     skill_filter: Callable[[str], bool] | None = None,
@@ -72,7 +60,7 @@ def assemble_system_prompt(
 ) -> str:
     """Assemble the runtime system prompt with shared ordering for chat and jobs.
 
-    Content is split into a stable prefix (SYSTEM.md, runtime, AGENT.md, skills)
+    Content is split into a stable prefix (SYSTEM.md, AGENT.md, skills)
     and a dynamic suffix (context, pinned memories, transport extras)
     separated by CACHE_BOUNDARY. The agent layer uses this boundary to apply Anthropic
     prompt-cache breakpoints so the stable prefix is cached across turns.
@@ -80,7 +68,6 @@ def assemble_system_prompt(
     # --- Stable prefix (rarely changes, safe to cache) ---
     stable: list[str] = [
         load_system_prompt(),
-        build_runtime_prompt(config),
         load_agent_prompt(config, agent_name),
     ]
 

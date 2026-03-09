@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 from operator_ai.log_context import get_run_context, new_run_id, set_run_context
+from operator_ai.message_timestamps import attach_message_created_at
 from operator_ai.prompts import assemble_system_prompt, load_prompt
 from operator_ai.tools.context import set_skill_filter
 from operator_ai.tools.registry import tool
@@ -106,7 +107,7 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
-        {"role": "user", "content": task},
+        attach_message_created_at({"role": "user", "content": task}),
     ]
 
     # Lazy import to avoid circular dependency (agent -> subagent -> agent)

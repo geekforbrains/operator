@@ -281,6 +281,68 @@ def test_load_messages_trims_incomplete_tool_turns(store: Store) -> None:
     assert store.load_messages(conv) == loaded
 
 
+def test_load_messages_preserves_created_at_metadata(store: Store) -> None:
+    conv = "conv-ts"
+    store.ensure_conversation(conv, "slack", "C1", "T1")
+    store.ensure_system_message(conv, "system")
+    store.append_messages(
+        conv,
+        [
+            {
+                "role": "user",
+                "content": "u1",
+                "_operator_created_at": "2026-03-09T15:29:41Z",
+            }
+        ],
+    )
+
+    loaded = store.load_messages(conv)
+
+    assert loaded == [
+        {"role": "system", "content": "system"},
+        {
+            "role": "user",
+            "content": "u1",
+            "_operator_created_at": "2026-03-09T15:29:41Z",
+        },
+    ]
+
+
+def test_store_migrates_legacy_messages_table(tmp_path: Path) -> None:
+    db_path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(db_path)
+    conn.execute(
+        """
+        CREATE TABLE conversations (
+            conversation_id TEXT PRIMARY KEY,
+            transport_name TEXT NOT NULL,
+            channel_id TEXT NOT NULL,
+            root_thread_id TEXT NOT NULL,
+            updated_at REAL NOT NULL,
+            metadata_json TEXT NOT NULL
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            conversation_id TEXT NOT NULL,
+            message_json TEXT NOT NULL
+        )
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    migrated = Store(path=db_path)
+
+    columns = {
+        row["name"] for row in migrated._conn.execute("PRAGMA table_info(messages)").fetchall()
+    }
+    assert "created_at" in columns
+
+
 def test_load_messages_keeps_complete_tool_turns(store: Store) -> None:
     conv = "conv-2"
     store.ensure_conversation(conv, "slack", "C1", "T1")

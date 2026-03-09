@@ -5,7 +5,7 @@ from operator_ai.prompts import CACHE_BOUNDARY, assemble_system_prompt
 from operator_ai.tools.subagent import _build_subagent_prompt
 
 
-def test_assemble_system_prompt_includes_stable_timezone_context(monkeypatch) -> None:
+def test_assemble_system_prompt_keeps_dynamic_context_after_cache_boundary(monkeypatch) -> None:
     monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda: "# System")
     monkeypatch.setattr(
         "operator_ai.prompts.load_agent_prompt",
@@ -28,16 +28,11 @@ def test_assemble_system_prompt_includes_stable_timezone_context(monkeypatch) ->
     )
 
     stable, dynamic = prompt.split(CACHE_BOUNDARY, 1)
-    assert "Default timezone: America/Vancouver" in stable
-    assert (
-        "Interpret ambiguous times and dates in this timezone unless the user explicitly states otherwise."
-        in stable
-    )
-    assert "Current time:" not in prompt
+    assert stable == "# System\n\n# Agent\n\noperator"
     assert "# Context\n\nMessage context" in dynamic
 
 
-def test_subagent_prompt_uses_shared_timezone_contract(monkeypatch) -> None:
+def test_subagent_prompt_uses_shared_prompt_contract(monkeypatch) -> None:
     monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda: "# System")
     monkeypatch.setattr(
         "operator_ai.prompts.load_agent_prompt",
@@ -61,6 +56,6 @@ def test_subagent_prompt_uses_shared_timezone_contract(monkeypatch) -> None:
     )
 
     stable, dynamic = prompt.split(CACHE_BOUNDARY, 1)
-    assert "Default timezone: America/Toronto" in stable
+    assert stable.startswith("# System\n\n# Agent\n\noperator")
     assert "You are a focused sub-agent." in dynamic
     assert "Focus on the timezone-aware interpretation." in dynamic

@@ -20,6 +20,7 @@ from operator_ai.config import OPERATOR_DIR, Config, ConfigError, RoleConfig, lo
 from operator_ai.jobs import JobRunner
 from operator_ai.log_context import RunContextFilter, new_run_id, set_run_context
 from operator_ai.memory import MemoryCleaner, MemoryHarvester, MemoryStore, format_retention_mix
+from operator_ai.message_timestamps import attach_message_created_at
 from operator_ai.messages import trim_incomplete_tool_turns
 from operator_ai.prompts import SKILLS_DIR, assemble_system_prompt
 from operator_ai.skills import install_bundled_skills
@@ -448,9 +449,15 @@ class Dispatcher:
             if msg_text:
                 content_blocks.append({"type": "text", "text": msg_text})
             content_blocks.extend(attachment_blocks)
-            user_message: dict = {"role": "user", "content": content_blocks}
+            user_message: dict = attach_message_created_at(
+                {"role": "user", "content": content_blocks},
+                created_at=msg.created_at,
+            )
         else:
-            user_message = {"role": "user", "content": msg_text}
+            user_message = attach_message_created_at(
+                {"role": "user", "content": msg_text},
+                created_at=msg.created_at,
+            )
         messages.append(user_message)
         self.store.append_messages(conversation_id, [user_message])
         persisted_count = len(messages)
