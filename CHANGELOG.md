@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-03-09
+
+### Added
+
+- User message creation timestamps are now rendered into live model input for chat, jobs, and sub-agents using a local format like `[Monday, 2026-03-09T09:22:40-07:00]`
+- Stored messages now carry a nullable `created_at` column so new conversations preserve message creation time without rewriting legacy rows
+
+### Changed
+
+- Time awareness now comes from per-message timestamp rendering instead of a request-only current-time system block
+- The stable system prompt no longer carries runtime timezone guidance; `runtime.timezone` now drives cron matching, Slack timestamp formatting, and rendered user-message timestamps
+
+### Fixed
+
+- Memory harvester and cleaner model calls now use the same fallback-chain behavior as agent requests, including support for `models:` and recovery onto later providers
+- Memory worker and top-level agent failures now log concise single-line errors instead of noisy tracebacks for expected model/runtime failures
+
 ## [0.6.2] - 2026-03-06
 
 ### Fixed
