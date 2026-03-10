@@ -30,3 +30,6 @@ htmlcov/
 .vscode/
 .idea/
 .DS_Store
+
+# Working specs
+SPEC.md
