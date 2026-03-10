@@ -522,6 +522,8 @@ class Dispatcher:
                 shared_dir=self.config.shared_dir,
                 sandboxed=self.config.agent_sandboxed(agent_name),
                 config=self.config,
+                tool_results_keep=self.config.defaults.tool_results.keep,
+                tool_results_soft_trim=self.config.defaults.tool_results.soft_trim,
             )
             logger.info("conversation %s — done", conversation_id)
             if usage:

@@ -49,12 +49,18 @@ class StrictConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class ToolResultsConfig(StrictConfigModel):
+    keep: int = Field(default=5, ge=0)
+    soft_trim: int = Field(default=10, ge=0)
+
+
 class DefaultsConfig(StrictConfigModel):
     models: list[str] = Field(default_factory=list)
     thinking: ThinkingLevel = "off"
     max_iterations: int = Field(default=25, gt=0)
     context_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
     max_output_tokens: int | None = Field(default=None, gt=0)
+    tool_results: ToolResultsConfig = Field(default_factory=ToolResultsConfig)
 
     @model_validator(mode="before")
     @classmethod

@@ -11,13 +11,11 @@ from typing import Any
 import litellm
 
 from operator_ai.config import Config, ThinkingLevel, ensure_shared_symlink
-from operator_ai.message_timestamps import render_message_timestamps
-from operator_ai.prompts import CACHE_BOUNDARY
+from operator_ai.context import prepare_context
 from operator_ai.tools import registry as tool_registry
 from operator_ai.tools import set_workspace, subagent
 from operator_ai.tools.context import ROLE_GATED_TOOLS, get_skill_filter, get_user_context
 from operator_ai.tools.registry import ToolDef
-from operator_ai.truncation import prepare_messages_for_model
 from operator_ai.utils import truncate
 
 logger = logging.getLogger("operator.agent")
@@ -28,63 +26,6 @@ _REASONING_EFFORT_BY_THINKING: dict[ThinkingLevel, str] = {
     "medium": "medium",
     "high": "high",
 }
-_REASONING_MESSAGE_KEYS = frozenset(
-    {"reasoning_content", "thinking_blocks", "provider_specific_fields"}
-)
-_REASONING_CONTENT_TYPES = frozenset({"thinking", "redacted_thinking"})
-
-
-def _is_reasoning_content_block(block: Any) -> bool:
-    return isinstance(block, dict) and block.get("type") in _REASONING_CONTENT_TYPES
-
-
-def _sanitize_reasoning_history(
-    messages: list[dict[str, Any]],
-    *,
-    model: str,
-) -> list[dict[str, Any]]:
-    sanitized: list[dict[str, Any]] = []
-    stripped_messages = 0
-    stripped_items = 0
-
-    for message in messages:
-        cleaned = message
-        removed = 0
-
-        if message.get("role") == "assistant":
-            for key in _REASONING_MESSAGE_KEYS:
-                if key in cleaned:
-                    if cleaned is message:
-                        cleaned = dict(message)
-                    cleaned.pop(key, None)
-                    removed += 1
-
-            content = cleaned.get("content")
-            if isinstance(content, list):
-                filtered_content = [
-                    block for block in content if not _is_reasoning_content_block(block)
-                ]
-                removed_blocks = len(content) - len(filtered_content)
-                if removed_blocks:
-                    if cleaned is message:
-                        cleaned = dict(message)
-                    cleaned["content"] = filtered_content if filtered_content else ""
-                    removed += removed_blocks
-
-        if removed:
-            stripped_messages += 1
-            stripped_items += removed
-        sanitized.append(cleaned)
-
-    if stripped_messages:
-        logger.debug(
-            "history for %s dropped %d reasoning metadata item(s) from %d assistant message(s)",
-            model,
-            stripped_items,
-            stripped_messages,
-        )
-
-    return sanitized
 
 
 @lru_cache(maxsize=256)
@@ -202,79 +143,6 @@ def _apply_reasoning_effort(
         )
 
 
-def _apply_cache_control(messages: list[dict[str, Any]], model: str) -> list[dict[str, Any]]:
-    """Add Anthropic cache breakpoints to system prompt and conversation history.
-
-    Places up to 3 breakpoints (Anthropic allows 4 max):
-      1. Stable system prompt prefix (SYSTEM.md + runtime + AGENT.md + skills)
-      2. Penultimate user/assistant message — caches prior conversation history
-      3. (reserved for future use)
-
-    The stable prefix is cached across conversations.  The conversation
-    breakpoint rolls forward each turn so prior history is served from cache.
-
-    Returns messages unchanged for non-Anthropic models.
-    """
-    if not model.startswith("anthropic/"):
-        return messages
-
-    result: list[dict[str, Any]] = []
-
-    # --- System prompt: split stable prefix / dynamic suffix ---
-    for msg in messages:
-        if msg.get("role") == "system" and isinstance(msg.get("content"), str):
-            content = msg["content"]
-            if CACHE_BOUNDARY in content:
-                stable, dynamic = content.split(CACHE_BOUNDARY, 1)
-                blocks: list[dict[str, Any]] = [
-                    {
-                        "type": "text",
-                        "text": stable,
-                        "cache_control": {"type": "ephemeral"},
-                    },
-                    {"type": "text", "text": dynamic},
-                ]
-            else:
-                blocks = [
-                    {
-                        "type": "text",
-                        "text": content,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ]
-            result.append({**msg, "content": blocks})
-        else:
-            result.append(msg)
-
-    # --- Conversation history: cache up to the penultimate user message ---
-    # Find the last two user-role indices (excluding system).
-    user_indices = [i for i, m in enumerate(result) if m.get("role") == "user"]
-    if len(user_indices) >= 2:
-        # Mark the penultimate user message — everything before it is cached.
-        target = user_indices[-2]
-        msg = result[target]
-        content = msg.get("content")
-        if isinstance(content, str):
-            result[target] = {
-                **msg,
-                "content": [
-                    {
-                        "type": "text",
-                        "text": content,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
-            }
-        elif isinstance(content, list):
-            # Already block format — add cache_control to the last block
-            new_blocks = list(content)
-            last = {**new_blocks[-1], "cache_control": {"type": "ephemeral"}}
-            new_blocks[-1] = last
-            result[target] = {**msg, "content": new_blocks}
-
-    return result
-
-
 async def run_agent(
     messages: list[dict[str, Any]],
     models: list[str],
@@ -294,6 +162,8 @@ async def run_agent(
     shared_dir: Path | None = None,
     sandboxed: bool = True,
     config: Config | None = None,
+    tool_results_keep: int = 5,
+    tool_results_soft_trim: int = 10,
 ) -> str:
     """Core agentic loop: LLM -> tool exec -> repeat until text response.
 
@@ -361,14 +231,14 @@ async def run_agent(
         response = None
         last_error: Exception | None = None
         for model in models:
-            model_messages = (
-                render_message_timestamps(messages, config)
-                if config is not None
-                else list(messages)
+            model_messages = prepare_context(
+                messages,
+                model,
+                context_ratio=context_ratio,
+                config=config,
+                tool_results_keep=tool_results_keep,
+                tool_results_soft_trim=tool_results_soft_trim,
             )
-            model_messages = _sanitize_reasoning_history(model_messages, model=model)
-            model_messages = prepare_messages_for_model(model_messages, model, context_ratio)
-            model_messages = _apply_cache_control(model_messages, model)
             request_model = _select_request_model(
                 model=model,
                 has_tools=bool(tool_defs),

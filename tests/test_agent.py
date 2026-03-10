@@ -302,7 +302,7 @@ def test_run_agent_fallback_omits_reasoning_effort_and_sanitizes_history(
         {"role": "user", "content": "Try again"},
     ]
 
-    with caplog.at_level(logging.DEBUG, logger="operator.agent"):
+    with caplog.at_level(logging.DEBUG, logger="operator"):
         result = asyncio.run(
             run_agent(
                 messages=messages,

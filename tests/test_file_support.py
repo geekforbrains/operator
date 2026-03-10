@@ -213,32 +213,6 @@ def test_process_attachments_sanitizes_filename(tmp_path: Path):
     assert not (tmp_path / "etc").exists()
 
 
-# --- Truncation with list content ---
-
-
-def test_shorten_content_blocks():
-    from operator_ai.truncation import _shorten_content_blocks
-
-    blocks = [
-        {"type": "text", "text": "x" * 500},
-        {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
-        {"type": "text", "text": "short"},
-    ]
-    changed = _shorten_content_blocks(blocks, 100)
-    assert changed is True
-    assert len(blocks[0]["text"]) <= 100 + 50  # truncation marker overhead
-    assert blocks[1]["type"] == "image_url"  # untouched
-    assert blocks[2]["text"] == "short"  # under limit, untouched
-
-
-def test_shorten_content_blocks_no_change():
-    from operator_ai.truncation import _shorten_content_blocks
-
-    blocks = [{"type": "text", "text": "short"}]
-    changed = _shorten_content_blocks(blocks, 1000)
-    assert changed is False
-
-
 # --- send_file tool ---
 
 
