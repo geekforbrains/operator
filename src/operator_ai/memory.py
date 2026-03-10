@@ -481,7 +481,9 @@ class MemoryHarvester(ScheduledWorker):
             self._config.models,
             label="harvester",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
+            # Keep memory-worker requests free of explicit sampling params so
+            # mixed-provider fallback chains remain portable across stricter
+            # models like OpenAI GPT-5.
             max_tokens=1024,
         )
         if resp is None:
@@ -572,7 +574,6 @@ class MemoryCleaner(ScheduledWorker):
             self._config.models,
             label="cleaner",
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.2,
             max_tokens=2048,
         )
         if resp is None:

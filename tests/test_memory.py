@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
+from types import SimpleNamespace
 
 import pytest
 
+from operator_ai.config import CleanerConfig, HarvesterConfig
 from operator_ai.main import _conversation_memory_scopes
-from operator_ai.memory import _parse_harvested_memories
+from operator_ai.memory import MemoryCleaner, MemoryHarvester, _parse_harvested_memories
 from operator_ai.tools import memory as memory_tools
 
 
@@ -192,6 +195,90 @@ def test_parse_harvested_memories_accepts_retention_and_scopes() -> None:
         ("agent", "operator", "durable", "Project uses uv"),
         ("global", "global", "candidate", "Release checklist is active this week"),
     ]
+
+
+def test_memory_harvester_omits_temperature(monkeypatch, fake_memory_store) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_completion(models, *, label, **kwargs):
+        captured["models"] = models
+        captured["label"] = label
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="NONE"))])
+
+    monkeypatch.setattr("operator_ai.memory._completion_with_fallback", fake_completion)
+
+    harvester = MemoryHarvester(
+        fake_memory_store,
+        object(),
+        HarvesterConfig(models=["openai/gpt-5.4"]),
+    )
+
+    extracted = asyncio.run(
+        harvester._extract_memories(
+            "user: hi\nassistant: hello",
+            "gavin",
+            "operator",
+            allow_user_scope=False,
+        )
+    )
+
+    assert extracted == 0
+    assert captured["label"] == "harvester"
+    assert "temperature" not in captured["kwargs"]
+
+
+def test_memory_cleaner_omits_temperature(monkeypatch, fake_memory_store) -> None:
+    captured: dict[str, object] = {}
+
+    async def fake_completion(models, *, label, **kwargs):
+        captured["models"] = models
+        captured["label"] = label
+        captured["kwargs"] = kwargs
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content=json.dumps(
+                            {
+                                "keep": [
+                                    {"id": 1, "content": "first"},
+                                    {"id": 2, "content": "second"},
+                                ],
+                                "add": [],
+                                "delete": [],
+                            }
+                        )
+                    )
+                )
+            ]
+        )
+
+    class FakeStore:
+        def get_all_memories_for_scope(self, _scope: str, _scope_id: str):
+            return [
+                {"id": 1, "content": "first", "retention": "durable", "pinned": 0},
+                {"id": 2, "content": "second", "retention": "candidate", "pinned": 0},
+            ]
+
+        def update_memory(self, _mid: int, _new_content: str, _vec_bytes: bytes) -> None:
+            raise AssertionError("update_memory should not be called")
+
+        def delete_memory(self, _mid: int) -> None:
+            raise AssertionError("delete_memory should not be called")
+
+    monkeypatch.setattr("operator_ai.memory._completion_with_fallback", fake_completion)
+
+    cleaner = MemoryCleaner(
+        fake_memory_store,
+        FakeStore(),
+        CleanerConfig(models=["openai/gpt-5.4"]),
+    )
+
+    asyncio.run(cleaner._clean_scope("agent", "operator"))
+
+    assert captured["label"] == "cleaner"
+    assert "temperature" not in captured["kwargs"]
 
 
 # -- memory scopes use username, not platform ID ----------------------------
