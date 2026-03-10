@@ -77,6 +77,29 @@ _SYSTEMD_DIR = Path.home() / ".config" / "systemd" / "user"
 _SYSTEMD_PATH = _SYSTEMD_DIR / _SYSTEMD_UNIT
 
 
+def _launchd_domain_target() -> str:
+    return f"gui/{os.getuid()}"
+
+
+def _launchd_service_target() -> str:
+    return f"{_launchd_domain_target()}/{_LAUNCHD_LABEL}"
+
+
+def _launchd_service_loaded() -> bool:
+    result = subprocess.run(
+        ["launchctl", "list", _LAUNCHD_LABEL],
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 0
+
+
+def _require_launchd_plist() -> None:
+    if not _PLIST_PATH.exists():
+        print("Service not installed.")
+        raise typer.Exit(code=1)
+
+
 def _setup_cli_logging() -> None:
     """Set up logging for CLI commands — writes to the shared log file + stderr."""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -883,14 +906,13 @@ def service_install() -> None:
 
     if _is_macos():
         _PLIST_PATH.parent.mkdir(parents=True, exist_ok=True)
-        # Unload any existing service first to avoid duplicate processes
-        if _PLIST_PATH.exists():
-            subprocess.run(
-                ["launchctl", "unload", str(_PLIST_PATH)],
-                capture_output=True,
-            )
+        if _launchd_service_loaded():
+            subprocess.run(["launchctl", "bootout", _launchd_service_target()], check=False)
         _PLIST_PATH.write_text(_generate_plist(bin_path))
-        subprocess.run(["launchctl", "load", str(_PLIST_PATH)], check=True)
+        subprocess.run(
+            ["launchctl", "bootstrap", _launchd_domain_target(), str(_PLIST_PATH)],
+            check=True,
+        )
         print(f"Installed and loaded {_PLIST_PATH}")
     else:
         _SYSTEMD_DIR.mkdir(parents=True, exist_ok=True)
@@ -905,7 +927,8 @@ def service_uninstall() -> None:
     """Unload and remove the service definition."""
     if _is_macos():
         if _PLIST_PATH.exists():
-            subprocess.run(["launchctl", "unload", str(_PLIST_PATH)], check=False)
+            if _launchd_service_loaded():
+                subprocess.run(["launchctl", "bootout", _launchd_service_target()], check=False)
             _PLIST_PATH.unlink()
             print(f"Unloaded and removed {_PLIST_PATH}")
         else:
@@ -925,7 +948,14 @@ def service_uninstall() -> None:
 def service_start() -> None:
     """Start the background service."""
     if _is_macos():
-        subprocess.run(["launchctl", "start", _LAUNCHD_LABEL], check=True)
+        _require_launchd_plist()
+        if _launchd_service_loaded():
+            subprocess.run(["launchctl", "kickstart", _launchd_service_target()], check=True)
+        else:
+            subprocess.run(
+                ["launchctl", "bootstrap", _launchd_domain_target(), str(_PLIST_PATH)],
+                check=True,
+            )
     else:
         subprocess.run(["systemctl", "--user", "start", _SYSTEMD_UNIT], check=True)
     print("Service started.")
@@ -935,7 +965,10 @@ def service_start() -> None:
 def service_stop() -> None:
     """Stop the background service."""
     if _is_macos():
-        subprocess.run(["launchctl", "stop", _LAUNCHD_LABEL], check=True)
+        if not _launchd_service_loaded():
+            print("Service already stopped.")
+            return
+        subprocess.run(["launchctl", "bootout", _launchd_service_target()], check=True)
     else:
         subprocess.run(["systemctl", "--user", "stop", _SYSTEMD_UNIT], check=True)
     print("Service stopped.")
@@ -945,8 +978,14 @@ def service_stop() -> None:
 def service_restart() -> None:
     """Restart the background service."""
     if _is_macos():
-        subprocess.run(["launchctl", "stop", _LAUNCHD_LABEL], check=False)
-        subprocess.run(["launchctl", "start", _LAUNCHD_LABEL], check=True)
+        _require_launchd_plist()
+        if _launchd_service_loaded():
+            subprocess.run(["launchctl", "kickstart", "-k", _launchd_service_target()], check=True)
+        else:
+            subprocess.run(
+                ["launchctl", "bootstrap", _launchd_domain_target(), str(_PLIST_PATH)],
+                check=True,
+            )
     else:
         subprocess.run(["systemctl", "--user", "restart", _SYSTEMD_UNIT], check=True)
     print("Service restarted.")

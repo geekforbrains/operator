@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from typer.testing import CliRunner
@@ -94,6 +95,84 @@ def test_generate_systemd_unit_embeds_path():
     unit = _generate_systemd_unit("/usr/local/bin/operator")
     assert "Environment=PATH=" in unit
     assert "/usr" in unit or "/bin" in unit
+
+
+def test_service_start_bootstraps_launchd_agent_when_unloaded(tmp_path: Path):
+    plist_path = tmp_path / "ai.operator.plist"
+    plist_path.write_text("<plist />")
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> SimpleNamespace:
+        calls.append((args, kwargs))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with (
+        patch("operator_ai.cli._is_macos", return_value=True),
+        patch("operator_ai.cli._PLIST_PATH", plist_path),
+        patch("operator_ai.cli._launchd_service_loaded", return_value=False),
+        patch("operator_ai.cli._launchd_domain_target", return_value="gui/501"),
+        patch("operator_ai.cli.subprocess.run", side_effect=fake_run),
+    ):
+        result = runner.invoke(app, ["service", "start"])
+
+    assert result.exit_code == 0
+    assert calls == [
+        (
+            ["launchctl", "bootstrap", "gui/501", str(plist_path)],
+            {"check": True},
+        )
+    ]
+
+
+def test_service_stop_boots_out_launchd_agent_on_macos():
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> SimpleNamespace:
+        calls.append((args, kwargs))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with (
+        patch("operator_ai.cli._is_macos", return_value=True),
+        patch("operator_ai.cli._launchd_service_loaded", return_value=True),
+        patch("operator_ai.cli._launchd_service_target", return_value="gui/501/ai.operator"),
+        patch("operator_ai.cli.subprocess.run", side_effect=fake_run),
+    ):
+        result = runner.invoke(app, ["service", "stop"])
+
+    assert result.exit_code == 0
+    assert calls == [
+        (
+            ["launchctl", "bootout", "gui/501/ai.operator"],
+            {"check": True},
+        )
+    ]
+
+
+def test_service_restart_kickstarts_loaded_launchd_agent_on_macos(tmp_path: Path):
+    plist_path = tmp_path / "ai.operator.plist"
+    plist_path.write_text("<plist />")
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> SimpleNamespace:
+        calls.append((args, kwargs))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    with (
+        patch("operator_ai.cli._is_macos", return_value=True),
+        patch("operator_ai.cli._PLIST_PATH", plist_path),
+        patch("operator_ai.cli._launchd_service_loaded", return_value=True),
+        patch("operator_ai.cli._launchd_service_target", return_value="gui/501/ai.operator"),
+        patch("operator_ai.cli.subprocess.run", side_effect=fake_run),
+    ):
+        result = runner.invoke(app, ["service", "restart"])
+
+    assert result.exit_code == 0
+    assert calls == [
+        (
+            ["launchctl", "kickstart", "-k", "gui/501/ai.operator"],
+            {"check": True},
+        )
+    ]
 
 
 def test_init_skips_existing_env_file(tmp_path: Path):
