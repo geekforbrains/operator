@@ -90,6 +90,10 @@ class TransportConfig(StrictConfigModel):
     type: str
     bot_token_env: str | None = None
     app_token_env: str | None = None
+    include_archived_channels: bool = False
+    inject_channels_into_prompt: bool = False
+    channel_cache_ttl_seconds: int = Field(default=900, gt=0)
+    warm_channels_on_startup: bool = True
 
     @model_validator(mode="after")
     def validate_transport(self) -> TransportConfig:

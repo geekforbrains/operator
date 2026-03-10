@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import re
+import time
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, tzinfo
 
@@ -22,7 +22,7 @@ logger = logging.getLogger("operator.transport.slack")
 MENTION_RE = re.compile(r"<@[A-Z0-9]+>\s*")
 _mrkdwn = SlackMarkdownConverter()
 
-CACHE_REFRESH_SECONDS = 15 * 60  # 15 minutes
+DEFAULT_CHANNEL_CACHE_TTL_SECONDS = 15 * 60
 MAX_API_ATTEMPTS = 3
 BASE_RETRY_SECONDS = 1.0
 
@@ -61,6 +61,11 @@ class SlackTransport(Transport):
         bot_token: str,
         app_token: str,
         tz: tzinfo = UTC,
+        *,
+        include_archived_channels: bool = False,
+        inject_channels_into_prompt: bool = False,
+        channel_cache_ttl_seconds: int = DEFAULT_CHANNEL_CACHE_TTL_SECONDS,
+        warm_channels_on_startup: bool = True,
     ):
         self.name = name
         self.platform = "slack"
@@ -68,16 +73,21 @@ class SlackTransport(Transport):
         self._bot_token = bot_token
         self._app_token = app_token
         self._tz = tz
+        self._include_archived_channels = include_archived_channels
+        self._inject_channels_into_prompt = inject_channels_into_prompt
+        self._channel_cache_ttl_seconds = channel_cache_ttl_seconds
+        self._warm_channels_on_startup = warm_channels_on_startup
         self._app: AsyncApp | None = None
         self._handler: AsyncSocketModeHandler | None = None
         self._background_tasks: set[asyncio.Task] = set()
 
-        # In-memory caches (populated by _refresh_cache)
+        # In-memory caches (populated by channel refresh).
         self._users: dict[str, str] = {}  # user_id -> display name
         self._channels: dict[str, str] = {}  # channel_id -> #name
         self._channel_ids: dict[str, str] = {}  # name (no #) -> channel_id
         self._channel_info: dict[str, str] = {}  # channel_id -> topic/purpose snippet
-        self._refresh_task: asyncio.Task | None = None
+        self._channel_cache_refreshed_at: float | None = None
+        self._channel_cache_lock = asyncio.Lock()
 
     @override
     async def start(self, on_message: Callable[[IncomingMessage], Awaitable[None]]) -> None:
@@ -99,17 +109,17 @@ class SlackTransport(Transport):
                 self._create_task(self._dispatch(event, on_message))
 
         self._handler = AsyncSocketModeHandler(self._app, self._app_token)
-        self._refresh_task = asyncio.create_task(self._refresh_cache_loop())
+        if self._warm_channels_on_startup:
+            try:
+                await self._refresh_channel_cache(force=True)
+                logger.debug("Slack channel cache warmed (%d channels)", len(self._channels))
+            except Exception:
+                logger.warning("Failed to warm Slack channel cache", exc_info=True)
         logger.info("Starting Slack transport '%s'", self.name)
         await self._handler.start_async()
 
     @override
     async def stop(self) -> None:
-        if self._refresh_task:
-            self._refresh_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._refresh_task
-            self._refresh_task = None
         if self._background_tasks:
             for task in list(self._background_tasks):
                 task.cancel()
@@ -182,18 +192,22 @@ class SlackTransport(Transport):
 
     # --- Cache refresh ---
 
-    async def _refresh_cache_loop(self) -> None:
-        """Run immediately on start, then every CACHE_REFRESH_SECONDS."""
-        try:
-            while True:
-                try:
-                    await self._fetch_all_channels()
-                    logger.debug("Slack channel cache refreshed (%d channels)", len(self._channels))
-                except Exception:
-                    logger.warning("Failed to refresh Slack channel cache", exc_info=True)
-                await asyncio.sleep(CACHE_REFRESH_SECONDS)
-        except asyncio.CancelledError:
-            return
+    def _channel_cache_is_stale(self) -> bool:
+        refreshed_at = self._channel_cache_refreshed_at
+        if refreshed_at is None:
+            return True
+        return time.monotonic() - refreshed_at >= self._channel_cache_ttl_seconds
+
+    async def _ensure_channel_cache_fresh(self) -> None:
+        if self._channel_cache_is_stale():
+            await self._refresh_channel_cache()
+
+    async def _refresh_channel_cache(self, *, force: bool = False) -> None:
+        async with self._channel_cache_lock:
+            if not force and not self._channel_cache_is_stale():
+                return
+            await self._fetch_all_channels()
+            logger.debug("Slack channel cache refreshed (%d channels)", len(self._channels))
 
     async def _fetch_all_channels(self) -> None:
         """Paginate conversations_list and populate caches atomically."""
@@ -204,7 +218,11 @@ class SlackTransport(Transport):
 
         cursor = None
         while True:
-            params: dict = {"types": "public_channel,private_channel", "limit": 200}
+            params: dict[str, object] = {
+                "types": "public_channel,private_channel",
+                "limit": 200,
+                "exclude_archived": not self._include_archived_channels,
+            }
             if cursor:
                 params["cursor"] = cursor
             request_params = dict(params)
@@ -213,6 +231,8 @@ class SlackTransport(Transport):
                 lambda rp=request_params: app.client.conversations_list(**rp),
             )
             for ch in resp.get("channels", []):
+                if not self._include_archived_channels and ch.get("is_archived"):
+                    continue
                 ch_id = ch.get("id", "")
                 ch_name = ch.get("name", "")
                 if not ch_id or not ch_name:
@@ -232,6 +252,7 @@ class SlackTransport(Transport):
         self._channels = channels
         self._channel_ids = channel_ids
         self._channel_info = channel_info
+        self._channel_cache_refreshed_at = time.monotonic()
 
     # --- Messaging ---
 
@@ -387,34 +408,49 @@ class SlackTransport(Transport):
         if channel.startswith(("C", "G", "D")) and len(channel) > 1:
             return channel
         name = channel.lstrip("#")
+        try:
+            await self._ensure_channel_cache_fresh()
+        except Exception:
+            logger.warning("Failed to refresh channel cache while resolving '%s'", channel)
         cached = self._channel_ids.get(name)
         if cached:
             return cached
-        # Cache miss — refresh and retry
         try:
-            await self._fetch_all_channels()
+            await self._refresh_channel_cache(force=True)
         except Exception:
-            logger.warning("Failed to refresh channel cache while resolving '%s'", channel)
+            logger.warning("Failed to force-refresh channel cache while resolving '%s'", channel)
         return self._channel_ids.get(name)
 
     # --- Transport-scoped tools ---
 
-    def _format_channel_list(self) -> list[str]:
+    def _format_channel_list(self, query: str = "") -> list[str]:
         """Format the cached channel list as markdown bullet lines."""
         lines: list[str] = []
+        query_text = query.strip().casefold()
         for ch_id, ch_name in sorted(self._channels.items(), key=lambda x: x[1]):
             info = self._channel_info.get(ch_id, "")
+            haystack = f"{ch_name} {ch_id} {info}".casefold()
+            if query_text and query_text not in haystack:
+                continue
             suffix = f" — {info}" if info else ""
             lines.append(f"- {ch_name} (`{ch_id}`){suffix}")
         return lines
 
     @override
     def get_tools(self) -> list[ToolDef]:
-        async def list_channels() -> str:
+        async def list_channels(query: str = "") -> str:
             """List available Slack channels the bot can post to."""
-            if not self._channels:
-                return "No channels cached yet. Try again shortly."
-            return "\n".join(self._format_channel_list())
+            try:
+                await self._ensure_channel_cache_fresh()
+            except Exception:
+                if not self._channels:
+                    return "[error: failed to load Slack channels]"
+            lines = self._format_channel_list(query=query)
+            if lines:
+                return "\n".join(lines)
+            if query.strip():
+                return "No matching channels found."
+            return "No channels available."
 
         async def read_channel(channel: str, count: int = 20) -> str:
             """Read recent messages from a Slack channel.
@@ -470,7 +506,7 @@ class SlackTransport(Transport):
         return [
             ToolDef(
                 list_channels,
-                "List available Slack channels the bot can post to, with their IDs and descriptions.",
+                "List available Slack channels the bot can post to, optionally filtering by name, ID, topic, or purpose.",
             ),
             ToolDef(
                 read_channel,
@@ -489,10 +525,15 @@ class SlackTransport(Transport):
             "",
             "Use `send_message` with a channel name (e.g. `#general`) or channel ID.",
             "It returns a Slack message timestamp you can pass as `thread_id` to reply in a thread.",
+            "Use `list_channels` if you need to inspect Slack destinations first.",
         ]
+        if not self._inject_channels_into_prompt:
+            return "\n".join(lines)
         if self._channels:
             lines += ["", "# Available Channels", ""]
             lines += self._format_channel_list()
+        else:
+            lines += ["", "Channel names are not cached yet. Call `list_channels` if needed."]
         return "\n".join(lines)
 
     # --- Message formatting ---

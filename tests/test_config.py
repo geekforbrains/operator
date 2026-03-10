@@ -11,6 +11,7 @@ from operator_ai.config import (
     PermissionsConfig,
     RoleConfig,
     RuntimeConfig,
+    TransportConfig,
     _load_env_file,
     ensure_shared_symlink,
     load_config,
@@ -181,6 +182,34 @@ def test_runtime_defaults() -> None:
 def test_runtime_reject_response_announce() -> None:
     runtime = RuntimeConfig(reject_response="announce")
     assert runtime.reject_response == "announce"
+
+
+def test_transport_config_slack_channel_defaults() -> None:
+    transport = TransportConfig(
+        type="slack",
+        bot_token_env="SLACK_BOT_TOKEN",
+        app_token_env="SLACK_APP_TOKEN",
+    )
+    assert transport.include_archived_channels is False
+    assert transport.inject_channels_into_prompt is False
+    assert transport.channel_cache_ttl_seconds == 900
+    assert transport.warm_channels_on_startup is True
+
+
+def test_transport_config_slack_channel_overrides() -> None:
+    transport = TransportConfig(
+        type="slack",
+        bot_token_env="SLACK_BOT_TOKEN",
+        app_token_env="SLACK_APP_TOKEN",
+        include_archived_channels=True,
+        inject_channels_into_prompt=True,
+        channel_cache_ttl_seconds=60,
+        warm_channels_on_startup=False,
+    )
+    assert transport.include_archived_channels is True
+    assert transport.inject_channels_into_prompt is True
+    assert transport.channel_cache_ttl_seconds == 60
+    assert transport.warm_channels_on_startup is False
 
 
 # ── MemoryConfig ─────────────────────────────────────────────

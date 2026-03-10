@@ -630,6 +630,10 @@ def create_transports(config: Config) -> list[Transport]:
                     bot_token=tc.resolve_env("bot_token_env", agent_name),
                     app_token=tc.resolve_env("app_token_env", agent_name),
                     tz=config.tz,
+                    include_archived_channels=tc.include_archived_channels,
+                    inject_channels_into_prompt=tc.inject_channels_into_prompt,
+                    channel_cache_ttl_seconds=tc.channel_cache_ttl_seconds,
+                    warm_channels_on_startup=tc.warm_channels_on_startup,
                 )
                 transports.append(transport)
             except ValueError as e:
