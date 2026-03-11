@@ -78,6 +78,7 @@ def test_init_creates_env_file_with_api_key_placeholders(tmp_path: Path):
     assert "# OPENAI_API_KEY=sk-..." in content
     assert "# GEMINI_API_KEY=..." in content
     assert "# GOOGLE_API_KEY=..." in content
+    assert "# LITELLM_LOG=DEBUG" in content
     # Should have restricted permissions
     mode = env_file.stat().st_mode & 0o777
     assert mode == 0o600

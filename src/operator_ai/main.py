@@ -18,6 +18,7 @@ from operator_ai.agent import run_agent
 from operator_ai.commands import CommandContext, dispatch_command
 from operator_ai.config import OPERATOR_DIR, Config, ConfigError, RoleConfig, load_config
 from operator_ai.jobs import JobRunner
+from operator_ai.litellm_logging import configure_litellm_logging
 from operator_ai.log_context import RunContextFilter, new_run_id, set_run_context
 from operator_ai.memory import MemoryCleaner, MemoryHarvester, MemoryStore, format_retention_mix
 from operator_ai.message_timestamps import attach_message_created_at
@@ -680,6 +681,8 @@ def _setup_logging() -> None:
         sh.setLevel(logging.INFO)
         sh.addFilter(ctx_filter)
         root.addHandler(sh)
+
+    configure_litellm_logging()
 
     # Quiet noisy libs
     for name in ("httpx", "httpcore", "litellm", "openai", *transport_logger_names()):

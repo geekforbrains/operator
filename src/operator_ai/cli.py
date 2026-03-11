@@ -33,6 +33,7 @@ from operator_ai.agents import scan_agents
 from operator_ai.config import OPERATOR_DIR, ConfigError, load_config
 from operator_ai.job_specs import find_job_spec, scan_job_specs
 from operator_ai.jobs import run_job_now
+from operator_ai.litellm_logging import configure_litellm_logging
 from operator_ai.log_context import RunContextFilter
 from operator_ai.main import async_main
 from operator_ai.memory import MemoryStore
@@ -129,6 +130,8 @@ def _setup_cli_logging() -> None:
     root.setLevel(logging.DEBUG)
     root.addHandler(fh)
     root.addHandler(sh)
+
+    configure_litellm_logging()
 
     for name in ("httpx", "httpcore", "litellm", "openai", *transport_logger_names()):
         logging.getLogger(name).setLevel(logging.WARNING)
@@ -327,6 +330,7 @@ def _scaffold_operator_home(
             "# OPENAI_API_KEY=sk-...\n"
             "# GEMINI_API_KEY=...\n"
             "# GOOGLE_API_KEY=...  # Alternative name LiteLLM also accepts for Gemini\n"
+            "# LITELLM_LOG=DEBUG   # Optional: include LiteLLM debug logs in operator.log\n"
         )
         env_file.write_text(env_content)
         env_file.chmod(0o600)

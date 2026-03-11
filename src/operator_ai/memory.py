@@ -314,6 +314,7 @@ async def _completion_with_fallback(
             return resp
         except Exception as e:
             last_error = e
+            logger.debug("[%s] model %s failure traceback", label, model, exc_info=e)
             if model != models[-1]:
                 logger.warning(
                     "[%s] model %s failed (%s: %s), trying next",

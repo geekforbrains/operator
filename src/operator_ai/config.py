@@ -355,4 +355,8 @@ def load_config(path: Path | None = None) -> Config:
 
     if config.runtime.env_file:
         _load_env_file(config.runtime.env_file, base_dir=path.parent)
+
+    from operator_ai.litellm_logging import configure_litellm_logging
+
+    configure_litellm_logging()
     return config

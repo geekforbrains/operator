@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import logging
 import os
 from zoneinfo import ZoneInfo
 
+import litellm
 import pytest
 
 from operator_ai.config import (
@@ -16,6 +18,35 @@ from operator_ai.config import (
     ensure_shared_symlink,
     load_config,
 )
+from operator_ai.litellm_logging import configure_litellm_logging
+
+
+@pytest.fixture
+def restore_litellm_loggers():
+    logger_state = []
+    for name in ("LiteLLM", "LiteLLM Router", "LiteLLM Proxy"):
+        logger = logging.getLogger(name)
+        logger_state.append(
+            (
+                logger,
+                list(logger.handlers),
+                logger.level,
+                logger.propagate,
+                logger.disabled,
+            )
+        )
+    suppress_debug_info = litellm.suppress_debug_info
+    try:
+        yield
+    finally:
+        litellm.suppress_debug_info = suppress_debug_info
+        for logger, handlers, level, propagate, disabled in logger_state:
+            logger.handlers.clear()
+            for handler in handlers:
+                logger.addHandler(handler)
+            logger.setLevel(level)
+            logger.propagate = propagate
+            logger.disabled = disabled
 
 
 def test_timezone_defaults_to_utc() -> None:
@@ -315,3 +346,54 @@ def test_load_config_reads_runtime_env_file(tmp_path, monkeypatch) -> None:
     load_config(config_path)
 
     assert os.environ["OPERATOR_RUNTIME_ENV_TEST"] == "loaded"
+
+
+def test_load_config_applies_litellm_log_level_from_runtime_env_file(
+    tmp_path,
+    monkeypatch,
+    restore_litellm_loggers,  # noqa: ARG001
+) -> None:
+    monkeypatch.delenv("LITELLM_LOG", raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text("LITELLM_LOG=DEBUG\n")
+    config_path = tmp_path / "operator.yaml"
+    config_path.write_text(
+        'runtime:\n  env_file: ".env"\ndefaults:\n  models:\n    - "test/model"\n'
+    )
+
+    load_config(config_path)
+
+    assert os.environ["LITELLM_LOG"] == "DEBUG"
+    assert litellm.suppress_debug_info is True
+    assert logging.getLogger("LiteLLM").level == logging.DEBUG
+
+
+def test_configure_litellm_logging_reuses_operator_handlers(
+    monkeypatch,
+    restore_litellm_loggers,  # noqa: ARG001
+) -> None:
+    monkeypatch.delenv("LITELLM_LOG", raising=False)
+    operator_logger = logging.getLogger("operator.test")
+    saved_handlers = list(operator_logger.handlers)
+    saved_level = operator_logger.level
+    saved_propagate = operator_logger.propagate
+    handler = logging.StreamHandler()
+    try:
+        operator_logger.handlers.clear()
+        operator_logger.addHandler(handler)
+        operator_logger.setLevel(logging.DEBUG)
+        operator_logger.propagate = False
+
+        configure_litellm_logging(operator_logger_name="operator.test")
+
+        llm_logger = logging.getLogger("LiteLLM")
+        assert litellm.suppress_debug_info is True
+        assert llm_logger.handlers == [handler]
+        assert llm_logger.propagate is False
+        assert llm_logger.level == logging.WARNING
+    finally:
+        operator_logger.handlers.clear()
+        for existing in saved_handlers:
+            operator_logger.addHandler(existing)
+        operator_logger.setLevel(saved_level)
+        operator_logger.propagate = saved_propagate

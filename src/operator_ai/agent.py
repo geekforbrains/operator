@@ -279,6 +279,7 @@ async def run_agent(
                 raise
             except Exception as e:
                 last_error = e
+                logger.debug("%s model %s failure traceback", step, model, exc_info=e)
                 if model != models[-1]:
                     logger.warning(
                         "%s model %s failed (%s: %s), trying next",
