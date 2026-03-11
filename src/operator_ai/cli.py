@@ -287,7 +287,6 @@ def _scaffold_operator_home(
     # Directories
     dirs = [
         home / "logs",
-        home / "state",
         home / "agents" / _DEFAULT_AGENT_NAME / "workspace",
         home / "jobs",
         home / "skills",

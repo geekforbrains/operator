@@ -132,10 +132,13 @@ def test_process_attachments_image_inline(tmp_path: Path):
     att = Attachment("photo.png", "image/png", len(image_bytes), "http://example.com/photo.png")
     blocks = asyncio.run(process_attachments([att], transport, tmp_path))
 
-    assert len(blocks) == 1
-    assert blocks[0]["type"] == "image_url"
+    assert len(blocks) == 2
+    assert blocks[0]["type"] == "text"
+    assert "inbox/photo.png" in blocks[0]["text"]
+    assert blocks[1]["type"] == "image_url"
     expected_b64 = base64.b64encode(image_bytes).decode()
-    assert blocks[0]["image_url"]["url"] == f"data:image/png;base64,{expected_b64}"
+    assert blocks[1]["image_url"]["url"] == f"data:image/png;base64,{expected_b64}"
+    assert (tmp_path / "inbox" / "photo.png").read_bytes() == image_bytes
 
 
 def test_process_attachments_non_image_saves_to_disk(tmp_path: Path):
@@ -151,8 +154,8 @@ def test_process_attachments_non_image_saves_to_disk(tmp_path: Path):
     assert len(blocks) == 1
     assert blocks[0]["type"] == "text"
     assert "report.pdf" in blocks[0]["text"]
-    assert (tmp_path / "uploads" / "report.pdf").exists()
-    assert (tmp_path / "uploads" / "report.pdf").read_bytes() == pdf_bytes
+    assert (tmp_path / "inbox" / "report.pdf").exists()
+    assert (tmp_path / "inbox" / "report.pdf").read_bytes() == pdf_bytes
 
 
 def test_process_attachments_download_failure(tmp_path: Path):
@@ -174,15 +177,15 @@ def test_process_attachments_duplicate_filename(tmp_path: Path):
     transport = AsyncMock(spec=Transport)
     transport.download_file = AsyncMock(return_value=b"data")
 
-    uploads = tmp_path / "uploads"
-    uploads.mkdir()
-    (uploads / "file.txt").write_bytes(b"existing")
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    (inbox / "file.txt").write_bytes(b"existing")
 
     att = Attachment("file.txt", "text/plain", 4, "http://example.com/file.txt")
     blocks = asyncio.run(process_attachments([att], transport, tmp_path))
 
     assert "file_1.txt" in blocks[0]["text"]
-    assert (uploads / "file_1.txt").exists()
+    assert (inbox / "file_1.txt").exists()
 
 
 def test_process_attachments_oversized_skipped(tmp_path: Path):
@@ -208,8 +211,8 @@ def test_process_attachments_sanitizes_filename(tmp_path: Path):
 
     assert len(blocks) == 1
     assert "passwd" in blocks[0]["text"]
-    # File should be in uploads dir, not escaped
-    assert (tmp_path / "uploads" / "passwd").exists()
+    # File should be in inbox dir, not escaped
+    assert (tmp_path / "inbox" / "passwd").exists()
     assert not (tmp_path / "etc").exists()
 
 

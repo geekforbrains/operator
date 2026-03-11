@@ -4,7 +4,6 @@ import asyncio
 import contextvars
 
 from operator_ai.tools.context import (
-    ROLE_GATED_TOOLS,
     UserContext,
     get_skill_filter,
     get_user_context,
@@ -39,39 +38,6 @@ def test_skill_filter_round_trip() -> None:
 def test_skill_filter_none_by_default() -> None:
     def _check() -> None:
         assert get_skill_filter() is None
-
-    contextvars.Context().run(_check)
-
-
-# --- ROLE_GATED_TOOLS tests ---
-
-
-def test_role_gated_tools_contains_manage_users() -> None:
-    assert "manage_users" in ROLE_GATED_TOOLS
-    assert ROLE_GATED_TOOLS["manage_users"] == "admin"
-
-
-def test_role_gate_passes_with_required_role() -> None:
-    """User with admin role should pass the gate for manage_users."""
-    user_ctx = UserContext(username="alice", roles=["admin", "dev"])
-    required_role = ROLE_GATED_TOOLS["manage_users"]
-    assert required_role in user_ctx.roles
-
-
-def test_role_gate_blocks_without_required_role() -> None:
-    """User without admin role should be blocked."""
-    user_ctx = UserContext(username="bob", roles=["dev"])
-    required_role = ROLE_GATED_TOOLS["manage_users"]
-    assert required_role not in user_ctx.roles
-
-
-def test_role_gate_blocks_when_no_user_context() -> None:
-    """No user context (e.g., cron job) should be blocked."""
-
-    def _check() -> None:
-        user_ctx = get_user_context()
-        required_role = ROLE_GATED_TOOLS["manage_users"]
-        assert user_ctx is None or required_role not in (user_ctx.roles if user_ctx else [])
 
     contextvars.Context().run(_check)
 

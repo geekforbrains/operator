@@ -3,6 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 from operator_ai.store import get_store
+from operator_ai.tools.context import UserContext, get_user_context, set_user_context
 from operator_ai.tools.registry import tool
 
 
@@ -116,3 +117,33 @@ async def manage_users(
         return f"[error: role '{role}' not found for '{username}']"
 
     return f"[error: unknown action '{action}'. Use: list, add, remove, link, unlink, add_role, remove_role]"
+
+
+@tool(description="Set your own timezone using an IANA timezone name such as America/Vancouver.")
+async def set_timezone(timezone: str) -> str:
+    """Set the current user's timezone.
+
+    Args:
+        timezone: IANA timezone name, for example "America/Vancouver".
+    """
+    user_ctx = get_user_context()
+    if user_ctx is None:
+        return "[error: timezone can only be set during a user conversation]"
+
+    store = get_store()
+    if store.get_user(user_ctx.username) is None:
+        return f"[error: user '{user_ctx.username}' not found]"
+
+    try:
+        store.set_user_timezone(user_ctx.username, timezone)
+    except ValueError as e:
+        return f"[error: {e}]"
+
+    set_user_context(
+        UserContext(
+            username=user_ctx.username,
+            roles=list(user_ctx.roles),
+            timezone=timezone,
+        )
+    )
+    return f"Timezone set to {timezone}."

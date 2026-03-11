@@ -327,5 +327,5 @@ def test_subagent_prompt_uses_shared_prompt_contract(monkeypatch) -> None:
 
     stable, dynamic = prompt.split(CACHE_BOUNDARY, 1)
     assert stable.startswith("# System\n\n# Agent\n\noperator")
-    assert "You are a focused sub-agent." in dynamic
+    assert "You are a focused sub-agent running in an ephemeral child run." in dynamic
     assert "Focus on the timezone-aware interpretation." in dynamic

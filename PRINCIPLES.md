@@ -195,9 +195,10 @@ At a minimum, each workspace should include reserved directories such as:
 - `shared/` for cross-agent file sharing
 
 `shared/` lives at `~/.operator/shared/` and is symlinked into each agent's
-workspace so every agent sees the same shared root. Agents read from any
-subdirectory and write to their own. This gives every agent access to shared
-files without reaching into each other's workspaces directly.
+workspace so every agent sees the same shared root. By convention, agents read
+from any subdirectory and write to their own `shared/<agent>/` area. The base
+workspace contract and `SYSTEM.md` should steer agents toward this shared path
+for cross-agent exchange.
 
 Inside `shared/`, files are organized into per-agent subdirectories so it is
 clear which agent produced what:
@@ -211,6 +212,10 @@ shared/
 The runtime ensures these subdirectories exist for every configured agent at
 startup. If a new agent is added to `operator.yaml`, its shared directory is
 created automatically.
+
+Inbound attachments and imported source files should land in `inbox/` so they
+remain available as workspace artifacts instead of living only in transient
+conversation context.
 
 The base workspace contract belongs in `SYSTEM.md`, not in a generated
 workspace-specific file. That keeps the rules in one global place instead of
@@ -281,8 +286,9 @@ system-wide default timezone setting in config.
 
 When a user's timezone is null, the agent's injected context includes a note
 instructing it to ask the user for their timezone. Once set, the agent uses the
-stored timezone for interpreting and presenting times. All timezone conversion
-is handled by tools — the model never does timezone math directly.
+stored timezone for interpreting and presenting times. Timezone persistence and
+display formatting are handled by runtime code and dedicated tools rather than
+freehand model date math.
 
 ### Jobs
 
@@ -297,21 +303,18 @@ memory, and workspace.
 
 ### Subagents
 
-Subagents are a way to delegate focused work to another agent. They reuse the
-same basic model: standing instructions, scoped memory, workspace access, tool
-use, and persisted state.
+Subagents are fresh child runs used to offload focused work. If no target agent
+is specified, the child run is a fresh run of the current agent. If a target
+agent is specified, the child run uses that agent's own `AGENT.md`, memory,
+skills, workspace, and configured permissions.
 
-When a subagent is spawned, it receives its own identity — its own `AGENT.md`,
-memory, and skills. It does not inherit the parent agent's context or memory
-scope.
+Subagent runs are ephemeral. They return a result to the parent run and are not
+treated as durable conversations that can be resumed later. Anything that needs
+to survive beyond the child run should be written to files, memory, or state.
 
-Effective permissions for a subagent are the intersection of the calling
-user's role and the target agent's configured permissions. The parent agent's
-permissions are not a factor. This means a user with broad access can delegate
-through a restricted agent to a more capable one, as long as their role permits
-it. The agent acts on behalf of the user, not on its own authority. This
-prevents privilege escalation through delegation while keeping the access model
-consistent with direct user interaction.
+Users may delegate only to agents they can access directly. Once an agent is
+selected, it runs with its own configured tool and skill surface. The parent
+agent's permissions are not inherited by the child run.
 
 ### Skills
 

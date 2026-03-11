@@ -89,7 +89,7 @@ def _build_subagent_prompt(
 
 
 @tool(
-    description="Spawn a sub-agent to handle a focused sub-task. The sub-agent gets its own conversation and runs to completion. Returns the sub-agent's final response.",
+    description="Spawn a sub-agent to handle a focused sub-task. Omitting agent starts a fresh run of the current agent; specifying agent switches to that agent's own prompt, memory, tools, and workspace. Returns the sub-agent's final response.",
 )
 async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
     """Spawn a sub-agent for a focused sub-task.
@@ -97,7 +97,7 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
     Args:
         task: Clear description of what the sub-agent should accomplish.
         context: Optional additional context or data for the sub-agent.
-        agent: Optional agent name to spawn. Uses a different agent's config (prompt, models, workspace). If omitted, inherits the calling agent's context.
+        agent: Optional agent name to spawn. If omitted, starts a fresh run of the current agent. If provided, uses the target agent's own config, memory, skills, and workspace.
     """
     current_context = _context_var.get()
     if current_context is None:

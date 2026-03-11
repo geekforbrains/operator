@@ -7,6 +7,21 @@ back into alignment.
 
 ## Latest Changes
 
+- `High-Level System Model`: complete
+- Aligned `workspace/shared` on the shared root, created per-agent shared
+  subdirectories at layout time, and updated workspace guidance to treat
+  `shared/<agent>/` as the convention for cross-agent exchange.
+- Moved persisted attachment imports into `inbox/` so inbound files remain
+  available as workspace artifacts instead of living only in message context.
+- Removed the stray top-level scaffolded `state/` directory so runtime state
+  lives only in `db/` and per-agent `state/` directories.
+- Removed the runtime-only role gate for `manage_users` so agents run with
+  their configured toolsets once a user can access that agent.
+- Added a self-service `set_timezone` tool and clarified timezone handling so
+  persistence and formatting are runtime/tool responsibilities.
+- Clarified subagents as ephemeral child runs, with omitted `agent` meaning a
+  fresh run of the current agent and explicit `agent` selecting another agent's
+  own identity and tool surface.
 - `Design Goals`: complete
 - Refactored transport config into a generic `type` plus validated `env` and
   `settings` sections, so config loading and runtime transport creation keep

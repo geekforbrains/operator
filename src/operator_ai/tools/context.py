@@ -39,11 +39,3 @@ def set_skill_filter(f: Callable[[str], bool] | None) -> None:
 
 def get_skill_filter() -> Callable[[str], bool] | None:
     return _skill_filter_var.get()
-
-
-# Tools that require a specific role to execute.
-# The tool remains visible to the LLM but execution is blocked if the
-# user lacks the required role.
-ROLE_GATED_TOOLS: dict[str, str] = {
-    "manage_users": "admin",
-}

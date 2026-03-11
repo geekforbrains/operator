@@ -16,7 +16,7 @@ from operator_ai.config import Config, ThinkingLevel, ensure_shared_symlink
 from operator_ai.context import prepare_context
 from operator_ai.tools import registry as tool_registry
 from operator_ai.tools import subagent
-from operator_ai.tools.context import ROLE_GATED_TOOLS, get_skill_filter, get_user_context
+from operator_ai.tools.context import get_skill_filter, get_user_context
 from operator_ai.tools.registry import ToolDef
 from operator_ai.tools.workspace import set_workspace
 from operator_ai.utils import truncate
@@ -416,16 +416,6 @@ async def run_agent(
                 logger.warning("%s unknown tool: %s", step, func_name)
             else:
                 result = ""
-
-                # Role gate: block execution if the user lacks the required role
-                required_role = ROLE_GATED_TOOLS.get(func_name)
-                if required_role:
-                    user_ctx = get_user_context()
-                    if not user_ctx or required_role not in user_ctx.roles:
-                        result = f"[error: this tool requires the '{required_role}' role]"
-                        logger.warning(
-                            "%s role gate: %s requires '%s'", step, func_name, required_role
-                        )
 
                 if not result:
                     logger.info("%s tool %s(%s)", step, func_name, truncate(str(args), 150))

@@ -182,7 +182,10 @@ def test_spawn_agent_without_explicit_target_uses_current_agent_prompt(monkeypat
     assert result == "done"
     assert captured["agent_name"] == "operator"
     assert "# Agent\n\noperator" in captured["system_prompt"]
-    assert "You are a focused sub-agent." in captured["system_prompt"]
+    assert (
+        "You are a focused sub-agent running in an ephemeral child run."
+        in captured["system_prompt"]
+    )
     assert set(captured["kwargs"]) == {
         "messages",
         "models",

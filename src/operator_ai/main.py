@@ -96,11 +96,12 @@ async def process_attachments(
 ) -> list[dict]:
     """Download attachments and return multimodal content blocks.
 
-    Images are inlined as base64 image_url blocks.
-    Other files are saved to workspace/uploads/ and described in a text block.
+    All attachments are saved to workspace/inbox/ so they remain available as
+    workspace artifacts. Small images are also inlined as base64 image_url
+    blocks for direct visual inspection by the model.
     """
     blocks: list[dict] = []
-    uploads_dir = workspace / "uploads"
+    inbox_dir = workspace / "inbox"
 
     for att in attachments:
         if att.size > MAX_DOWNLOAD_SIZE:
@@ -118,33 +119,30 @@ async def process_attachments(
             blocks.append({"type": "text", "text": f"[failed to download: {att.filename}]"})
             continue
 
+        inbox_dir.mkdir(parents=True, exist_ok=True)
+        safe_name = Path(att.filename).name or "unnamed"
+        dest = inbox_dir / safe_name
+        # Avoid overwriting — append suffix if needed
+        if dest.exists():
+            stem, suffix = dest.stem, dest.suffix
+            counter = 1
+            while dest.exists():
+                dest = inbox_dir / f"{stem}_{counter}{suffix}"
+                counter += 1
+        dest.write_bytes(data)
+        blocks.append(
+            {
+                "type": "text",
+                "text": f"[file saved: inbox/{dest.name} ({att.content_type}, {len(data)} bytes)]",
+            }
+        )
+
         if att.content_type in _IMAGE_TYPES and len(data) <= MAX_INLINE_SIZE:
             b64 = base64.b64encode(data).decode()
             blocks.append(
                 {
                     "type": "image_url",
                     "image_url": {"url": f"data:{att.content_type};base64,{b64}"},
-                }
-            )
-        else:
-            # Save to workspace/uploads/ so the agent can access it
-            uploads_dir.mkdir(parents=True, exist_ok=True)
-            safe_name = Path(att.filename).name or "unnamed"
-            dest = uploads_dir / safe_name
-            # Avoid overwriting — append suffix if needed
-            if dest.exists():
-                stem, suffix = dest.stem, dest.suffix
-                counter = 1
-                while dest.exists():
-                    dest = uploads_dir / f"{stem}_{counter}{suffix}"
-                    counter += 1
-            dest.write_bytes(data)
-            blocks.append(
-                {
-                    "type": "text",
-                    "text": (
-                        f"[file saved: uploads/{dest.name} ({att.content_type}, {len(data)} bytes)]"
-                    ),
                 }
             )
 

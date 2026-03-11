@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
 from operator_ai.store import Store
-from operator_ai.tools.users import manage_users
+from operator_ai.tools.context import UserContext, get_user_context, set_user_context
+from operator_ai.tools.users import manage_users, set_timezone
 
 
 @pytest.fixture
@@ -220,3 +222,42 @@ def test_unknown_action(store: Store) -> None:
     with _patched(store):
         result = _run(manage_users(action="explode"))
     assert "[error: unknown action" in result
+
+
+# ── set_timezone ───────────────────────────────────────────
+
+
+def test_set_timezone_updates_current_user(store: Store) -> None:
+    store.add_user("alice")
+
+    async def _call_async() -> tuple[str, str | None]:
+        set_user_context(UserContext(username="alice", roles=["member"]))
+        with _patched(store):
+            result = await set_timezone("America/Vancouver")
+        current = get_user_context()
+        return result, current.timezone if current else None
+
+    result, current_tz = contextvars.Context().run(lambda: _run(_call_async()))
+
+    assert result == "Timezone set to America/Vancouver."
+    assert store.get_user_timezone("alice") == "America/Vancouver"
+    assert current_tz == "America/Vancouver"
+
+
+def test_set_timezone_requires_user_context(store: Store) -> None:
+    with _patched(store):
+        result = contextvars.Context().run(lambda: _run(set_timezone("America/Vancouver")))
+    assert result == "[error: timezone can only be set during a user conversation]"
+
+
+def test_set_timezone_rejects_invalid_timezone(store: Store) -> None:
+    store.add_user("alice")
+
+    async def _call_async() -> str:
+        set_user_context(UserContext(username="alice", roles=["member"]))
+        with _patched(store):
+            return await set_timezone("Mars/Olympus")
+
+    result = contextvars.Context().run(lambda: _run(_call_async()))
+
+    assert "[error: Unknown timezone:" in result

@@ -17,6 +17,8 @@ venv/
 .env
 .env.*
 .python-version
+.claude/
+uv.lock
 
 # Test and lint caches
 .pytest_cache/

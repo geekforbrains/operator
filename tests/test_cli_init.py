@@ -44,6 +44,7 @@ def test_init_creates_config_and_shows_setup_reminder(tmp_path: Path):
     assert result.exit_code == 0
     assert "operator setup" in result.output
     assert "operator user add" in result.output
+    assert not (op_dir / "state").exists()
 
     # Config file was written with expected content
     config_file = op_dir / "operator.yaml"

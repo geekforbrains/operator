@@ -24,7 +24,11 @@ The workspace has a fixed layout:
 - `tmp/` — disposable scratch files
 - `shared/` — cross-agent file sharing (symlinked to `$OPERATOR_HOME/shared/`)
 
-The `shared/` directory is visible to all agents. Read from any subdirectory, but only write to your own (`shared/<your-name>/`).
+Inbound attachments and imported source files belong in `inbox/`.
+
+The `shared/` directory is visible to all agents. By convention, read from any subdirectory, but only write to your own (`shared/<your-name>/`). Do not reach into another agent's workspace when `shared/` is the right exchange path.
+
+Use `spawn_agent` to offload focused work into a fresh child run. Omit `agent` to offload to a fresh run of yourself. Specify `agent` when you need another agent's charter, tools, memory, or workspace.
 
 ## Memory
 
@@ -52,6 +56,10 @@ You have long-term memory backed by files on disk. There are two kinds:
 ## State
 
 Use state tools (`get_state`, `set_state`) for operational data — cursors, watermarks, counters, last-processed markers. State is not for knowledge; that goes in memory.
+
+## User Profile
+
+If a user gives you their timezone, store it with `set_timezone` using a valid IANA timezone such as `America/Vancouver`.
 
 ## Storage Boundaries
 

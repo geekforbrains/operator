@@ -49,7 +49,7 @@ def test_ensure_layout_creates_full_tree(tmp_path: Path) -> None:
         # Shared symlink
         link = agent / "workspace" / "shared"
         assert link.is_symlink()
-        assert link.resolve() == (op_dir / "shared" / name).resolve()
+        assert link.resolve() == (op_dir / "shared").resolve()
 
         # Memory subdirs
         for mem_sub in ("rules", "notes", "trash"):
@@ -76,7 +76,7 @@ def test_ensure_layout_creates_per_agent_shared_dirs(tmp_path: Path) -> None:
 # ── Symlink correctness ────────────────────────────────────────
 
 
-def test_shared_symlink_points_to_agent_subdir(tmp_path: Path) -> None:
+def test_shared_symlink_points_to_shared_root(tmp_path: Path) -> None:
     op_dir = tmp_path / ".operator"
     config = _make_config("hermy")
 
@@ -87,13 +87,13 @@ def test_shared_symlink_points_to_agent_subdir(tmp_path: Path) -> None:
         ensure_layout(config)
 
     link = op_dir / "agents" / "hermy" / "workspace" / "shared"
-    target = op_dir / "shared" / "hermy"
+    target = op_dir / "shared"
     assert link.is_symlink()
     assert link.resolve() == target.resolve()
 
-    # Writing via the symlink should appear in the shared dir
-    (link / "test.txt").write_text("hello")
-    assert (target / "test.txt").read_text() == "hello"
+    # Writing via the symlink should appear in the shared root
+    (link / "hermy" / "test.txt").write_text("hello")
+    assert (target / "hermy" / "test.txt").read_text() == "hello"
 
 
 # ── Idempotency ─────────────────────────────────────────────────
