@@ -393,10 +393,11 @@ This keeps memory:
 Operator uses a single file-backed memory system with two behaviors:
 
 - `rules/` are always injected into the prompt. They should remain short,
-  curated, and high-signal. If a rule does not need to shape behavior every
-  time, it should not be a rule.
+  curated, and high-signal. Rules are standing instructions. If something does
+  not need to shape behavior every time, it should not be a rule.
 - `notes/` are searched on demand. They hold durable knowledge that should not
-  automatically bloat the prompt on every turn.
+  automatically bloat the prompt on every turn. Time-bound knowledge belongs in
+  notes rather than rules.
 
 Rule examples:
 
@@ -429,8 +430,12 @@ users/gavin/rules/concise-answers.md
 agents/operator/notes/release-process.md
 ```
 
-That is readable by humans and stable enough for dedicated memory tools to use
-for update and delete operations.
+That is readable by humans and stable enough for the runtime to use as the
+underlying identity.
+
+Agent-facing tools should not expose raw file paths when a more deterministic
+domain shape exists. For memory, agents should work in terms of scope, kind,
+and a short stable key. The runtime maps that key to the underlying file path.
 
 ### Scope and behavior come from the path
 
@@ -498,9 +503,9 @@ what matters.
 Some memory is only useful for a limited time. Examples include dates, temporary
 priorities, time-bound instructions, and short-term facts.
 
-Memory tools accept a relative `ttl` (e.g., `"3d"`, `"2w"`) and compute an
-absolute `expires_at` timestamp deterministically. The model never does date
-math directly.
+Note tools accept a relative `ttl` (e.g., `"3d"`, `"2w"`) and compute an
+absolute `expires_at` timestamp deterministically. Rules do not expire. The
+model never does date math directly.
 
 #### Trash instead of hard delete
 
@@ -511,7 +516,7 @@ Principles:
 
 - agents never read `trash/`
 - users can inspect `trash/`
-- expiry is deterministic
+- expiry takes effect at read time
 - memory remains debuggable
 
 This preserves the advantages of a file-backed system while keeping active
@@ -524,12 +529,11 @@ dedicated memory tools that enforce the directory layout and lifecycle rules.
 
 At a high level, the memory tool layer should support:
 
-- creating rule memory
-- creating note memory
+- saving rule memory by deterministic key
+- saving note memory by deterministic key
 - searching notes
 - listing rules and notes
-- updating a memory item by path
-- forgetting a memory item
+- forgetting a memory item by deterministic key
 - sweeping expired memory into `trash/`
 
 The tools may hide the file details from the agent, but the files remain the

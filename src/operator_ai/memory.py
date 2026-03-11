@@ -16,6 +16,7 @@ from operator_ai.config import OPERATOR_DIR
 logger = logging.getLogger("operator.memory")
 
 _TTL_RE = re.compile(r"^(\d+)\s*([mhdw])$", re.IGNORECASE)
+_MEMORY_DIR_BY_KIND = {"rule": "rules", "note": "notes"}
 
 
 def parse_ttl(ttl: str) -> timedelta:
@@ -131,6 +132,7 @@ def _parse_memory_file(path: Path, relative_to: Path) -> MemoryFile | None:
     return MemoryFile(
         path=path,
         relative_path=relative_path,
+        key=path.stem,
         created_at=created_at,
         updated_at=updated_at,
         expires_at=expires_at,
@@ -171,10 +173,25 @@ def _has_ripgrep() -> bool:
     return shutil.which("rg") is not None
 
 
+def _normalize_key(key: str, max_len: int = 80) -> str:
+    """Normalize a memory key into a stable filename-safe slug."""
+    if not re.search(r"[a-z0-9]", key, re.IGNORECASE):
+        raise ValueError(f"Invalid memory key: {key!r}")
+    normalized = _slugify(key, max_len=max_len)
+    return normalized
+
+
+def _is_expired(expires_at: datetime | None, *, now: datetime | None = None) -> bool:
+    if expires_at is None:
+        return False
+    return expires_at <= (now or _now_utc())
+
+
 @dataclass
 class MemoryFile:
     path: Path
     relative_path: str
+    key: str
     created_at: datetime | None
     updated_at: datetime | None
     expires_at: datetime | None
@@ -193,62 +210,76 @@ class MemoryStore:
     def _relative_to(self) -> Path:
         return self._base_dir
 
-    # ── Create ───────────────────────────────────────────────────
+    def _memory_dir(self, scope: str, kind: str) -> Path:
+        try:
+            subdir = _MEMORY_DIR_BY_KIND[kind]
+        except KeyError:
+            raise ValueError(f"Invalid memory kind: {kind!r}") from None
+        return self._scope_dir(scope) / subdir
 
-    def create_rule(self, scope: str, content: str, ttl: str | None = None) -> str:
-        """Write a rule file and return its relative path."""
-        scope_dir = self._scope_dir(scope)
-        rules_dir = scope_dir / "rules"
-        rules_dir.mkdir(parents=True, exist_ok=True)
+    def _memory_path(self, scope: str, kind: str, key: str) -> Path:
+        normalized_key = _normalize_key(key)
+        return self._memory_dir(scope, kind) / f"{normalized_key}.md"
 
-        slug = _slugify(content)
-        path = _unique_path(rules_dir, slug)
+    def _read_path(self, path: Path, *, include_expired: bool = False) -> MemoryFile | None:
+        if not path.is_file():
+            return None
+        mf = _parse_memory_file(path, self._relative_to())
+        if mf is None:
+            return None
+        if not include_expired and _is_expired(mf.expires_at):
+            return None
+        return mf
 
-        expires_at = None
-        if ttl:
-            expires_at = _now_utc() + parse_ttl(ttl)
+    def _upsert(
+        self,
+        scope: str,
+        kind: str,
+        key: str,
+        content: str,
+        *,
+        ttl: str | None = None,
+    ) -> str:
+        path = self._memory_path(scope, kind, key)
+        path.parent.mkdir(parents=True, exist_ok=True)
 
-        _write_memory_file(path, content, expires_at=expires_at)
+        existing = self._read_path(path, include_expired=True)
+        expires_at = _now_utc() + parse_ttl(ttl) if ttl else None
+        _write_memory_file(
+            path,
+            content,
+            created_at=existing.created_at if existing else None,
+            updated_at=_now_utc(),
+            expires_at=expires_at,
+        )
         relative = str(path.relative_to(self._relative_to()))
-        logger.info("created rule: %s", relative)
+        logger.info("saved %s: %s", kind, relative)
         return relative
 
-    def create_note(self, scope: str, content: str, ttl: str | None = None) -> str:
-        """Write a note file and return its relative path."""
-        scope_dir = self._scope_dir(scope)
-        notes_dir = scope_dir / "notes"
-        notes_dir.mkdir(parents=True, exist_ok=True)
+    def upsert_rule(self, scope: str, key: str, content: str) -> str:
+        """Create or replace a rule file and return its relative path."""
+        return self._upsert(scope, "rule", key, content)
 
-        slug = _slugify(content)
-        path = _unique_path(notes_dir, slug)
-
-        expires_at = None
-        if ttl:
-            expires_at = _now_utc() + parse_ttl(ttl)
-
-        _write_memory_file(path, content, expires_at=expires_at)
-        relative = str(path.relative_to(self._relative_to()))
-        logger.info("created note: %s", relative)
-        return relative
+    def upsert_note(self, scope: str, key: str, content: str, ttl: str | None = None) -> str:
+        """Create or replace a note file and return its relative path."""
+        return self._upsert(scope, "note", key, content, ttl=ttl)
 
     # ── List ─────────────────────────────────────────────────────
 
     def list_rules(self, scope: str) -> list[MemoryFile]:
         """List all rule files in the given scope."""
-        rules_dir = self._scope_dir(scope) / "rules"
-        return self._list_files(rules_dir)
+        return self._list_files(self._memory_dir(scope, "rule"))
 
     def list_notes(self, scope: str) -> list[MemoryFile]:
         """List all note files in the given scope."""
-        notes_dir = self._scope_dir(scope) / "notes"
-        return self._list_files(notes_dir)
+        return self._list_files(self._memory_dir(scope, "note"))
 
     def _list_files(self, directory: Path) -> list[MemoryFile]:
         if not directory.is_dir():
             return []
         results: list[MemoryFile] = []
         for path in sorted(directory.glob("*.md")):
-            mf = _parse_memory_file(path, self._relative_to())
+            mf = self._read_path(path)
             if mf is not None:
                 results.append(mf)
         return results
@@ -261,7 +292,7 @@ class MemoryStore:
         Uses ripgrep for content search when available, falls back to
         pathlib glob + read.
         """
-        notes_dir = self._scope_dir(scope) / "notes"
+        notes_dir = self._memory_dir(scope, "note")
         if not notes_dir.is_dir():
             return []
 
@@ -326,55 +357,35 @@ class MemoryStore:
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
             return []
 
-    # ── Read ─────────────────────────────────────────────────────
+    def get_rule(self, scope: str, key: str) -> MemoryFile | None:
+        """Read a specific active rule by deterministic key."""
+        return self._read_path(self._memory_path(scope, "rule", key))
 
-    def read(self, relative_path: str) -> MemoryFile | None:
-        """Read a specific memory file by its relative path."""
-        path = self._base_dir / relative_path
-        if not path.is_file():
-            return None
-        return _parse_memory_file(path, self._relative_to())
+    def get_note(self, scope: str, key: str) -> MemoryFile | None:
+        """Read a specific active note by deterministic key."""
+        return self._read_path(self._memory_path(scope, "note", key))
 
-    # ── Update ───────────────────────────────────────────────────
-
-    def update(self, relative_path: str, content: str) -> bool:
-        """Update a memory file's content and bump updated_at."""
-        path = self._base_dir / relative_path
-        if not path.is_file():
-            return False
-
-        existing = _parse_memory_file(path, self._relative_to())
-        if existing is None:
-            return False
-
-        _write_memory_file(
-            path,
-            content,
-            created_at=existing.created_at,
-            updated_at=_now_utc(),
-            expires_at=existing.expires_at,
-        )
-        logger.info("updated memory: %s", relative_path)
-        return True
-
-    # ── Forget ───────────────────────────────────────────────────
-
-    def forget(self, relative_path: str) -> bool:
+    def _forget_path(self, path: Path) -> bool:
         """Move a memory file to trash (not hard delete)."""
-        path = self._base_dir / relative_path
         if not path.is_file():
             return False
 
-        # Determine the trash directory: it's a sibling of rules/ or notes/
-        # e.g., agents/<name>/memory/notes/foo.md → agents/<name>/memory/trash/foo.md
         parent = path.parent
         trash_dir = parent.parent / "trash"
         trash_dir.mkdir(parents=True, exist_ok=True)
 
         dest = _unique_path(trash_dir, path.stem)
         path.rename(dest)
-        logger.info("moved to trash: %s → %s", relative_path, dest.name)
+        logger.info("moved to trash: %s → %s", path, dest)
         return True
+
+    def forget_rule(self, scope: str, key: str) -> bool:
+        """Move a rule file to trash by deterministic key."""
+        return self._forget_path(self._memory_path(scope, "rule", key))
+
+    def forget_note(self, scope: str, key: str) -> bool:
+        """Move a note file to trash by deterministic key."""
+        return self._forget_path(self._memory_path(scope, "note", key))
 
     # ── Sweep expired ────────────────────────────────────────────
 
@@ -401,10 +412,8 @@ class MemoryStore:
                 mf = _parse_memory_file(md_path, self._relative_to())
                 if mf is None:
                     continue
-                if mf.expires_at is not None and mf.expires_at <= now:
-                    relative = str(md_path.relative_to(self._relative_to()))
-                    if self.forget(relative):
-                        count += 1
+                if _is_expired(mf.expires_at, now=now) and self._forget_path(md_path):
+                    count += 1
 
         if count:
             logger.info("swept %d expired memory files", count)

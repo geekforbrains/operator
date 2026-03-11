@@ -7,6 +7,21 @@ back into alignment.
 
 ## Latest Changes
 
+- `Memory Model`: complete
+- Replaced path-based agent memory tools with deterministic key-based
+  `save_rule`, `save_note`, `forget_rule`, and `forget_note` operations so
+  agents work in terms of scope and stable keys instead of filesystem paths.
+- Enforced private-conversation gating for all user-scoped memory operations,
+  including reads and listing, rather than only gating writes.
+- Made expiry take effect at read time so expired rules stop injecting and
+  expired notes stop appearing in list/search immediately; the sweeper now acts
+  only as cleanup into `trash/`.
+- Clarified in `PRINCIPLES.md` that rules are standing instructions, TTL applies
+  only to notes, and agent-facing tools should prefer deterministic domain
+  operations over raw paths when possible.
+- Removed the dead embedding/harvester/cleaner memory config surface and stale
+  test references so the schema reflects the current explicit file-backed
+  memory model.
 - `High-Level System Model`: complete
 - Aligned `workspace/shared` on the shared root, created per-agent shared
   subdirectories at layout time, and updated workspace guidance to treat

@@ -440,7 +440,7 @@ class Dispatcher:
         memory_tools.configure(
             {
                 "memory_store": self.memory_store,
-                "user_id": username,
+                "username": username,
                 "agent_name": transport.agent_name,
                 "allow_user_scope": msg.is_private,
             }

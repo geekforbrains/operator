@@ -290,7 +290,7 @@ async def _execute_job(
         memory_tools.configure(
             {
                 "memory_store": memory_store,
-                "user_id": "",
+                "username": "",
                 "agent_name": agent_name,
                 "allow_user_scope": False,
             }

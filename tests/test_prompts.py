@@ -136,8 +136,8 @@ def test_transport_extra_in_dynamic_suffix(monkeypatch) -> None:
 def test_global_rules_injected(monkeypatch, tmp_path) -> None:
     _stub_prompts(monkeypatch)
     store = MemoryStore(base_dir=tmp_path)
-    store.create_rule("global", "Be concise")
-    store.create_rule("global", "Use uv over pip")
+    store.upsert_rule("global", "response-style", "Be concise")
+    store.upsert_rule("global", "tooling-preference", "Use uv over pip")
 
     prompt = assemble_system_prompt(
         config=_make_config(tmp_path),
@@ -156,7 +156,7 @@ def test_global_rules_injected(monkeypatch, tmp_path) -> None:
 def test_agent_rules_injected(monkeypatch, tmp_path) -> None:
     _stub_prompts(monkeypatch)
     store = MemoryStore(base_dir=tmp_path)
-    store.create_rule("agent:operator", "Always check tests before committing")
+    store.upsert_rule("agent:operator", "pre-commit-checks", "Always check tests before committing")
 
     prompt = assemble_system_prompt(
         config=_make_config(tmp_path),
@@ -172,7 +172,7 @@ def test_agent_rules_injected(monkeypatch, tmp_path) -> None:
 def test_user_rules_injected_when_private(monkeypatch, tmp_path) -> None:
     _stub_prompts(monkeypatch)
     store = MemoryStore(base_dir=tmp_path)
-    store.create_rule("user:gavin", "Prefer verbose output")
+    store.upsert_rule("user:gavin", "response-depth", "Prefer verbose output")
 
     prompt = assemble_system_prompt(
         config=_make_config(tmp_path),
@@ -190,7 +190,7 @@ def test_user_rules_injected_when_private(monkeypatch, tmp_path) -> None:
 def test_user_rules_not_injected_when_not_private(monkeypatch, tmp_path) -> None:
     _stub_prompts(monkeypatch)
     store = MemoryStore(base_dir=tmp_path)
-    store.create_rule("user:gavin", "Prefer verbose output")
+    store.upsert_rule("user:gavin", "response-depth", "Prefer verbose output")
 
     prompt = assemble_system_prompt(
         config=_make_config(tmp_path),
@@ -210,9 +210,9 @@ def test_user_rules_not_injected_when_not_private(monkeypatch, tmp_path) -> None
 def test_all_rule_scopes_in_order(monkeypatch, tmp_path) -> None:
     _stub_prompts(monkeypatch)
     store = MemoryStore(base_dir=tmp_path)
-    store.create_rule("global", "Global rule")
-    store.create_rule("agent:operator", "Agent rule")
-    store.create_rule("user:gavin", "User rule")
+    store.upsert_rule("global", "global-rule", "Global rule")
+    store.upsert_rule("agent:operator", "agent-rule", "Agent rule")
+    store.upsert_rule("user:gavin", "user-rule", "User rule")
 
     prompt = assemble_system_prompt(
         config=_make_config(tmp_path),
@@ -234,7 +234,7 @@ def test_all_rule_scopes_in_order(monkeypatch, tmp_path) -> None:
 def test_rules_after_transport_extra(monkeypatch, tmp_path) -> None:
     _stub_prompts(monkeypatch)
     store = MemoryStore(base_dir=tmp_path)
-    store.create_rule("global", "Be helpful")
+    store.upsert_rule("global", "helpfulness", "Be helpful")
 
     prompt = assemble_system_prompt(
         config=_make_config(tmp_path),

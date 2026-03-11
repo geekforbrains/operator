@@ -8,7 +8,6 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from croniter import croniter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger("operator.config")
@@ -116,75 +115,12 @@ class AgentConfig(StrictConfigModel):
         return _normalize_models(values)
 
 
-class ScheduledTaskConfig(StrictConfigModel):
-    enabled: bool = False
-    schedule: str = ""
-    models: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_models(cls, values: Any) -> Any:
-        return _normalize_models(values)
-
-    @model_validator(mode="after")
-    def validate_required_when_enabled(self) -> ScheduledTaskConfig:
-        if not self.enabled:
-            return self
-        label = type(self).__name__.removesuffix("Config").lower()
-        missing = []
-        if not self.schedule:
-            missing.append("schedule")
-        if not self.models:
-            missing.append("model(s)")
-        if missing:
-            raise ValueError(
-                f"memory.{label} is enabled but missing required fields: {', '.join(missing)}"
-            )
-        if not croniter.is_valid(self.schedule):
-            raise ValueError(
-                f"memory.{label}.schedule is not a valid cron expression: {self.schedule!r}"
-            )
-        return self
-
-
-class HarvesterConfig(ScheduledTaskConfig):
-    pass
-
-
-class CleanerConfig(ScheduledTaskConfig):
-    pass
-
-
-class MemoryConfig(StrictConfigModel):
-    embed_model: str = ""
-    embed_dimensions: int = Field(default=1536, gt=0)
-    max_memories: int = Field(default=10000, gt=0)
-    inject_top_k: int = Field(default=5, ge=0)
-    inject_min_relevance: float = Field(default=0.1, ge=0.0, le=1.0)
-    candidate_ttl_days: int = Field(default=14, gt=0)
-    harvester: HarvesterConfig = Field(default_factory=HarvesterConfig)
-    cleaner: CleanerConfig = Field(default_factory=CleanerConfig)
-
-    @property
-    def enabled(self) -> bool:
-        return self.harvester.enabled or self.cleaner.enabled
-
-    @model_validator(mode="after")
-    def validate_required_when_enabled(self) -> MemoryConfig:
-        if not self.enabled:
-            return self
-        if not self.embed_model:
-            raise ValueError("memory.embed_model is required when harvester or cleaner is enabled")
-        return self
-
-
 class Config(StrictConfigModel):
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     agents: dict[str, AgentConfig] = Field(default_factory=dict)
     roles: dict[str, RoleConfig] = Field(default_factory=dict)
     permission_groups: dict[str, list[str]] = Field(default_factory=dict)
-    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
     @model_validator(mode="after")
     def validate_no_admin_role(self) -> Config:

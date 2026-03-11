@@ -275,7 +275,7 @@ def test_build_job_prompt_includes_rules(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("operator_ai.prompts.scan_agents", lambda: [])
 
     store = MemoryStore(base_dir=tmp_path)
-    store.create_rule("agent:operator", "Use terse status updates.")
+    store.upsert_rule("agent:operator", "status-style", "Use terse status updates.")
 
     job = Job(
         name="incident-digest",
