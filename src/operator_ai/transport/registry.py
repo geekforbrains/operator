@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from operator_ai.transport.base import Transport
@@ -30,18 +30,22 @@ class SetupTransport:
     identity_prompt: str
     identity_help: str
     secrets: tuple[SetupSecret, ...]
-    config_defaults: dict[str, Any]
+    env_defaults: dict[str, Any]
     run_hint: str
     next_steps: tuple[str, ...]
     normalize_identity: Callable[[str], str]
+    settings_defaults: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class TransportDefinition:
     type_name: str
-    create_transport: Callable[[str, str, dict[str, Any], Store], Transport]
-    normalize_options: Callable[[dict[str, Any]], dict[str, Any]]
-    secret_env_vars: Callable[[dict[str, Any]], set[str]]
+    create_transport: Callable[[str, str, dict[str, Any], dict[str, Any], Store], Transport]
+    normalize_config: Callable[
+        [dict[str, Any], dict[str, Any]],
+        tuple[dict[str, Any], dict[str, Any]],
+    ]
+    secret_env_vars: Callable[[dict[str, Any], dict[str, Any]], set[str]]
     logger_names: tuple[str, ...] = ()
     setup: SetupTransport | None = None
 
@@ -83,11 +87,15 @@ def default_setup_transport() -> SetupTransport:
     return transports[0]
 
 
-def normalize_transport_options(type_name: str, options: dict[str, Any]) -> dict[str, Any]:
+def normalize_transport_config(
+    type_name: str,
+    env: dict[str, Any],
+    settings: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
     definition = get_transport_definition(type_name)
     if definition is None:
         raise ValueError(f"Unsupported transport type: {type_name!r}")
-    return definition.normalize_options(options)
+    return definition.normalize_config(env, settings)
 
 
 def create_transport(
@@ -95,20 +103,24 @@ def create_transport(
     type_name: str,
     name: str,
     agent_name: str,
-    options: dict[str, Any],
+    env: dict[str, Any],
+    settings: dict[str, Any],
     store: Store,
 ) -> Transport:
     definition = get_transport_definition(type_name)
     if definition is None:
         raise ValueError(f"Unsupported transport type: {type_name!r}")
-    return definition.create_transport(name, agent_name, options, store)
+    return definition.create_transport(name, agent_name, env, settings, store)
 
-
-def transport_secret_env_vars(type_name: str, options: dict[str, Any]) -> set[str]:
+def transport_secret_env_vars(
+    type_name: str,
+    env: dict[str, Any],
+    settings: dict[str, Any],
+) -> set[str]:
     definition = get_transport_definition(type_name)
     if definition is None:
         return set()
-    return definition.secret_env_vars(options)
+    return definition.secret_env_vars(env, settings)
 
 
 def transport_logger_names() -> tuple[str, ...]:

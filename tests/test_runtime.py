@@ -5,13 +5,15 @@ from __future__ import annotations
 import asyncio
 import contextlib
 
-from operator_ai.config import RoleConfig
+from operator_ai.config import Config, RoleConfig
 from operator_ai.main import (
     AgentCancelledError,
     ConversationRuntime,
     RuntimeManager,
+    create_transports,
     resolve_allowed_agents,
 )
+from operator_ai.store import Store
 
 # ── resolve_allowed_agents ────────────────────────────────────────
 
@@ -64,6 +66,67 @@ def test_role_with_no_agents() -> None:
     roles_cfg = {"empty": RoleConfig(agents=[])}
     result = resolve_allowed_agents(["empty"], roles_cfg)
     assert result == set()
+
+
+def test_create_transports_uses_normalized_transport_config(monkeypatch, tmp_path) -> None:
+    """Runtime transport creation should consume the generic type/env/settings shape."""
+    captured: dict[str, object] = {}
+
+    def fake_create_transport(
+        *,
+        type_name: str,
+        name: str,
+        agent_name: str,
+        env: dict[str, object],
+        settings: dict[str, object],
+        store: Store,
+    ) -> object:
+        captured["type_name"] = type_name
+        captured["name"] = name
+        captured["agent_name"] = agent_name
+        captured["env"] = env
+        captured["settings"] = settings
+        captured["store"] = store
+        return object()
+
+    monkeypatch.setattr("operator_ai.main.create_transport", fake_create_transport)
+
+    config = Config(
+        defaults={"models": ["test/m"]},
+        agents={
+            "operator": {
+                "transport": {
+                    "type": "slack",
+                    "env": {
+                        "bot_token": "SLACK_BOT_TOKEN",
+                        "app_token": "SLACK_APP_TOKEN",
+                    },
+                    "settings": {
+                        "inject_users_into_prompt": False,
+                    },
+                }
+            }
+        },
+    )
+
+    with Store(path=tmp_path / "operator.db") as store:
+        transports = create_transports(config, store)
+
+    assert len(transports) == 1
+    assert captured["type_name"] == "slack"
+    assert captured["name"] == "operator"
+    assert captured["agent_name"] == "operator"
+    assert captured["store"] is not None
+
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert env["bot_token"] == "SLACK_BOT_TOKEN"
+    assert env["app_token"] == "SLACK_APP_TOKEN"
+
+    settings = captured["settings"]
+    assert isinstance(settings, dict)
+    assert settings["inject_users_into_prompt"] is False
+    assert settings["inject_channels_into_prompt"] is True
 
 
 # ── ConversationRuntime ────────────────────────────────────────────

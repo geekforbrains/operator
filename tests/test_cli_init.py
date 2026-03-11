@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, patch
 from typer.testing import CliRunner
 
 from operator_ai.cli import _STARTER_CONFIG, _generate_plist, _generate_systemd_unit, app
+from operator_ai.config import load_config
 from operator_ai.store import Store
 
 runner = CliRunner()
@@ -21,7 +22,8 @@ def test_starter_config_contains_runtime() -> None:
     assert "runtime:" in _STARTER_CONFIG
     assert "show_usage: false" in _STARTER_CONFIG
     assert "reject_response: ignore" in _STARTER_CONFIG
-    assert "settings:" not in _STARTER_CONFIG
+    assert "env:" in _STARTER_CONFIG
+    assert "settings:" in _STARTER_CONFIG
 
 
 def test_starter_config_references_env_file():
@@ -51,8 +53,16 @@ def test_init_creates_config_and_shows_setup_reminder(tmp_path: Path):
     assert "runtime:" in content
     assert "show_usage: false" in content
     assert "reject_response: ignore" in content
-    assert "settings:" not in content
+    assert "env:" in content
+    assert "settings:" in content
     assert "permission_groups:" in content
+
+    config = load_config(config_file)
+    transport = config.agents["operator"].transport
+    assert transport is not None
+    assert transport.type == "slack"
+    assert transport.env["bot_token"] == "SLACK_BOT_TOKEN"
+    assert transport.env["app_token"] == "SLACK_APP_TOKEN"
 
 
 def test_init_creates_env_file_with_api_key_placeholders(tmp_path: Path):
@@ -219,6 +229,12 @@ def test_setup_creates_env_and_admin_user(tmp_path: Path):
     env_file = op_dir / ".env"
     assert config_file.exists()
     assert env_file.exists()
+
+    config = load_config(config_file)
+    transport = config.agents["operator"].transport
+    assert transport is not None
+    assert transport.env["bot_token"] == "SLACK_BOT_TOKEN"
+    assert transport.env["app_token"] == "SLACK_APP_TOKEN"
 
     env_content = env_file.read_text()
     assert "ANTHROPIC_API_KEY=sk-ant-key" in env_content

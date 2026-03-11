@@ -149,47 +149,49 @@ Combine results into a single report and post to #dev.
 
 ---
 
-## KV Store Patterns
+## State Patterns
 
-Jobs start fresh each run, but KV persists. **Always use the job name as namespace.**
+Jobs start fresh each run, but agent state persists across runs. Use stable
+state keys, usually prefixed with the job name, so different jobs do not
+collide.
 
 ### Deduplication
 
 ```
-kv_get(namespace="rss-monitor", key="seen-ids") -> JSON array
+get_state(key="rss-monitor-seen-ids") -> JSON array or [not found]
 # Process only new items, then:
-kv_set(namespace="rss-monitor", key="seen-ids", value=<updated JSON>, ttl_hours=720)
+set_state(key="rss-monitor-seen-ids", value=<updated JSON>)
 ```
 
 ### Cursors / Watermarks
 
 ```
-kv_get(namespace="github-digest", key="last-checked") -> ISO timestamp or [not found]
+get_state(key="github-digest-last-checked") -> ISO timestamp or [not found]
 # Fetch items since that timestamp, then:
-kv_set(namespace="github-digest", key="last-checked", value=<now>)
+set_state(key="github-digest-last-checked", value=<now>)
 ```
 
 ### State Transitions
 
 ```
-kv_get(namespace="deploy-watcher", key="last-status") -> "passing" | "failing"
+get_state(key="deploy-watcher-last-status") -> "passing" | "failing"
 # Only alert on TRANSITIONS (passing->failing), not repeated failures
-kv_set(namespace="deploy-watcher", key="last-status", value=<new status>)
+set_state(key="deploy-watcher-last-status", value=<new status>)
 ```
 
-### KV Tips
+### State Tips
 
 - Keys and values are strings — use JSON for structured data
-- `ttl_hours` auto-expires keys — great for dedup windows (168h = 7 days, 720h = 30 days)
-- KV is scoped per-agent, not per-job — namespace prevents collisions
-- `kv_list(namespace="job-name")` to inspect stored state
+- State is scoped per-agent, not per-job — key prefixes prevent collisions
+- `list_state()` lets you inspect the current state keys
+- For expiring windows, store timestamps and compare them on the next run
 
 ---
 
 ## Workspace Persistence
 
 The agent workspace persists across runs. Use for cache files, helper scripts, templates, or
-large state that doesn't fit well in KV. Example:
+large state that does not fit cleanly in a single state value. Example:
 
 ```
 Check if workspace/cache/feed.json exists and is less than 1 hour old.
@@ -223,11 +225,12 @@ Every hook script receives these environment variables:
 
 ```bash
 #!/bin/bash
-# scripts/check-cooldown.sh — prerun: skip if we ran recently (KV TTL gate)
-operator kv get cooldown --ns "$JOB_NAME" >/dev/null 2>&1 && exit 1
+# scripts/check-cooldown.sh — prerun: skip while a cooldown marker exists
+STATE_FILE="$OPERATOR_HOME/agents/$OPERATOR_AGENT/state/${JOB_NAME}-cooldown.yaml"
+[ -f "$STATE_FILE" ] && exit 1
 exit 0
-# Tip: the job prompt sets `kv_set("cooldown", "1", namespace=JOB_NAME, ttl_hours=6)`
-# so this gate auto-clears after 6 hours.
+# Tip: the job body can call `set_state(key=f"{JOB_NAME}-cooldown", value="1")`
+# to create the marker, and a later run or cleanup step can remove it.
 ```
 
 ```bash
@@ -240,10 +243,9 @@ exit 0
 
 ```bash
 #!/bin/bash
-# scripts/log-output.sh — postrun: log agent output and store in KV
+# scripts/log-output.sh — postrun: log agent output
 OUTPUT=$(cat)
-echo "[$(date -Iseconds)] $OUTPUT" >> $OPERATOR_HOME/logs/job-output.log
-operator kv set last-output "$OUTPUT" --ns "$JOB_NAME" --ttl 168
+echo "[$(date -Iseconds)] $OUTPUT" >> "$OPERATOR_HOME/logs/job-output.log"
 ```
 
 ---

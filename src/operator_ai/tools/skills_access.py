@@ -129,7 +129,7 @@ async def run_skill(skill: str, command: str, timeout: int = 120) -> str:
             tc = agent_cfg.transport
             if tc is None:
                 continue
-            strip_keys.update(transport_secret_env_vars(tc.type, tc.options))
+            strip_keys.update(transport_secret_env_vars(tc.type, tc.env, tc.settings))
         for key in strip_keys:
             env.pop(key, None)
     except ConfigError:

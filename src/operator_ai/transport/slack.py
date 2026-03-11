@@ -7,6 +7,7 @@ import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 import aiohttp
 from markdown_to_mrkdwn import SlackMarkdownConverter
@@ -45,11 +46,16 @@ class SlackUserProfile:
     is_deleted: bool
 
 
-class SlackTransportOptions(BaseModel):
+class SlackTransportEnv(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    bot_token_env: str
-    app_token_env: str
+    bot_token: str
+    app_token: str
+
+
+class SlackTransportSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     include_archived_channels: bool = False
     inject_channels_into_prompt: bool = True
     inject_users_into_prompt: bool = True
@@ -82,15 +88,21 @@ def _slack_ts_to_float(value: str) -> float | None:
         return None
 
 
-def normalize_slack_transport_options(options: dict[str, object]) -> dict[str, object]:
-    return SlackTransportOptions(**options).model_dump()
+def normalize_slack_transport_config(
+    env: dict[str, Any],
+    settings: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    return (
+        SlackTransportEnv(**env).model_dump(),
+        SlackTransportSettings(**settings).model_dump(),
+    )
 
 
-def slack_secret_env_vars(options: dict[str, object]) -> set[str]:
-    normalized = SlackTransportOptions(**options)
+def slack_secret_env_vars(env: dict[str, Any], _settings: dict[str, Any]) -> set[str]:
+    normalized = SlackTransportEnv(**env)
     return {
-        normalized.bot_token_env,
-        normalized.app_token_env,
+        normalized.bot_token,
+        normalized.app_token,
     }
 
 
@@ -973,20 +985,22 @@ class SlackTransport(Transport):
 def create_slack_transport(
     name: str,
     agent_name: str,
-    options: dict[str, object],
+    env: dict[str, Any],
+    settings: dict[str, Any],
     store: Store,
 ) -> SlackTransport:
-    normalized = SlackTransportOptions(**options)
+    normalized_env = SlackTransportEnv(**env)
+    normalized_settings = SlackTransportSettings(**settings)
     return SlackTransport(
         name=name,
         agent_name=agent_name,
-        bot_token=_resolve_env_var(normalized.bot_token_env, agent_name),
-        app_token=_resolve_env_var(normalized.app_token_env, agent_name),
+        bot_token=_resolve_env_var(normalized_env.bot_token, agent_name),
+        app_token=_resolve_env_var(normalized_env.app_token, agent_name),
         store=store,
-        include_archived_channels=normalized.include_archived_channels,
-        inject_channels_into_prompt=normalized.inject_channels_into_prompt,
-        inject_users_into_prompt=normalized.inject_users_into_prompt,
-        expand_mentions=normalized.expand_mentions,
+        include_archived_channels=normalized_settings.include_archived_channels,
+        inject_channels_into_prompt=normalized_settings.inject_channels_into_prompt,
+        inject_users_into_prompt=normalized_settings.inject_users_into_prompt,
+        expand_mentions=normalized_settings.expand_mentions,
     )
 
 
@@ -1008,9 +1022,15 @@ SLACK_SETUP_TRANSPORT = SetupTransport(
             warning_prefix="xapp-",
         ),
     ),
-    config_defaults={
-        "bot_token_env": "SLACK_BOT_TOKEN",
-        "app_token_env": "SLACK_APP_TOKEN",
+    env_defaults={
+        "bot_token": "SLACK_BOT_TOKEN",
+        "app_token": "SLACK_APP_TOKEN",
+    },
+    settings_defaults={
+        "include_archived_channels": False,
+        "inject_channels_into_prompt": True,
+        "inject_users_into_prompt": True,
+        "expand_mentions": True,
     },
     run_hint="DM the Slack bot or @mention it in a channel where it is invited.",
     next_steps=(
@@ -1025,7 +1045,7 @@ SLACK_SETUP_TRANSPORT = SetupTransport(
 SLACK_TRANSPORT_DEFINITION = TransportDefinition(
     type_name="slack",
     create_transport=create_slack_transport,
-    normalize_options=normalize_slack_transport_options,
+    normalize_config=normalize_slack_transport_config,
     secret_env_vars=slack_secret_env_vars,
     logger_names=("slack_bolt", "slack_sdk"),
     setup=SLACK_SETUP_TRANSPORT,

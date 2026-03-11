@@ -76,7 +76,6 @@ Then edit `~/.operator/operator.yaml`:
 
 ```yaml
 runtime:
-  timezone: "America/Vancouver"
   env_file: ".env"
   show_usage: false
   reject_response: ignore
@@ -91,11 +90,17 @@ agents:
   operator:
     transport:
       type: slack
-      bot_token_env: SLACK_BOT_TOKEN
-      app_token_env: SLACK_APP_TOKEN
+      env:
+        bot_token: SLACK_BOT_TOKEN
+        app_token: SLACK_APP_TOKEN
+      settings:
+        include_archived_channels: false
+        inject_channels_into_prompt: true
+        inject_users_into_prompt: true
+        expand_mentions: true
 ```
 
-All transport options have sensible defaults. The only required fields are `type`, `bot_token_env`, and `app_token_env`. Users and channels are injected into the agent prompt by default so the agent knows who and what is available without a tool call. Override with `inject_users_into_prompt: false` or `inject_channels_into_prompt: false` for large workspaces.
+Transport config has three parts: `type`, `env`, and `settings`. `env` maps logical credential names to environment variable names, while `settings` covers non-secret transport behavior. For Slack, the required fields are `type`, `env.bot_token`, and `env.app_token`. Users and channels are injected into the agent prompt by default so the agent knows who and what is available without a tool call. Override `settings.inject_users_into_prompt` or `settings.inject_channels_into_prompt` for large workspaces.
 
 Add your keys to `~/.operator/.env` or export them in your shell:
 

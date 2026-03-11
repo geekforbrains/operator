@@ -605,7 +605,8 @@ def create_transports(config: Config, store: Store) -> list[Transport]:
                 type_name=tc.type,
                 name=agent_name,
                 agent_name=agent_name,
-                options=tc.options,
+                env=tc.env,
+                settings=tc.settings,
                 store=store,
             )
             transports.append(transport)

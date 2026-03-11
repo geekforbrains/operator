@@ -18,6 +18,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import typer
+import yaml
 from rich.console import Console
 from rich.syntax import Syntax
 from rich.table import Table
@@ -195,74 +196,81 @@ def _build_starter_config(
     *,
     default_model: str = _DEFAULT_MODEL,
     transport_name: str | None = None,
-    transport_options: dict[str, object] | None = None,
+    transport_env: dict[str, object] | None = None,
+    transport_settings: dict[str, object] | None = None,
 ) -> str:
     selected_transport = default_setup_transport()
     resolved_transport_name = transport_name or selected_transport.name
-    resolved_transport_options = transport_options or dict(selected_transport.config_defaults)
-    transport_lines = [f"type: {resolved_transport_name}"]
-    for key, value in resolved_transport_options.items():
-        rendered = json.dumps(value) if isinstance(value, str) else str(value).lower()
-        transport_lines.append(f"{key}: {rendered}")
-    transport_block = "\n".join(f"          {line}" for line in transport_lines)
+    resolved_transport_env = transport_env or dict(selected_transport.env_defaults)
+    resolved_transport_settings = transport_settings or dict(selected_transport.settings_defaults)
+    transport_data: dict[str, object] = {
+        "type": resolved_transport_name,
+        "env": resolved_transport_env,
+        "settings": resolved_transport_settings,
+    }
+    transport_block = yaml.safe_dump(transport_data, sort_keys=False).rstrip().splitlines()
 
-    return textwrap.dedent(f"""\
-        # Operator configuration
-        # Docs: https://operator.geekforbrains.com
-        # Repo: https://github.com/geekforbrains/operator
-
-        runtime:
-          env_file: ".env"
-          show_usage: false
-          # How an agent responds when messaged from an unknown user.
-          # - announce: responds with a simple message
-          # - ignore: does not respond at all
-          reject_response: ignore
-
-        defaults:
-          # Model fallback chain
-          # first model is preferred, rest are fallbacks.
-          # Uses LiteLLM format: provider/model-name
-          models:
-            - "{default_model}"
-            # - "some-provider/some-other-model"
-          max_iterations: 50
-          context_ratio: 0.5
-
-        # Permission groups — clusters of related tools that can be referenced
-        # as @groupname in agent permissions. Modify, split, or extend as needed.
-        permission_groups:
-          memory:
-            - save_rule
-            - save_note
-            - search_notes
-            - list_memory
-            - update_memory
-            - forget_memory
-          files:
-            - read_file
-            - write_file
-            - list_directory
-          messaging:
-            - send_message
-            - send_file
-          jobs:
-            - list_jobs
-            - run_job
-            - create_job
-
-        agents:
-          {_DEFAULT_AGENT_NAME}:
-            permissions:
-              tools: "*"
-              skills: "*"
-            transport:
-{transport_block}
-
-        roles:
-          guest:
-            agents: []
-        """)
+    lines = [
+        "# Operator configuration",
+        "# Docs: https://operator.geekforbrains.com",
+        "# Repo: https://github.com/geekforbrains/operator",
+        "",
+        "runtime:",
+        '  env_file: ".env"',
+        "  show_usage: false",
+        "  # How an agent responds when messaged from an unknown user.",
+        "  # - announce: responds with a simple message",
+        "  # - ignore: does not respond at all",
+        "  reject_response: ignore",
+        "",
+        "defaults:",
+        "  # Model fallback chain",
+        "  # first model is preferred, rest are fallbacks.",
+        "  # Uses LiteLLM format: provider/model-name",
+        "  models:",
+        f'    - "{default_model}"',
+        '    # - "some-provider/some-other-model"',
+        "  max_iterations: 50",
+        "  context_ratio: 0.5",
+        "",
+        "# Permission groups — clusters of related tools that can be referenced",
+        "# as @groupname in agent permissions. Modify, split, or extend as needed.",
+        "permission_groups:",
+        "  memory:",
+        "    - remember_rule",
+        "    - remember_note",
+        "    - search_notes",
+        "    - list_rules",
+        "    - list_notes",
+        "    - update_memory",
+        "    - forget_memory",
+        "  files:",
+        "    - read_file",
+        "    - write_file",
+        "    - list_files",
+        "  messaging:",
+        "    - send_message",
+        "    - send_file",
+        "  jobs:",
+        "    - manage_job",
+        "",
+        "agents:",
+        f"  {_DEFAULT_AGENT_NAME}:",
+        "    permissions:",
+        '      tools: "*"',
+        '      skills: "*"',
+        "    transport:",
+    ]
+    lines.extend(f"      {line}" for line in transport_block)
+    lines.extend(
+        [
+            "",
+            "roles:",
+            "  guest:",
+            "    agents: []",
+        ]
+    )
+    return "\n".join(lines) + "\n"
 
 
 _STARTER_CONFIG = _build_starter_config()
@@ -687,7 +695,8 @@ def setup(
         config_text=_build_starter_config(
             default_model=selected_provider.default_model,
             transport_name=selected_transport.name,
-            transport_options=selected_transport.config_defaults,
+            transport_env=selected_transport.env_defaults,
+            transport_settings=selected_transport.settings_defaults,
         ),
         emit_output=False,
     )

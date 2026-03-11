@@ -51,7 +51,7 @@ You have long-term memory backed by files on disk. There are two kinds:
 
 ## State
 
-Use state tools (`read_state`, `write_state`) for operational data — cursors, watermarks, counters, last-processed markers. State is not for knowledge; that goes in memory.
+Use state tools (`get_state`, `set_state`) for operational data — cursors, watermarks, counters, last-processed markers. State is not for knowledge; that goes in memory.
 
 ## Storage Boundaries
 

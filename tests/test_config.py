@@ -41,6 +41,74 @@ def test_invalid_thinking_level_raises() -> None:
         Config(defaults={"models": ["test/m"], "thinking": "max"})
 
 
+def test_transport_config_normalizes_env_and_settings() -> None:
+    config = Config(
+        defaults={"models": ["test/m"]},
+        agents={
+            "operator": {
+                "transport": {
+                    "type": "slack",
+                    "env": {
+                        "bot_token": "SLACK_BOT_TOKEN",
+                        "app_token": "SLACK_APP_TOKEN",
+                    },
+                }
+            }
+        },
+    )
+
+    transport = config.agents["operator"].transport
+    assert transport is not None
+    assert transport.type == "slack"
+    assert transport.env["bot_token"] == "SLACK_BOT_TOKEN"
+    assert transport.env["app_token"] == "SLACK_APP_TOKEN"
+    assert transport.settings["inject_channels_into_prompt"] is True
+    assert transport.settings["inject_users_into_prompt"] is True
+
+
+def test_transport_config_accepts_explicit_settings_mapping() -> None:
+    config = Config(
+        defaults={"models": ["test/m"]},
+        agents={
+            "operator": {
+                "transport": {
+                    "type": "slack",
+                    "env": {
+                        "bot_token": "SLACK_BOT_TOKEN",
+                        "app_token": "SLACK_APP_TOKEN",
+                    },
+                    "settings": {
+                        "inject_users_into_prompt": False,
+                    },
+                }
+            }
+        },
+    )
+
+    transport = config.agents["operator"].transport
+    assert transport is not None
+    assert transport.env["bot_token"] == "SLACK_BOT_TOKEN"
+    assert transport.env["app_token"] == "SLACK_APP_TOKEN"
+    assert transport.settings["inject_users_into_prompt"] is False
+    assert transport.settings["inject_channels_into_prompt"] is True
+
+
+def test_transport_config_requires_slack_env_fields() -> None:
+    with pytest.raises(ValueError, match="bot_token"):
+        Config(
+            defaults={"models": ["test/m"]},
+            agents={"operator": {"transport": {"type": "slack", "env": {}}}},
+        )
+
+
+def test_transport_config_rejects_unsupported_type() -> None:
+    with pytest.raises(ValueError, match="Unsupported transport type"):
+        Config(
+            defaults={"models": ["test/m"]},
+            agents={"operator": {"transport": {"type": "email"}}},
+        )
+
+
 def test_legacy_defaults_timezone_is_rejected() -> None:
     with pytest.raises(ValueError, match="timezone"):
         Config(defaults={"models": ["test/m"], "timezone": "Europe/London"})

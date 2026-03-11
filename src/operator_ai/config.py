@@ -76,28 +76,20 @@ class RuntimeConfig(StrictConfigModel):
 
 class TransportConfig(StrictConfigModel):
     type: str
-    bot_token_env: str | None = None
-    app_token_env: str | None = None
+    env: dict[str, Any] = Field(default_factory=dict)
+    settings: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
-    def validate_transport(self) -> TransportConfig:
-        self.type = self.type.strip()
-        if self.type != "slack":
-            raise ValueError(f"Unsupported transport type: {self.type!r}")
-        if not self.bot_token_env:
-            raise ValueError("transport.bot_token_env is required for slack transport")
-        if not self.app_token_env:
-            raise ValueError("transport.app_token_env is required for slack transport")
-        return self
+    def normalize_transport(self) -> TransportConfig:
+        from operator_ai.transport.registry import normalize_transport_config
 
-    def resolve_env(self, key: str, agent_name: str) -> str:
-        env_var = getattr(self, key, None)
-        if env_var is None:
-            raise ValueError(f"Agent '{agent_name}' transport missing '{key}'")
-        value = os.environ.get(env_var)
-        if not value:
-            raise ValueError(f"Agent '{agent_name}' transport: env var '{env_var}' not set")
-        return value
+        self.type = self.type.strip().lower()
+        self.env, self.settings = normalize_transport_config(
+            self.type,
+            self.env,
+            self.settings,
+        )
+        return self
 
 
 class PermissionsConfig(StrictConfigModel):
