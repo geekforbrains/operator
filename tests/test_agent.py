@@ -9,6 +9,7 @@ import operator_ai.agent as agent_module
 from operator_ai.agent import run_agent
 from operator_ai.config import Config
 from operator_ai.message_timestamps import attach_message_created_at
+from operator_ai.tools.context import UserContext, set_user_context
 from operator_ai.tools.registry import ToolDef
 
 
@@ -36,9 +37,8 @@ async def _fake_tool(query: str) -> str:
     return query
 
 
-def _config(timezone: str = "America/Vancouver") -> Config:
+def _config() -> Config:
     return Config(
-        runtime={"timezone": timezone},
         defaults={"models": ["openai/gpt-4.1"]},
         agents={"operator": {}},
     )
@@ -56,6 +56,9 @@ def test_run_agent_renders_user_message_timestamp_in_live_request(
 
     monkeypatch.setattr("operator_ai.agent.tool_registry.get_tools", lambda: [])
     monkeypatch.setattr("operator_ai.agent.litellm.acompletion", fake_acompletion)
+
+    # Set user context with timezone for timestamp rendering
+    set_user_context(UserContext(username="test", roles=[], timezone="America/Vancouver"))
 
     messages = [
         {"role": "system", "content": "# System"},

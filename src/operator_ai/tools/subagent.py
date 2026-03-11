@@ -8,7 +8,7 @@ from typing import Any
 from operator_ai.log_context import get_run_context, new_run_id, set_run_context
 from operator_ai.message_timestamps import attach_message_created_at
 from operator_ai.prompts import assemble_system_prompt, load_prompt
-from operator_ai.tools.context import set_skill_filter
+from operator_ai.tools.context import get_user_context, set_skill_filter
 from operator_ai.tools.registry import tool
 
 logger = logging.getLogger("operator.subagent")
@@ -22,6 +22,21 @@ _context_var: contextvars.ContextVar[dict[str, Any] | None] = contextvars.Contex
 
 def configure(context: dict[str, Any]) -> None:
     _context_var.set(context)
+
+
+def _user_can_access_agent(agent_name: str, config: Any) -> bool:
+    """Check if the current user's roles grant access to the target agent."""
+    user_ctx = get_user_context()
+    if user_ctx is None:
+        # No user context (e.g., job runs) — allow
+        return True
+    if "admin" in user_ctx.roles:
+        return True
+    for role_name in user_ctx.roles:
+        role_cfg = config.roles.get(role_name)
+        if role_cfg and agent_name in role_cfg.agents:
+            return True
+    return False
 
 
 def _resolve_agent_context(agent_name: str | None, current: dict[str, Any]) -> dict[str, Any]:
@@ -43,6 +58,7 @@ def _resolve_agent_context(agent_name: str | None, current: dict[str, Any]) -> d
     ctx["thinking"] = config.agent_thinking(agent_name)
     ctx["context_ratio"] = config.agent_context_ratio(agent_name)
     ctx["max_output_tokens"] = config.agent_max_output_tokens(agent_name)
+    ctx["sandboxed"] = config.agent_sandboxed(agent_name)
     ctx["tool_filter"] = config.agent_tool_filter(agent_name)
     ctx["skill_filter"] = config.agent_skill_filter(agent_name)
     ctx["agent_name"] = agent_name
@@ -91,6 +107,12 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
     depth = current_context.get("depth", 0)
     if depth >= MAX_SUBAGENT_DEPTH:
         return f"[error: max subagent depth ({MAX_SUBAGENT_DEPTH}) reached]"
+
+    # Check user-level access to the target agent
+    if agent:
+        config = current_context.get("config")
+        if config and not _user_can_access_agent(agent, config):
+            return f"[error: you don't have access to agent '{agent}']"
 
     try:
         resolved = _resolve_agent_context(agent or None, current_context)
@@ -146,6 +168,7 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
             usage=resolved.get("usage"),
             tool_filter=resolved.get("tool_filter"),
             shared_dir=resolved.get("shared_dir"),
+            sandboxed=resolved.get("sandboxed", True),
             config=resolved.get("config"),
         )
 

@@ -282,6 +282,7 @@ class Dispatcher:
             return
 
         roles = self.store.get_user_roles(username)
+        user_tz = self.store.get_user_timezone(username)
         allowed_agents = resolve_allowed_agents(roles, self.config.roles)
 
         agent_name = transport.agent_name
@@ -295,7 +296,7 @@ class Dispatcher:
             await self._handle_rejection(msg, transport)
             return
 
-        set_user_context(UserContext(username=username, roles=roles))
+        set_user_context(UserContext(username=username, roles=roles, timezone=user_tz))
 
         set_run_context(agent=agent_name, run_id=new_run_id())
         conversation_id = self.store.lookup_platform_message(
@@ -314,6 +315,8 @@ class Dispatcher:
         # Resolve platform context (cached)
         ctx = await transport.resolve_context(msg)
         ctx.username = username
+        ctx.roles = roles
+        ctx.timezone = user_tz
         logger.info(
             "message from %s in %s thread=%s",
             ctx.user_name,
@@ -322,7 +325,12 @@ class Dispatcher:
         )
 
         system_prompt = self._build_system_prompt(
-            agent_name, ctx, username, transport, msg.is_private
+            agent_name,
+            ctx,
+            username,
+            transport,
+            msg.is_private,
+            allowed_agents=allowed_agents,
         )
         self.store.ensure_conversation(
             conversation_id=conversation_id,
@@ -527,6 +535,7 @@ class Dispatcher:
         user_id: str,
         transport: Transport,
         is_private: bool,
+        allowed_agents: set[str] | None = None,
     ) -> str:
         sections: list[str] = []
         transport_prompt = transport.get_prompt_extra()
@@ -547,6 +556,7 @@ class Dispatcher:
             is_private=is_private,
             transport_extra="\n\n".join(sections),
             skill_filter=self.config.agent_skill_filter(agent_name),
+            allowed_agents=allowed_agents,
         )
 
     async def _handle_command(
@@ -596,7 +606,6 @@ def create_transports(config: Config, store: Store) -> list[Transport]:
                 name=agent_name,
                 agent_name=agent_name,
                 options=tc.options,
-                tz=config.tz,
                 store=store,
             )
             transports.append(transport)
@@ -735,9 +744,8 @@ async def async_main() -> None:
             logger.info("Transport '%s' starting (agent: %s)", transport.name, transport.agent_name)
 
         logger.info(
-            "Operator running with %d transport(s), timezone=%s. Ctrl+C to stop.",
+            "Operator running with %d transport(s). Ctrl+C to stop.",
             len(transports),
-            config.runtime.timezone,
         )
         await stop.wait()
     finally:

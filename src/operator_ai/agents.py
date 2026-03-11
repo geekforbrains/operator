@@ -53,8 +53,16 @@ def load_agent_body(agent_md: Path) -> str:
     return extract_body(agent_md.read_text())
 
 
-def build_agents_prompt(agents: list[AgentInfo], current_agent: str) -> str:
-    """Build markdown block listing other agents for system prompt injection."""
+def build_agents_prompt(
+    agents: list[AgentInfo],
+    current_agent: str,
+    allowed_agents: set[str] | None = None,
+) -> str:
+    """Build markdown block listing other agents for system prompt injection.
+
+    When allowed_agents is None (admin), all agents are accessible.
+    When allowed_agents is a set, agents not in the set are annotated as inaccessible.
+    """
     others = [a for a in agents if a.name != current_agent]
     if not others:
         return ""
@@ -64,5 +72,8 @@ def build_agents_prompt(agents: list[AgentInfo], current_agent: str) -> str:
         "You can delegate tasks to these agents using `spawn_agent`:",
     ]
     for a in others:
-        lines.append(f"- **{a.name}**: {a.description}")
+        if allowed_agents is not None and a.name not in allowed_agents:
+            lines.append(f"- **{a.name}**: {a.description} *(inaccessible to current user)*")
+        else:
+            lines.append(f"- **{a.name}**: {a.description}")
     return "\n".join(lines)

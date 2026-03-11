@@ -36,7 +36,7 @@ def test_add_and_get_user(store: Store) -> None:
     user = store.get_user("alice")
     assert user is not None
     assert user.username == "alice"
-    assert user.created_at  # non-empty
+    assert user.created_at > 0  # unix timestamp
     assert user.identities == []
     assert user.roles == []
 
@@ -179,7 +179,7 @@ def test_remove_user_cascades_both(store: Store) -> None:
 
 
 def test_user_dataclass() -> None:
-    u = User(username="alice", created_at="2024-01-01", identities=["slack:X"], roles=["admin"])
+    u = User(username="alice", created_at=1704067200.0, identities=["slack:X"], roles=["admin"])
     assert u.username == "alice"
     assert u.identities == ["slack:X"]
     assert u.roles == ["admin"]
@@ -261,13 +261,14 @@ def test_load_messages_preserves_created_at_metadata(store: Store) -> None:
     conv = "conv-ts"
     store.ensure_conversation(conv, "slack", "C1", "T1")
     store.ensure_system_message(conv, "system")
+    ts = 1773341381.0  # 2026-03-09T15:29:41Z
     store.append_messages(
         conv,
         [
             {
                 "role": "user",
                 "content": "u1",
-                "_operator_created_at": "2026-03-09T15:29:41Z",
+                "_operator_created_at": ts,
             }
         ],
     )
@@ -278,7 +279,7 @@ def test_load_messages_preserves_created_at_metadata(store: Store) -> None:
         {
             "role": "user",
             "content": "u1",
-            "_operator_created_at": "2026-03-09T15:29:41Z",
+            "_operator_created_at": ts,
         },
     ]
 
@@ -333,7 +334,7 @@ def test_index_platform_message_upsert(store: Store) -> None:
 
 def test_load_job_state_default(store: Store) -> None:
     state = store.load_job_state("nonexistent-job")
-    assert state.last_run == ""
+    assert state.last_run == 0.0
     assert state.run_count == 0
     assert state.error_count == 0
 
@@ -341,15 +342,16 @@ def test_load_job_state_default(store: Store) -> None:
 def test_save_and_load_job_state(store: Store) -> None:
     from operator_ai.store import JobState
 
+    ts = 1773496800.0  # 2026-03-11T10:00:00Z
     state = JobState(
-        last_run="2026-03-11T10:00:00Z",
+        last_run=ts,
         last_result="ok",
         last_duration_seconds=1.5,
         run_count=3,
     )
     store.save_job_state("my-job", state)
     loaded = store.load_job_state("my-job")
-    assert loaded.last_run == "2026-03-11T10:00:00Z"
+    assert loaded.last_run == ts
     assert loaded.last_result == "ok"
     assert loaded.last_duration_seconds == 1.5
     assert loaded.run_count == 3
@@ -435,3 +437,42 @@ def test_store_context_manager(tmp_path: Path) -> None:
     with Store(path=tmp_path / "ctx.db") as s:
         s.add_user("alice")
         assert s.get_user("alice") is not None
+
+
+# ── Timezone ─────────────────────────────────────────────────
+
+
+def test_new_user_has_null_timezone(store: Store) -> None:
+    store.add_user("alice")
+    assert store.get_user_timezone("alice") is None
+
+
+def test_set_and_get_timezone(store: Store) -> None:
+    store.add_user("alice")
+    store.set_user_timezone("alice", "America/Vancouver")
+    assert store.get_user_timezone("alice") == "America/Vancouver"
+
+
+def test_timezone_in_get_user(store: Store) -> None:
+    store.add_user("alice")
+    store.set_user_timezone("alice", "Europe/London")
+    user = store.get_user("alice")
+    assert user is not None
+    assert user.timezone == "Europe/London"
+
+
+def test_timezone_in_list_users(store: Store) -> None:
+    store.add_user("alice")
+    store.set_user_timezone("alice", "Asia/Tokyo")
+    users = store.list_users()
+    assert users[0].timezone == "Asia/Tokyo"
+
+
+def test_invalid_timezone_raises(store: Store) -> None:
+    store.add_user("alice")
+    with pytest.raises(ValueError, match="Unknown timezone"):
+        store.set_user_timezone("alice", "Fake/Timezone")
+
+
+def test_get_timezone_nonexistent_user(store: Store) -> None:
+    assert store.get_user_timezone("ghost") is None

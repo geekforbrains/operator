@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from collections.abc import Awaitable, Callable
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import litellm
 
@@ -253,6 +255,13 @@ async def run_agent(
     if not models:
         raise ValueError("no models configured")
 
+    # Resolve user timezone for timestamp rendering
+    user_ctx = get_user_context()
+    user_tz: ZoneInfo | None = None
+    if user_ctx and user_ctx.timezone:
+        with contextlib.suppress(KeyError, Exception):
+            user_tz = ZoneInfo(user_ctx.timezone)
+
     for iteration in range(max_iterations):
         if check_cancelled:
             check_cancelled()
@@ -271,7 +280,7 @@ async def run_agent(
                 messages,
                 model,
                 context_ratio=context_ratio,
-                config=config,
+                tz=user_tz,
                 tool_results_keep=tool_results_keep,
                 tool_results_soft_trim=tool_results_soft_trim,
             )

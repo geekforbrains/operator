@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import tzinfo
 from typing import TYPE_CHECKING, Any
 
 from operator_ai.transport.base import Transport
@@ -40,7 +39,7 @@ class SetupTransport:
 @dataclass(frozen=True)
 class TransportDefinition:
     type_name: str
-    create_transport: Callable[[str, str, dict[str, Any], tzinfo, Store], Transport]
+    create_transport: Callable[[str, str, dict[str, Any], Store], Transport]
     normalize_options: Callable[[dict[str, Any]], dict[str, Any]]
     secret_env_vars: Callable[[dict[str, Any]], set[str]]
     logger_names: tuple[str, ...] = ()
@@ -97,13 +96,12 @@ def create_transport(
     name: str,
     agent_name: str,
     options: dict[str, Any],
-    tz: tzinfo,
     store: Store,
 ) -> Transport:
     definition = get_transport_definition(type_name)
     if definition is None:
         raise ValueError(f"Unsupported transport type: {type_name!r}")
-    return definition.create_transport(name, agent_name, options, tz, store)
+    return definition.create_transport(name, agent_name, options, store)
 
 
 def transport_secret_env_vars(type_name: str, options: dict[str, Any]) -> set[str]:

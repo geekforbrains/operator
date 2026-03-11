@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from operator_ai.config import Config
 from operator_ai.job_specs import JOBS_DIR as _JOBS_DIR
 from operator_ai.job_specs import find_job_spec, scan_job_specs
+from operator_ai.message_timestamps import format_ts
 from operator_ai.skills import scan_skills
 from operator_ai.store import Store
 
@@ -118,7 +119,7 @@ def _list_jobs(ctx: CommandContext) -> str:
     for job in jobs:
         state = ctx.store.load_job_state(job.name)
         status = "enabled" if job.enabled else "disabled"
-        last = state.last_run[:19] if state.last_run else "never"
+        last = format_ts(state.last_run) if state.last_run else "never"
         result = state.last_result or "-"
         lines.append(
             f"{'>' if job.enabled else 'x'} *{job.name}* "
@@ -146,7 +147,7 @@ async def _job_subcommand(ctx: CommandContext) -> str:
 
     state = ctx.store.load_job_state(job.name)
     status = "enabled" if job.enabled else "disabled"
-    last = state.last_run[:19] if state.last_run else "never"
+    last = format_ts(state.last_run) if state.last_run else "never"
     result = state.last_result or "-"
 
     lines = [

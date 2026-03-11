@@ -10,7 +10,6 @@ from operator_ai.prompts import CACHE_BOUNDARY, assemble_system_prompt
 
 def _make_config(tmp_path: Path | None) -> Config:  # noqa: ARG001
     return Config(
-        runtime={"timezone": "America/Vancouver"},
         defaults={"models": ["test/model"]},
         agents={"operator": {}},
     )
@@ -318,7 +317,6 @@ def test_subagent_prompt_uses_shared_prompt_contract(monkeypatch) -> None:
     prompt = _build_subagent_prompt(
         {
             "config": Config(
-                runtime={"timezone": "America/Toronto"},
                 defaults={"models": ["test/model"]},
                 agents={"operator": {}},
             )

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
 from typing import Any
-
-from operator_ai.config import Config
+from zoneinfo import ZoneInfo
 
 MESSAGE_CREATED_AT_KEY = "_operator_created_at"
 
@@ -11,62 +11,59 @@ MESSAGE_CREATED_AT_KEY = "_operator_created_at"
 def attach_message_created_at(
     message: dict[str, Any],
     *,
-    created_at: datetime | str | None = None,
+    created_at: datetime | float | None = None,
 ) -> dict[str, Any]:
     stamped = dict(message)
-    value = _normalize_created_at(created_at)
-    if value is not None:
-        stamped[MESSAGE_CREATED_AT_KEY] = value
+    stamped[MESSAGE_CREATED_AT_KEY] = _normalize_created_at(created_at)
     return stamped
 
 
+def render_message_timestamps(
+    messages: list[dict[str, Any]],
+    tz: ZoneInfo | None,
+) -> list[dict[str, Any]]:
+    rendered: list[dict[str, Any]] = []
+    for message in messages:
+        clean = dict(message)
+        created_at = clean.pop(MESSAGE_CREATED_AT_KEY, None)
+        if message.get("role") == "user" and isinstance(created_at, (int, float)) and created_at:
+            clean["content"] = _prefix_content(
+                clean.get("content"),
+                build_message_timestamp_prefix(tz, created_at=created_at),
+            )
+        rendered.append(clean)
+    return rendered
+
+
 def build_message_timestamp_prefix(
-    config: Config,
+    tz: ZoneInfo | None,
     *,
-    created_at: datetime | str,
+    created_at: float,
 ) -> str:
-    current = _parse_created_at(created_at)
-    if current is None:
+    if not created_at:
         return ""
-    local = current.astimezone(config.tz).replace(microsecond=0)
+    if tz is None:
+        tz = UTC
+    local = datetime.fromtimestamp(created_at, tz=tz).replace(microsecond=0)
     return f"[{local.strftime('%A')}, {local.isoformat(timespec='seconds')}]"
 
 
-def utc_now_iso(now: datetime | None = None) -> str:
-    current = (now or datetime.now(UTC)).astimezone(UTC).replace(microsecond=0)
-    return current.isoformat().replace("+00:00", "Z")
+def format_ts(ts: float, tz: ZoneInfo | None = None) -> str:
+    """Format a unix timestamp for human display. Returns ISO 8601 string."""
+    if not ts:
+        return "never"
+    dt = datetime.fromtimestamp(ts, tz=tz or UTC).replace(microsecond=0)
+    return dt.isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def _normalize_created_at(created_at: datetime | str | None) -> str | None:
+def _normalize_created_at(created_at: datetime | float | None) -> float:
     if created_at is None:
-        return utc_now_iso()
+        return time.time()
+    if isinstance(created_at, (int, float)):
+        return float(created_at)
     if isinstance(created_at, datetime):
-        current = (
-            created_at.astimezone(UTC) if created_at.tzinfo else created_at.replace(tzinfo=UTC)
-        )
-        return current.replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    if isinstance(created_at, str):
-        value = created_at.strip()
-        return value or None
-    return None
-
-
-def _parse_created_at(created_at: datetime | str) -> datetime | None:
-    if isinstance(created_at, datetime):
-        current = created_at
-    elif isinstance(created_at, str):
-        value = created_at.strip()
-        if not value:
-            return None
-        try:
-            current = datetime.fromisoformat(value.replace("Z", "+00:00"))
-        except ValueError:
-            return None
-    else:
-        return None
-    if current.tzinfo is None:
-        current = current.replace(tzinfo=UTC)
-    return current.astimezone(UTC)
+        return created_at.timestamp()
+    return time.time()
 
 
 def _prefix_content(content: Any, prefix: str) -> Any:

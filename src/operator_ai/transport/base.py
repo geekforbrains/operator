@@ -3,7 +3,6 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -30,9 +29,8 @@ class IncomingMessage:
     root_message_id: str
     transport_name: str
     is_private: bool = False
-    was_mentioned: bool = False
     attachments: list[Attachment] = field(default_factory=list)
-    created_at: datetime | None = None
+    created_at: float | None = None
 
 
 @dataclass
@@ -45,7 +43,9 @@ class MessageContext:
     user_id: str
     user_name: str
     username: str = ""
-    chat_type: str = ""  # "dm", "channel", "group"
+    roles: list[str] = field(default_factory=list)
+    timezone: str | None = None
+    chat_type: str = ""
 
     def to_prompt(self, workspace: str = "", operator_home: str = "") -> str:
         if self.username:
@@ -63,6 +63,12 @@ class MessageContext:
             f"- Channel: {self.channel_name} (`{self.channel_id}`)",
             user_line,
         ]
+        if self.roles:
+            lines.append(f"- Roles: {', '.join(self.roles)}")
+        if self.timezone:
+            lines.append(f"- Timezone: {self.timezone}")
+        elif self.username:
+            lines.append("- Timezone: *not set — please ask the user for their timezone*")
         if workspace:
             lines.append(f"- Workspace: `{workspace}`")
         if operator_home:

@@ -32,16 +32,17 @@ def _validate_username(username: str) -> None:
 @dataclass
 class User:
     username: str
-    created_at: str
+    created_at: float
     identities: list[str]
     roles: list[str]
+    timezone: str | None = None
 
 
 @dataclass
 class JobState:
-    last_run: str = ""
+    last_run: float = 0.0
     last_result: str = ""
-    last_duration_seconds: float = 0
+    last_duration_seconds: float = 0.0
     last_error: str = ""
     run_count: int = 0
     skip_count: int = 0
@@ -113,7 +114,7 @@ class Store:
             """
             CREATE TABLE IF NOT EXISTS job_state (
                 job_name TEXT PRIMARY KEY,
-                last_run TEXT NOT NULL DEFAULT '',
+                last_run REAL NOT NULL DEFAULT 0,
                 last_result TEXT NOT NULL DEFAULT '',
                 last_duration_seconds REAL NOT NULL DEFAULT 0,
                 last_error TEXT NOT NULL DEFAULT '',
@@ -130,7 +131,7 @@ class Store:
             """
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
-                created_at TEXT DEFAULT (datetime('now'))
+                created_at REAL NOT NULL DEFAULT 0
             )
             """
         )
@@ -154,14 +155,21 @@ class Store:
             """
         )
 
+        self._ensure_users_timezone_column()
+
         self._conn.commit()
+
+    def _ensure_users_timezone_column(self) -> None:
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "timezone" not in columns:
+            self._conn.execute("ALTER TABLE users ADD COLUMN timezone TEXT")
 
     def _ensure_messages_created_at_column(self) -> None:
         columns = {
             row["name"] for row in self._conn.execute("PRAGMA table_info(messages)").fetchall()
         }
         if "created_at" not in columns:
-            self._conn.execute("ALTER TABLE messages ADD COLUMN created_at TEXT")
+            self._conn.execute("ALTER TABLE messages ADD COLUMN created_at REAL")
 
     def close(self) -> None:
         self._conn.close()
@@ -235,8 +243,9 @@ class Store:
         messages = []
         for row in rows:
             message = json.loads(row["message_json"])
-            if row["created_at"]:
-                message[MESSAGE_CREATED_AT_KEY] = row["created_at"]
+            created_at = row["created_at"]
+            if created_at:
+                message[MESSAGE_CREATED_AT_KEY] = float(created_at)
             messages.append(message)
         safe_messages = trim_incomplete_tool_turns(messages)
 
@@ -259,7 +268,7 @@ class Store:
     def append_messages(self, conversation_id: str, messages: list[dict[str, Any]]) -> None:
         if not messages:
             return
-        rows: list[tuple[str, str, str | None]] = []
+        rows: list[tuple[str, str, float | None]] = []
         for message in messages:
             payload = dict(message)
             created_at = payload.pop(MESSAGE_CREATED_AT_KEY, None)
@@ -267,7 +276,7 @@ class Store:
                 (
                     conversation_id,
                     json.dumps(payload),
-                    created_at if isinstance(created_at, str) else None,
+                    float(created_at) if isinstance(created_at, (int, float)) else None,
                 )
             )
         self._conn.executemany(
@@ -360,7 +369,10 @@ class Store:
 
     def add_user(self, username: str) -> None:
         _validate_username(username)
-        self._conn.execute("INSERT INTO users (username) VALUES (?)", (username,))
+        self._conn.execute(
+            "INSERT INTO users (username, created_at) VALUES (?, ?)",
+            (username, time.time()),
+        )
         self._conn.commit()
 
     def remove_user(self, username: str) -> bool:
@@ -370,7 +382,7 @@ class Store:
 
     def get_user(self, username: str) -> User | None:
         row = self._conn.execute(
-            "SELECT username, created_at FROM users WHERE username = ?",
+            "SELECT username, created_at, timezone FROM users WHERE username = ?",
             (username,),
         ).fetchone()
         if row is None:
@@ -394,11 +406,12 @@ class Store:
             created_at=row["created_at"],
             identities=identities,
             roles=roles,
+            timezone=row["timezone"],
         )
 
     def list_users(self) -> list[User]:
         rows = self._conn.execute(
-            "SELECT username, created_at FROM users ORDER BY username"
+            "SELECT username, created_at, timezone FROM users ORDER BY username"
         ).fetchall()
         users: list[User] = []
         for row in rows:
@@ -423,9 +436,30 @@ class Store:
                     created_at=row["created_at"],
                     identities=identities,
                     roles=roles,
+                    timezone=row["timezone"],
                 )
             )
         return users
+
+    # ── Timezone ──────────────────────────────────────────────────
+
+    def set_user_timezone(self, username: str, timezone: str) -> None:
+        """Set a user's timezone. Validates the timezone string."""
+        from operator_ai.config import _validate_timezone
+
+        _validate_timezone(timezone)
+        self._conn.execute(
+            "UPDATE users SET timezone = ? WHERE username = ?",
+            (timezone, username),
+        )
+        self._conn.commit()
+
+    def get_user_timezone(self, username: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT timezone FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        return row["timezone"] if row else None
 
     # ── Identities ───────────────────────────────────────────────
 

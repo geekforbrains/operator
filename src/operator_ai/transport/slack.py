@@ -6,7 +6,7 @@ import os
 import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime, tzinfo
+from datetime import UTC, datetime
 
 import aiohttp
 from markdown_to_mrkdwn import SlackMarkdownConverter
@@ -75,10 +75,10 @@ def _extract_attachments(event: dict) -> list[Attachment]:
     return attachments
 
 
-def _slack_ts_to_datetime(value: str) -> datetime | None:
+def _slack_ts_to_float(value: str) -> float | None:
     try:
-        return datetime.fromtimestamp(float(value), tz=UTC).replace(microsecond=0)
-    except (TypeError, ValueError, OverflowError):
+        return float(value)
+    except (TypeError, ValueError):
         return None
 
 
@@ -115,7 +115,6 @@ class SlackTransport(Transport):
         agent_name: str,
         bot_token: str,
         app_token: str,
-        tz: tzinfo = UTC,
         *,
         store: Store | None = None,
         include_archived_channels: bool = False,
@@ -128,7 +127,6 @@ class SlackTransport(Transport):
         self.agent_name = agent_name
         self._bot_token = bot_token
         self._app_token = app_token
-        self._tz = tz
         self._store = store
         self._include_archived_channels = include_archived_channels
         self._inject_channels_into_prompt = inject_channels_into_prompt
@@ -874,7 +872,7 @@ class SlackTransport(Transport):
             name = await self._resolve_user(user_id)
             try:
                 ts = float(m.get("ts", "0"))
-                dt = datetime.fromtimestamp(ts, tz=UTC).astimezone(self._tz)
+                dt = datetime.fromtimestamp(ts, tz=UTC)
                 time_str = dt.strftime("%-I:%M %p")
             except (TypeError, ValueError):
                 time_str = "unknown time"
@@ -967,7 +965,7 @@ class SlackTransport(Transport):
             is_private=(event.get("channel_type") == "im"),
             was_mentioned=strip_leading_mention,
             attachments=attachments,
-            created_at=_slack_ts_to_datetime(message_id),
+            created_at=_slack_ts_to_float(message_id),
         )
         await on_message(msg)
 
@@ -976,7 +974,6 @@ def create_slack_transport(
     name: str,
     agent_name: str,
     options: dict[str, object],
-    tz: tzinfo,
     store: Store,
 ) -> SlackTransport:
     normalized = SlackTransportOptions(**options)
@@ -985,7 +982,6 @@ def create_slack_transport(
         agent_name=agent_name,
         bot_token=_resolve_env_var(normalized.bot_token_env, agent_name),
         app_token=_resolve_env_var(normalized.app_token_env, agent_name),
-        tz=tz,
         store=store,
         include_archived_channels=normalized.include_archived_channels,
         inject_channels_into_prompt=normalized.inject_channels_into_prompt,

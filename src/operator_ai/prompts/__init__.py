@@ -104,6 +104,7 @@ def assemble_system_prompt(
     skills_dir: Path = SKILLS_DIR,
     skill_filter: Callable[[str], bool] | None = None,
     available_agents: list[AgentInfo] | None = None,
+    allowed_agents: set[str] | None = None,
 ) -> str:
     """Assemble the runtime system prompt with shared ordering for chat and jobs.
 
@@ -135,7 +136,7 @@ def assemble_system_prompt(
 
     if available_agents is None:
         available_agents = scan_agents()
-    agents_prompt = build_agents_prompt(available_agents, agent_name)
+    agents_prompt = build_agents_prompt(available_agents, agent_name, allowed_agents=allowed_agents)
     if agents_prompt:
         stable.append(agents_prompt)
 

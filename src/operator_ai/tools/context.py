@@ -9,6 +9,7 @@ from dataclasses import dataclass
 class UserContext:
     username: str
     roles: list[str]
+    timezone: str | None = None
 
 
 _user_var: contextvars.ContextVar[UserContext] = contextvars.ContextVar("user_context")

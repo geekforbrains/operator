@@ -245,7 +245,7 @@ async def _execute_job(
                     exit_code,
                     f": {prerun_output.strip()}" if prerun_output.strip() else "",
                 )
-                state.last_run = datetime.now(UTC).isoformat()
+                state.last_run = time.time()
                 state.last_result = "gated"
                 state.last_duration_seconds = round(time.time() - start_time, 1)
                 state.gate_count += 1
@@ -326,7 +326,7 @@ async def _execute_job(
                 raise RuntimeError(f"postrun hook exited {exit_code}{details}")
 
         logger.info("Job '%s' completed in %.1fs", job.name, time.time() - start_time)
-        state.last_run = datetime.now(UTC).isoformat()
+        state.last_run = time.time()
         state.last_result = "success"
         state.last_duration_seconds = round(time.time() - start_time, 1)
         state.last_error = ""
@@ -335,7 +335,7 @@ async def _execute_job(
 
     except Exception as e:
         logger.exception("Job '%s' failed", job.name)
-        state.last_run = datetime.now(UTC).isoformat()
+        state.last_run = time.time()
         state.last_result = "error"
         state.last_duration_seconds = round(time.time() - start_time, 1)
         state.last_error = str(e)
@@ -393,7 +393,7 @@ class JobRunner:
             return
 
     async def _tick(self) -> None:
-        now = datetime.now(self._config.tz)
+        now = datetime.now(UTC)
         jobs = scan_jobs()
 
         for job in jobs:

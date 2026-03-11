@@ -8,6 +8,7 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
+from croniter import croniter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger("operator.config")
@@ -48,9 +49,6 @@ class StrictConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-# ── Defaults ────────────────────────────────────────────────────
-
-
 class DefaultsConfig(StrictConfigModel):
     models: list[str] = Field(default_factory=list)
     thinking: ThinkingLevel = "off"
@@ -70,71 +68,45 @@ class DefaultsConfig(StrictConfigModel):
         return self
 
 
-# ── Runtime ─────────────────────────────────────────────────────
-
-
 class RuntimeConfig(StrictConfigModel):
-    timezone: str = "UTC"
     env_file: str | None = None
     show_usage: bool = False
     reject_response: Literal["announce", "ignore"] = "ignore"
 
+
+class TransportConfig(StrictConfigModel):
+    type: str
+    bot_token_env: str | None = None
+    app_token_env: str | None = None
+
     @model_validator(mode="after")
-    def validate_timezone(self) -> RuntimeConfig:
-        _validate_timezone(self.timezone)
+    def validate_transport(self) -> TransportConfig:
+        self.type = self.type.strip()
+        if self.type != "slack":
+            raise ValueError(f"Unsupported transport type: {self.type!r}")
+        if not self.bot_token_env:
+            raise ValueError("transport.bot_token_env is required for slack transport")
+        if not self.app_token_env:
+            raise ValueError("transport.app_token_env is required for slack transport")
         return self
 
-
-# ── Transport ───────────────────────────────────────────────────
-
-
-class TransportConfig(BaseModel):
-    type: str
-    options: dict[str, Any] = Field(default_factory=dict)
-
-    model_config = ConfigDict(extra="allow")
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_transport(cls, values: Any) -> Any:
-        if not isinstance(values, dict):
-            return values
-
-        data = dict(values)
-        transport_type = str(data.pop("type", "")).strip()
-        if not transport_type:
-            raise ValueError("transport.type is required")
-
-        explicit_options = data.pop("options", {})
-        if explicit_options in ("", None):
-            explicit_options = {}
-        if not isinstance(explicit_options, dict):
-            raise ValueError("transport.options must be an object")
-
-        options = {**explicit_options, **data}
-
-        from operator_ai.transport.registry import normalize_transport_options
-
-        normalized = normalize_transport_options(transport_type, options)
-        return {"type": transport_type, "options": normalized}
-
-
-# ── Permissions (closed-by-default) ─────────────────────────────
+    def resolve_env(self, key: str, agent_name: str) -> str:
+        env_var = getattr(self, key, None)
+        if env_var is None:
+            raise ValueError(f"Agent '{agent_name}' transport missing '{key}'")
+        value = os.environ.get(env_var)
+        if not value:
+            raise ValueError(f"Agent '{agent_name}' transport: env var '{env_var}' not set")
+        return value
 
 
 class PermissionsConfig(StrictConfigModel):
-    tools: list[str] | Literal["*"] = Field(default_factory=list)
-    skills: list[str] | Literal["*"] = Field(default_factory=list)
-
-
-# ── Roles ───────────────────────────────────────────────────────
+    tools: list[str] | Literal["*"] | None = None  # None = no block = full access
+    skills: list[str] | Literal["*"] | None = None
 
 
 class RoleConfig(StrictConfigModel):
     agents: list[str]
-
-
-# ── Agent ───────────────────────────────────────────────────────
 
 
 class AgentConfig(StrictConfigModel):
@@ -143,6 +115,7 @@ class AgentConfig(StrictConfigModel):
     max_iterations: int | None = Field(default=None, gt=0)
     context_ratio: float | None = Field(default=None, gt=0.0, le=1.0)
     max_output_tokens: int | None = Field(default=None, gt=0)
+    sandbox: bool = True
     transport: TransportConfig | None = None
     permissions: PermissionsConfig | None = None
 
@@ -152,7 +125,66 @@ class AgentConfig(StrictConfigModel):
         return _normalize_models(values)
 
 
-# ── Top-level Config ────────────────────────────────────────────
+class ScheduledTaskConfig(StrictConfigModel):
+    enabled: bool = False
+    schedule: str = ""
+    models: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_models(cls, values: Any) -> Any:
+        return _normalize_models(values)
+
+    @model_validator(mode="after")
+    def validate_required_when_enabled(self) -> ScheduledTaskConfig:
+        if not self.enabled:
+            return self
+        label = type(self).__name__.removesuffix("Config").lower()
+        missing = []
+        if not self.schedule:
+            missing.append("schedule")
+        if not self.models:
+            missing.append("model(s)")
+        if missing:
+            raise ValueError(
+                f"memory.{label} is enabled but missing required fields: {', '.join(missing)}"
+            )
+        if not croniter.is_valid(self.schedule):
+            raise ValueError(
+                f"memory.{label}.schedule is not a valid cron expression: {self.schedule!r}"
+            )
+        return self
+
+
+class HarvesterConfig(ScheduledTaskConfig):
+    pass
+
+
+class CleanerConfig(ScheduledTaskConfig):
+    pass
+
+
+class MemoryConfig(StrictConfigModel):
+    embed_model: str = ""
+    embed_dimensions: int = Field(default=1536, gt=0)
+    max_memories: int = Field(default=10000, gt=0)
+    inject_top_k: int = Field(default=5, ge=0)
+    inject_min_relevance: float = Field(default=0.1, ge=0.0, le=1.0)
+    candidate_ttl_days: int = Field(default=14, gt=0)
+    harvester: HarvesterConfig = Field(default_factory=HarvesterConfig)
+    cleaner: CleanerConfig = Field(default_factory=CleanerConfig)
+
+    @property
+    def enabled(self) -> bool:
+        return self.harvester.enabled or self.cleaner.enabled
+
+    @model_validator(mode="after")
+    def validate_required_when_enabled(self) -> MemoryConfig:
+        if not self.enabled:
+            return self
+        if not self.embed_model:
+            raise ValueError("memory.embed_model is required when harvester or cleaner is enabled")
+        return self
 
 
 class Config(StrictConfigModel):
@@ -160,14 +192,14 @@ class Config(StrictConfigModel):
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     agents: dict[str, AgentConfig] = Field(default_factory=dict)
     roles: dict[str, RoleConfig] = Field(default_factory=dict)
+    permission_groups: dict[str, list[str]] = Field(default_factory=dict)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
     @model_validator(mode="after")
     def validate_no_admin_role(self) -> Config:
         if "admin" in self.roles:
             raise ValueError("admin is a built-in role and cannot be redefined")
         return self
-
-    # ── Agent accessors (with fallback to defaults) ─────────────
 
     def agent_models(self, agent_name: str) -> list[str]:
         agent = self.agents.get(agent_name)
@@ -199,16 +231,14 @@ class Config(StrictConfigModel):
             return agent.max_output_tokens
         return self.defaults.max_output_tokens
 
-    # ── Path helpers ────────────────────────────────────────────
+    def agent_dir(self, agent_name: str) -> Path:
+        return OPERATOR_DIR / "agents" / agent_name
 
-    def agent_dir(self, name: str) -> Path:
-        return OPERATOR_DIR / "agents" / name
+    def agent_workspace(self, agent_name: str) -> Path:
+        return self.agent_dir(agent_name) / "workspace"
 
-    def agent_workspace(self, name: str) -> Path:
-        return self.agent_dir(name) / "workspace"
-
-    def agent_prompt_path(self, name: str) -> Path:
-        return self.agent_dir(name) / "AGENT.md"
+    def agent_prompt_path(self, agent_name: str) -> Path:
+        return self.agent_dir(agent_name) / "AGENT.md"
 
     def agent_memory_dir(self, name: str) -> Path:
         return self.agent_dir(name) / "memory"
@@ -238,51 +268,66 @@ class Config(StrictConfigModel):
     def db_dir(self) -> Path:
         return OPERATOR_DIR / "db"
 
-    @property
-    def tz(self) -> ZoneInfo:
-        """Return the configured timezone as a ZoneInfo instance."""
-        return ZoneInfo(self.runtime.timezone)
-
     def default_agent(self) -> str:
-        """Return the first agent name from config, or 'operator'."""
+        """Return the first agent name from config, or 'default'."""
         if self.agents:
             return next(iter(self.agents))
         return "operator"
 
-    # ── Permission filters (closed-by-default) ──────────────────
+    def agent_sandboxed(self, agent_name: str) -> bool:
+        agent = self.agents.get(agent_name)
+        if agent is not None:
+            return agent.sandbox
+        return True
+
+    def _expand_permission_list(self, items: list[str], kind: str = "tools") -> set[str]:
+        """Expand @group references in a permission list."""
+        expanded: set[str] = set()
+        for item in items:
+            if item.startswith("@"):
+                group_name = item[1:]
+                group_tools = self.permission_groups.get(group_name)
+                if group_tools is None:
+                    logger.warning("Unknown permission group '@%s' in %s", group_name, kind)
+                else:
+                    expanded.update(group_tools)
+            else:
+                expanded.add(item)
+        return expanded
 
     def agent_tool_filter(self, agent_name: str) -> Callable[[str], bool]:
         """Return a predicate that returns True if a tool name is allowed.
 
-        Closed-by-default: no agent config or no permissions block means
-        nothing is allowed.  '*' means everything is allowed.
+        Closed-by-default: no agent config, no permissions block, or
+        tools=None means nothing is allowed.  '*' means everything is allowed.
         """
         agent = self.agents.get(agent_name)
         if not agent or not agent.permissions:
             return lambda _name: False
         tools = agent.permissions.tools
+        if tools is None:
+            return lambda _name: False
         if tools == "*":
             return lambda _name: True
-        allowed = set(tools)
+        allowed = self._expand_permission_list(list(tools), kind="tools")
         return lambda name: name in allowed
 
     def agent_skill_filter(self, agent_name: str) -> Callable[[str], bool]:
         """Return a predicate that returns True if a skill name is allowed.
 
-        Closed-by-default: no agent config or no permissions block means
-        nothing is allowed.  '*' means everything is allowed.
+        Closed-by-default: no agent config, no permissions block, or
+        skills=None means nothing is allowed.  '*' means everything is allowed.
         """
         agent = self.agents.get(agent_name)
         if not agent or not agent.permissions:
             return lambda _name: False
         skills = agent.permissions.skills
+        if skills is None:
+            return lambda _name: False
         if skills == "*":
             return lambda _name: True
-        allowed = set(skills)
+        allowed = self._expand_permission_list(list(skills), kind="skills")
         return lambda name: name in allowed
-
-
-# ── Shared symlink helper ───────────────────────────────────────
 
 
 def ensure_shared_symlink(workspace: Path, shared: Path) -> None:
@@ -299,9 +344,6 @@ def ensure_shared_symlink(workspace: Path, shared: Path) -> None:
         return
     link.symlink_to(shared)
     logger.info("shared: created symlink %s → %s", link, shared)
-
-
-# ── Env file helpers ────────────────────────────────────────────
 
 
 def parse_env_file(path: Path) -> dict[str, str]:
@@ -332,15 +374,11 @@ def _load_env_file(env_path: str, *, base_dir: Path | None = None) -> None:
         os.environ.setdefault(key, value)
 
 
-# ── Config loader ───────────────────────────────────────────────
-
-
 def load_config(path: Path | None = None) -> Config:
     path = path or CONFIG_PATH
     if not path.exists():
         raise ConfigError(
-            f"Config not found: {path}\nCreate it with at least:\n"
-            '  defaults:\n    models:\n      - "openai/gpt-4.1"'
+            f'Config not found: {path}\nCreate it with at least:\n  defaults:\n    models:\n      - "openai/gpt-4.1"'
         )
     try:
         with path.open() as f:
@@ -353,5 +391,4 @@ def load_config(path: Path | None = None) -> Config:
 
     if config.runtime.env_file:
         _load_env_file(config.runtime.env_file, base_dir=path.parent)
-
     return config

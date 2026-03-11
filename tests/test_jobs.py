@@ -81,7 +81,6 @@ class FakeStore:
 
 def _config() -> Config:
     return Config(
-        runtime={"timezone": "America/Vancouver"},
         defaults={"models": ["test/model"]},
         agents={"operator": {}},
     )
@@ -325,7 +324,6 @@ def test_execute_job_configures_memory_and_skill_filter(monkeypatch, tmp_path: P
         path=tmp_path / "incident-digest.md",
     )
     config = Config(
-        runtime={"timezone": "America/Vancouver"},
         defaults={"models": ["test/model"]},
         agents={"operator": {"permissions": {"skills": ["allowed-skill"]}}},
     )
@@ -356,7 +354,6 @@ def test_create_job_writes_flat_file(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         "operator_ai.tools.jobs.load_config",
         lambda: Config(
-            runtime={"timezone": "UTC"},
             defaults={"models": ["test/model"]},
             agents={"operator": {}},
         ),

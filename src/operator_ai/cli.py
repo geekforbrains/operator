@@ -31,6 +31,7 @@ from operator_ai.jobs import run_job_now
 from operator_ai.log_context import setup_logging
 from operator_ai.main import async_main
 from operator_ai.memory import MemoryStore
+from operator_ai.message_timestamps import format_ts
 from operator_ai.prompts import load_prompt
 from operator_ai.skills import (
     install_bundled_skills,
@@ -193,7 +194,6 @@ _DEFAULT_MODEL = _SETUP_PROVIDERS[_DEFAULT_PROVIDER].default_model
 def _build_starter_config(
     *,
     default_model: str = _DEFAULT_MODEL,
-    timezone: str = "UTC",
     transport_name: str | None = None,
     transport_options: dict[str, object] | None = None,
 ) -> str:
@@ -212,7 +212,6 @@ def _build_starter_config(
         # Repo: https://github.com/geekforbrains/operator
 
         runtime:
-          timezone: "{timezone}"
           env_file: ".env"
           show_usage: false
           # How an agent responds when messaged from an unknown user.
@@ -230,8 +229,33 @@ def _build_starter_config(
           max_iterations: 50
           context_ratio: 0.5
 
+        # Permission groups — clusters of related tools that can be referenced
+        # as @groupname in agent permissions. Modify, split, or extend as needed.
+        permission_groups:
+          memory:
+            - save_rule
+            - save_note
+            - search_notes
+            - list_memory
+            - update_memory
+            - forget_memory
+          files:
+            - read_file
+            - write_file
+            - list_directory
+          messaging:
+            - send_message
+            - send_file
+          jobs:
+            - list_jobs
+            - run_job
+            - create_job
+
         agents:
           {_DEFAULT_AGENT_NAME}:
+            permissions:
+              tools: "*"
+              skills: "*"
             transport:
 {transport_block}
 
@@ -593,7 +617,7 @@ def init() -> None:
     """Scaffold the ~/.operator directory with starter config."""
     result = _scaffold_operator_home(
         OPERATOR_DIR,
-        config_text=_build_starter_config(timezone=_detect_local_timezone()),
+        config_text=_build_starter_config(),
     )
     if not result.wrote_config:
         console.print(f"\n[bold]{result.config_file}[/bold] already exists.")
@@ -662,7 +686,6 @@ def setup(
         OPERATOR_DIR,
         config_text=_build_starter_config(
             default_model=selected_provider.default_model,
-            timezone=selected_timezone,
             transport_name=selected_transport.name,
             transport_options=selected_transport.config_defaults,
         ),
@@ -721,6 +744,10 @@ def setup(
         transport=selected_transport,
         external_id=external_id,
     )
+
+    # Set timezone on the user record
+    store = get_store()
+    store.set_user_timezone(resolved_username, selected_timezone)
 
     console.print(f"\n[green]Updated[/green] {result.env_file}")
     if result.wrote_config:
@@ -991,7 +1018,7 @@ def job_list() -> None:
     for job in jobs:
         state = store.load_job_state(job.name)
         status = Text("enabled", style="green") if job.enabled else Text("disabled", style="red")
-        last = state.last_run[:19] if state.last_run else "never"
+        last = format_ts(state.last_run) if state.last_run else "never"
         result_style = {"success": "green", "error": "red", "gated": "yellow"}.get(
             state.last_result, "dim"
         )
@@ -1056,7 +1083,7 @@ def job_info(
     rt = Table(title="Runtime State", show_header=False, show_edge=False, pad_edge=False, box=None)
     rt.add_column("Key", style="bold", min_width=12)
     rt.add_column("Value")
-    rt.add_row("Last run", state.last_run[:19] if state.last_run else "never")
+    rt.add_row("Last run", format_ts(state.last_run) if state.last_run else "never")
     rt.add_row("Last result", Text(state.last_result or "-", style=result_style))
     if state.last_duration_seconds:
         rt.add_row("Duration", f"{state.last_duration_seconds}s")
@@ -1481,7 +1508,7 @@ def user_info(
     table.add_column("Key", style="bold", min_width=12)
     table.add_column("Value")
     table.add_row("Username", user.username)
-    table.add_row("Created", user.created_at)
+    table.add_row("Created", format_ts(user.created_at))
     table.add_row("Roles", ", ".join(user.roles) if user.roles else "-")
     table.add_row(
         "Identities",

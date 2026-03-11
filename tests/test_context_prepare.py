@@ -6,8 +6,8 @@ import copy
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
-from operator_ai.config import Config
 from operator_ai.context import (
     HARD_CLEAR_PLACEHOLDER,
     SOFT_TRIM_HEAD,
@@ -22,13 +22,7 @@ from operator_ai.context import (
 from operator_ai.message_timestamps import MESSAGE_CREATED_AT_KEY, attach_message_created_at
 from operator_ai.prompts import CACHE_BOUNDARY
 
-
-def _config(timezone: str = "America/Vancouver") -> Config:
-    return Config(
-        runtime={"timezone": timezone},
-        defaults={"models": ["openai/gpt-4.1"]},
-        agents={"operator": {}},
-    )
+VANCOUVER = ZoneInfo("America/Vancouver")
 
 
 # ---------------------------------------------------------------------------
@@ -45,22 +39,23 @@ class TestCleanAndRender:
                 created_at=datetime(2026, 3, 6, 17, 45, tzinfo=UTC),
             ),
         ]
-        result = _clean_and_render(messages, model="openai/gpt-4.1", config=_config())
+        result = _clean_and_render(messages, model="openai/gpt-4.1", tz=VANCOUVER)
         assert result[1]["content"].startswith("[Friday, 2026-03-06T09:45:00-08:00]\n")
         assert result[1]["content"].endswith("Hello")
         assert MESSAGE_CREATED_AT_KEY not in result[1]
 
-    def test_timestamp_key_stripped_even_without_config(self) -> None:
+    def test_timestamp_key_stripped_and_rendered_in_utc_without_tz(self) -> None:
         messages = [
             attach_message_created_at(
                 {"role": "user", "content": "Hi"},
                 created_at=datetime(2026, 3, 6, 17, 45, tzinfo=UTC),
             ),
         ]
-        result = _clean_and_render(messages, model="openai/gpt-4.1", config=None)
+        result = _clean_and_render(messages, model="openai/gpt-4.1", tz=None)
         assert MESSAGE_CREATED_AT_KEY not in result[0]
-        # Content unchanged (no timestamp prefix without config)
-        assert result[0]["content"] == "Hi"
+        # Renders in UTC when no timezone provided
+        assert result[0]["content"].startswith("[Friday, 2026-03-06T17:45:00+00:00]")
+        assert result[0]["content"].endswith("Hi")
 
     def test_reasoning_blocks_stripped_from_assistant(self) -> None:
         messages = [
@@ -76,7 +71,7 @@ class TestCleanAndRender:
                 "provider_specific_fields": {"source": "anthropic"},
             }
         ]
-        result = _clean_and_render(messages, model="openai/gpt-4.1", config=None)
+        result = _clean_and_render(messages, model="openai/gpt-4.1", tz=None)
         assert result[0]["content"] == [{"type": "text", "text": "Visible answer"}]
         assert "reasoning_content" not in result[0]
         assert "thinking_blocks" not in result[0]
@@ -91,7 +86,7 @@ class TestCleanAndRender:
                 ],
             }
         ]
-        result = _clean_and_render(messages, model="openai/gpt-4.1", config=None)
+        result = _clean_and_render(messages, model="openai/gpt-4.1", tz=None)
         assert result[0]["content"] == ""
 
     def test_system_and_tool_messages_passed_through(self) -> None:
@@ -99,7 +94,7 @@ class TestCleanAndRender:
             {"role": "system", "content": "You are helpful"},
             {"role": "tool", "tool_call_id": "tc1", "content": "result"},
         ]
-        result = _clean_and_render(messages, model="openai/gpt-4.1", config=None)
+        result = _clean_and_render(messages, model="openai/gpt-4.1", tz=None)
         assert result[0]["content"] == "You are helpful"
         assert result[1]["content"] == "result"
         assert result[1]["tool_call_id"] == "tc1"
@@ -120,7 +115,7 @@ class TestCleanAndRender:
             },
         ]
         originals = copy.deepcopy(messages)
-        _clean_and_render(messages, model="openai/gpt-4.1", config=_config())
+        _clean_and_render(messages, model="openai/gpt-4.1", tz=VANCOUVER)
         assert messages == originals
 
 
@@ -399,7 +394,7 @@ class TestFullPipeline:
             {"role": "tool", "tool_call_id": "tc1", "content": "tool output"},
         ]
         originals = copy.deepcopy(messages)
-        prepare_context(messages, "openai/gpt-4.1", config=_config())
+        prepare_context(messages, "openai/gpt-4.1", tz=VANCOUVER)
         assert messages == originals
 
     def test_tool_call_id_pairing_valid_after_transforms(self) -> None:
@@ -444,7 +439,7 @@ class TestFullPipeline:
         result = prepare_context(
             messages,
             "anthropic/claude-sonnet-4-6",
-            config=_config(),
+            tz=VANCOUVER,
         )
 
         # System prompt should have cache breakpoints

@@ -8,6 +8,7 @@ from croniter import croniter
 from operator_ai.config import OPERATOR_DIR, ConfigError, load_config
 from operator_ai.job_specs import JOBS_DIR
 from operator_ai.jobs import scan_jobs
+from operator_ai.message_timestamps import format_ts
 from operator_ai.skills import parse_frontmatter, rewrite_frontmatter
 from operator_ai.store import get_store
 from operator_ai.tools.registry import safe_name, tool
@@ -80,7 +81,7 @@ def _list_jobs() -> str:
             f"  description: {job.description}\n"
             f"  agent: {job.agent or '(default)'}\n"
             f"  model: {job.model or '(agent default)'}\n"
-            f"  last_run: {state.last_run or 'never'} ({state.last_result or '-'})\n"
+            f"  last_run: {format_ts(state.last_run) if state.last_run else 'never'} ({state.last_result or '-'})\n"
             f"  runs: {state.run_count}, skips: {state.skip_count}"
         )
 

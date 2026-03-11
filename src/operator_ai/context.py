@@ -9,10 +9,10 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import litellm
 
-from operator_ai.config import Config
 from operator_ai.message_timestamps import (
     MESSAGE_CREATED_AT_KEY,
     _prefix_content,
@@ -39,7 +39,7 @@ def prepare_context(
     model: str,
     *,
     context_ratio: float = 0.0,
-    config: Config | None = None,
+    tz: ZoneInfo | None = None,
     tool_results_keep: int = 5,
     tool_results_soft_trim: int = 10,
 ) -> list[dict[str, Any]]:
@@ -54,7 +54,7 @@ def prepare_context(
     Never mutates the original *messages* list or its message dicts.
     """
     # Step 1: Clean + render
-    result = _clean_and_render(messages, model=model, config=config)
+    result = _clean_and_render(messages, model=model, tz=tz)
 
     # Step 2: Tool result compression
     _compress_tool_results(result, keep=tool_results_keep, soft_trim=tool_results_soft_trim)
@@ -79,7 +79,7 @@ def _clean_and_render(
     messages: list[dict[str, Any]],
     *,
     model: str,
-    config: Config | None,
+    tz: ZoneInfo | None,
 ) -> list[dict[str, Any]]:
     """Walk messages once, building a new output list.
 
@@ -101,8 +101,8 @@ def _clean_and_render(
         elif role == "user":
             clean = dict(message)
             created_at = clean.pop(MESSAGE_CREATED_AT_KEY, None)
-            if config is not None and isinstance(created_at, str) and created_at:
-                prefix = build_message_timestamp_prefix(config, created_at=created_at)
+            if isinstance(created_at, (int, float)) and created_at:
+                prefix = build_message_timestamp_prefix(tz, created_at=created_at)
                 if prefix:
                     clean["content"] = _prefix_content(clean.get("content"), prefix)
             output.append(clean)

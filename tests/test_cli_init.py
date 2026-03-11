@@ -52,7 +52,7 @@ def test_init_creates_config_and_shows_setup_reminder(tmp_path: Path):
     assert "show_usage: false" in content
     assert "reject_response: ignore" in content
     assert "settings:" not in content
-    assert 'timezone: "America/Vancouver"' in content
+    assert "permission_groups:" in content
 
 
 def test_init_creates_env_file_with_api_key_placeholders(tmp_path: Path):
@@ -224,8 +224,6 @@ def test_setup_creates_env_and_admin_user(tmp_path: Path):
     assert "ANTHROPIC_API_KEY=sk-ant-key" in env_content
     assert "SLACK_BOT_TOKEN=xoxb-bot-token" in env_content
     assert "SLACK_APP_TOKEN=xapp-app-token" in env_content
-    assert 'timezone: "America/Vancouver"' in config_file.read_text()
-
     user = store.get_user("gavin")
     assert user is not None
     assert "admin" in user.roles
@@ -273,7 +271,6 @@ def test_setup_run_invokes_runtime(tmp_path: Path):
 
     config_content = (op_dir / "operator.yaml").read_text()
     assert '    - "openai/gpt-4.1"' in config_content
-    assert 'timezone: "Europe/London"' in config_content
 
 
 def test_setup_gemini_uses_google_api_key_from_env_file(tmp_path: Path):
@@ -311,4 +308,4 @@ def test_setup_gemini_uses_google_api_key_from_env_file(tmp_path: Path):
     env_content = (op_dir / ".env").read_text()
     assert "GOOGLE_API_KEY=google-key" in env_content
     assert "GEMINI_API_KEY=" not in env_content
-    assert 'timezone: "America/Toronto"' in (op_dir / "operator.yaml").read_text()
+    assert "permission_groups:" in (op_dir / "operator.yaml").read_text()
