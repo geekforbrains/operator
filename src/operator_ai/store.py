@@ -3,41 +3,25 @@ from __future__ import annotations
 import json
 import logging
 import re
-import struct
+import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-try:
-    import pysqlite3 as sqlite3
-except ImportError:
-    import sqlite3
-
-import sqlite_vec
-
 from operator_ai.config import OPERATOR_DIR
 from operator_ai.message_timestamps import MESSAGE_CREATED_AT_KEY
 from operator_ai.messages import trim_incomplete_tool_turns
 
-DB_PATH = OPERATOR_DIR / "state" / "operator.db"
+DB_PATH = OPERATOR_DIR / "db" / "operator.db"
 logger = logging.getLogger("operator.store")
 
 
-_USERNAME_RE = re.compile(r"^[a-z0-9.\-]{1,64}$")
-_MEMORY_RETENTIONS = frozenset({"candidate", "durable"})
-_MEMORY_SCHEMA_VERSION = "2"
-_ACTIVE_MEMORY_CLAUSE = (
-    "(pinned = 1 OR expires_at IS NULL OR expires_at > strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
-)
-_ACTIVE_MEMORY_CLAUSE_WITH_ALIAS = (
-    "(m.pinned = 1 OR m.expires_at IS NULL OR m.expires_at > strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
-)
-_UNSET = object()
+USERNAME_RE = re.compile(r"^[a-z0-9.\-]{1,64}$")
 
 
 def _validate_username(username: str) -> None:
-    if not _USERNAME_RE.match(username):
+    if not USERNAME_RE.match(username):
         msg = (
             f"Invalid username {username!r}: must be 1-64 chars, "
             "lowercase alphanumeric, dots, and hyphens only"
@@ -66,15 +50,11 @@ class JobState:
 
 
 class Store:
-    def __init__(self, path: Path = DB_PATH, embed_dimensions: int = 1536):
+    def __init__(self, path: Path = DB_PATH):
         self._path = path
-        self._embed_dimensions = embed_dimensions
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self._path, timeout=30.0)
         self._conn.row_factory = sqlite3.Row
-        self._conn.enable_load_extension(True)
-        sqlite_vec.load(self._conn)
-        self._conn.enable_load_extension(False)
         self._init_db()
 
     def _init_db(self) -> None:
@@ -145,37 +125,6 @@ class Store:
             """
         )
 
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS schema_meta (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
-        self._ensure_memory_schema()
-
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS agent_kv (
-                agent TEXT NOT NULL,
-                ns TEXT NOT NULL DEFAULT '',
-                key TEXT NOT NULL,
-                value TEXT NOT NULL,
-                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-                updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-                expires_at TEXT,
-                PRIMARY KEY (agent, ns, key)
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_agent_kv_expires
-            ON agent_kv(expires_at) WHERE expires_at IS NOT NULL
-            """
-        )
-
         # User / identity / role tables
         self._conn.execute(
             """
@@ -207,151 +156,12 @@ class Store:
 
         self._conn.commit()
 
-    def _ensure_memory_schema(self) -> None:
-        if self._memory_schema_needs_reset():
-            logger.warning(
-                "Resetting legacy memory schema; existing memories and memory worker state will be discarded"
-            )
-            with self._conn:
-                self._conn.execute("DROP TABLE IF EXISTS vec_memories")
-                self._conn.execute("DROP TABLE IF EXISTS memories")
-                self._conn.execute("DROP TABLE IF EXISTS memory_state")
-                self._conn.execute(
-                    "DELETE FROM schema_meta WHERE key IN ('embed_dimensions', 'memory_schema_version')"
-                )
-
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS memories (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                content TEXT NOT NULL,
-                scope TEXT NOT NULL,
-                scope_id TEXT NOT NULL,
-                retention TEXT NOT NULL CHECK(retention IN ('candidate', 'durable')),
-                pinned INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now')),
-                expires_at TEXT
-            )
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_memories_scope
-            ON memories(scope, scope_id)
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_memories_scope_pinned
-            ON memories(scope, scope_id, pinned, id)
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_memories_expires_at
-            ON memories(expires_at) WHERE expires_at IS NOT NULL
-            """
-        )
-
-        self._conn.execute(
-            f"""
-            CREATE VIRTUAL TABLE IF NOT EXISTS vec_memories USING vec0(
-                memory_id INTEGER PRIMARY KEY,
-                embedding float[{self._embed_dimensions}],
-                scope TEXT partition key,
-                scope_id TEXT partition key
-            )
-            """
-        )
-
-        self._conn.execute(
-            """
-            INSERT INTO schema_meta(key, value) VALUES('embed_dimensions', ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            """,
-            (str(self._embed_dimensions),),
-        )
-        self._conn.execute(
-            """
-            INSERT INTO schema_meta(key, value) VALUES('memory_schema_version', ?)
-            ON CONFLICT(key) DO UPDATE SET value = excluded.value
-            """,
-            (_MEMORY_SCHEMA_VERSION,),
-        )
-        self._conn.execute(
-            """
-            CREATE TABLE IF NOT EXISTS memory_state (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
-        self.sweep_expired_memories()
-
-    def _memory_schema_needs_reset(self) -> bool:
-        memories_exists = self._table_exists("memories")
-        vec_exists = self._table_exists("vec_memories")
-
-        if memories_exists != vec_exists:
-            return True
-        if not memories_exists:
-            return False
-
-        expected_columns = {
-            "id",
-            "content",
-            "scope",
-            "scope_id",
-            "retention",
-            "pinned",
-            "created_at",
-            "expires_at",
-        }
-        columns = {
-            row["name"] for row in self._conn.execute("PRAGMA table_info(memories)").fetchall()
-        }
-        if not expected_columns.issubset(columns):
-            return True
-
-        version = self._get_schema_meta("memory_schema_version")
-        if version not in (None, _MEMORY_SCHEMA_VERSION):
-            return True
-
-        configured_dims = self._get_schema_meta("embed_dimensions")
-        if configured_dims is not None and int(configured_dims) != self._embed_dimensions:
-            return True
-
-        row = self._conn.execute(
-            "SELECT sql FROM sqlite_master WHERE type='table' AND name='vec_memories'"
-        ).fetchone()
-        if row is None or not row["sql"]:
-            return True
-
-        match = re.search(r"embedding\s+float\[(\d+)\]", row["sql"])
-        if not match:
-            return True
-        return int(match.group(1)) != self._embed_dimensions
-
-    def _table_exists(self, name: str) -> bool:
-        row = self._conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
-            (name,),
-        ).fetchone()
-        return row is not None
-
     def _ensure_messages_created_at_column(self) -> None:
         columns = {
             row["name"] for row in self._conn.execute("PRAGMA table_info(messages)").fetchall()
         }
         if "created_at" not in columns:
             self._conn.execute("ALTER TABLE messages ADD COLUMN created_at TEXT")
-
-    def _get_schema_meta(self, key: str) -> str | None:
-        row = self._conn.execute(
-            "SELECT value FROM schema_meta WHERE key = ?",
-            (key,),
-        ).fetchone()
-        return row["value"] if row else None
 
     def close(self) -> None:
         self._conn.close()
@@ -418,7 +228,8 @@ class Store:
 
     def load_messages(self, conversation_id: str) -> list[dict[str, Any]]:
         rows = self._conn.execute(
-            "SELECT id, message_json, created_at FROM messages WHERE conversation_id = ? ORDER BY id ASC",
+            "SELECT id, message_json, created_at FROM messages "
+            "WHERE conversation_id = ? ORDER BY id ASC",
             (conversation_id,),
         ).fetchall()
         messages = []
@@ -486,7 +297,8 @@ class Store:
 
     def lookup_platform_message(self, transport_name: str, platform_message_id: str) -> str | None:
         row = self._conn.execute(
-            "SELECT conversation_id FROM platform_message_index WHERE transport_name = ? AND platform_message_id = ?",
+            "SELECT conversation_id FROM platform_message_index "
+            "WHERE transport_name = ? AND platform_message_id = ?",
             (transport_name, platform_message_id),
         ).fetchone()
         return str(row["conversation_id"]) if row else None
@@ -543,353 +355,6 @@ class Store:
             ),
         )
         self._conn.commit()
-
-    # ── Memory methods ───────────────────────────────────────────
-
-    def insert_memory(
-        self,
-        content: str,
-        scope: str,
-        scope_id: str,
-        embedding_bytes: bytes,
-        retention: str,
-        pinned: bool = False,
-        expires_at: str | None = None,
-    ) -> int:
-        if retention not in _MEMORY_RETENTIONS:
-            raise ValueError(f"Invalid memory retention: {retention!r}")
-        with self._conn:
-            cur = self._conn.execute(
-                """
-                INSERT INTO memories (content, scope, scope_id, retention, pinned, expires_at)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """,
-                (content, scope, scope_id, retention, int(pinned), expires_at),
-            )
-            memory_id = cur.lastrowid
-            self._conn.execute(
-                "INSERT INTO vec_memories (memory_id, embedding, scope, scope_id) VALUES (?, ?, ?, ?)",
-                (memory_id, embedding_bytes, scope, scope_id),
-            )
-        return memory_id  # type: ignore[return-value]
-
-    def update_memory(
-        self,
-        memory_id: int,
-        content: str,
-        embedding_bytes: bytes,
-        *,
-        retention: str | None = None,
-        pinned: bool | None = None,
-        expires_at: str | None | object = _UNSET,
-    ) -> None:
-        assignments = ["content = ?"]
-        params: list[Any] = [content]
-        if retention is not None:
-            if retention not in _MEMORY_RETENTIONS:
-                raise ValueError(f"Invalid memory retention: {retention!r}")
-            assignments.append("retention = ?")
-            params.append(retention)
-        if pinned is not None:
-            assignments.append("pinned = ?")
-            params.append(int(pinned))
-        if expires_at is not _UNSET:
-            assignments.append("expires_at = ?")
-            params.append(expires_at)
-        with self._conn:
-            self._conn.execute(
-                f"UPDATE memories SET {', '.join(assignments)} WHERE id = ?",
-                (*params, memory_id),
-            )
-            self._conn.execute(
-                "UPDATE vec_memories SET embedding = ? WHERE memory_id = ?",
-                (embedding_bytes, memory_id),
-            )
-
-    def delete_memory(self, memory_id: int) -> bool:
-        with self._conn:
-            self._conn.execute("DELETE FROM vec_memories WHERE memory_id = ?", (memory_id,))
-            cur = self._conn.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
-        return cur.rowcount > 0
-
-    def search_memories_vec(
-        self,
-        embedding_bytes: bytes,
-        scope: str,
-        scope_id: str,
-        top_k: int = 5,
-    ) -> list[dict[str, Any]]:
-        if top_k <= 0:
-            return []
-        rows = self._conn.execute(
-            f"""
-            SELECT
-                v.memory_id,
-                v.distance,
-                m.content,
-                m.scope,
-                m.scope_id,
-                m.retention,
-                m.pinned,
-                m.created_at,
-                m.expires_at
-            FROM vec_memories v
-            JOIN memories m ON m.id = v.memory_id
-            WHERE v.embedding MATCH ? AND v.scope = ? AND v.scope_id = ? AND k = ?
-              AND m.scope = ? AND m.scope_id = ? AND {_ACTIVE_MEMORY_CLAUSE_WITH_ALIAS}
-            ORDER BY v.distance
-            """,
-            (embedding_bytes, scope, scope_id, top_k, scope, scope_id),
-        ).fetchall()
-        return [dict(row) for row in rows]
-
-    def search_memories_multi_scope(
-        self,
-        embedding_bytes: bytes,
-        scopes: list[tuple[str, str]],
-        top_k: int = 5,
-    ) -> list[dict[str, Any]]:
-        results: list[dict[str, Any]] = []
-        for scope, scope_id in scopes:
-            results.extend(self.search_memories_vec(embedding_bytes, scope, scope_id, top_k))
-        results.sort(key=lambda r: r["distance"])
-        return results
-
-    def count_memories(self, scope: str, scope_id: str) -> int:
-        row = self._conn.execute(
-            f"""
-            SELECT COUNT(*) AS cnt
-            FROM memories
-            WHERE scope = ? AND scope_id = ? AND {_ACTIVE_MEMORY_CLAUSE}
-            """,
-            (scope, scope_id),
-        ).fetchone()
-        return row["cnt"] if row else 0
-
-    def update_memory_pinned(self, memory_id: int, pinned: bool) -> bool:
-        cur = self._conn.execute(
-            "UPDATE memories SET pinned = ?, expires_at = CASE WHEN ? = 1 THEN NULL ELSE expires_at END WHERE id = ?",
-            (int(pinned), int(pinned), memory_id),
-        )
-        self._conn.commit()
-        return cur.rowcount > 0
-
-    def list_memories(
-        self,
-        scope: str | None = None,
-        scope_id: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> list[dict[str, Any]]:
-        query = (
-            "SELECT id, content, scope, scope_id, retention, pinned, created_at, expires_at "
-            "FROM memories"
-        )
-        params: list[Any] = []
-        conditions: list[str] = [_ACTIVE_MEMORY_CLAUSE]
-        if scope:
-            conditions.append("scope = ?")
-            params.append(scope)
-        if scope_id:
-            conditions.append("scope_id = ?")
-            params.append(scope_id)
-        query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY id LIMIT ? OFFSET ?"
-        params.extend([limit, offset])
-        rows = self._conn.execute(query, params).fetchall()
-        return [dict(row) for row in rows]
-
-    def get_pinned_memories(self, scope: str, scope_id: str) -> list[dict[str, Any]]:
-        rows = self._conn.execute(
-            f"""
-            SELECT id, content, scope, scope_id, retention, pinned, created_at, expires_at
-            FROM memories
-            WHERE scope = ? AND scope_id = ? AND pinned = 1 AND {_ACTIVE_MEMORY_CLAUSE}
-            ORDER BY id
-            """,
-            (scope, scope_id),
-        ).fetchall()
-        return [dict(row) for row in rows]
-
-    def get_all_memories_for_scope(self, scope: str, scope_id: str) -> list[dict[str, Any]]:
-        rows = self._conn.execute(
-            f"""
-            SELECT id, content, scope, scope_id, retention, pinned, created_at, expires_at
-            FROM memories
-            WHERE scope = ? AND scope_id = ? AND {_ACTIVE_MEMORY_CLAUSE}
-            ORDER BY id
-            """,
-            (scope, scope_id),
-        ).fetchall()
-        return [dict(row) for row in rows]
-
-    def count_all_memories_by_scope(self) -> list[dict[str, Any]]:
-        rows = self._conn.execute(
-            f"""
-            SELECT
-                scope,
-                scope_id,
-                COUNT(*) AS count,
-                SUM(CASE WHEN retention = 'candidate' THEN 1 ELSE 0 END) AS candidate_count,
-                SUM(CASE WHEN retention = 'durable' THEN 1 ELSE 0 END) AS durable_count,
-                SUM(pinned) AS pinned
-            FROM memories
-            WHERE {_ACTIVE_MEMORY_CLAUSE}
-            GROUP BY scope, scope_id
-            ORDER BY scope, scope_id
-            """
-        ).fetchall()
-        return [dict(row) for row in rows]
-
-    def get_distinct_scopes(self) -> list[tuple[str, str]]:
-        rows = self._conn.execute(
-            f"SELECT DISTINCT scope, scope_id FROM memories WHERE {_ACTIVE_MEMORY_CLAUSE}"
-        ).fetchall()
-        return [(row["scope"], row["scope_id"]) for row in rows]
-
-    def memories_exist_since(self, scope: str, scope_id: str, since_id: int) -> bool:
-        row = self._conn.execute(
-            f"""
-            SELECT 1
-            FROM memories
-            WHERE scope = ? AND scope_id = ? AND id > ? AND {_ACTIVE_MEMORY_CLAUSE}
-            LIMIT 1
-            """,
-            (scope, scope_id, since_id),
-        ).fetchone()
-        return row is not None
-
-    def get_max_memory_id(self, scope: str, scope_id: str) -> int:
-        row = self._conn.execute(
-            f"""
-            SELECT MAX(id) AS max_id
-            FROM memories
-            WHERE scope = ? AND scope_id = ? AND {_ACTIVE_MEMORY_CLAUSE}
-            """,
-            (scope, scope_id),
-        ).fetchone()
-        return row["max_id"] or 0
-
-    def sweep_expired_memories(self) -> int:
-        rows = self._conn.execute(
-            """
-            SELECT id
-            FROM memories
-            WHERE pinned = 0
-              AND expires_at IS NOT NULL
-              AND expires_at <= strftime('%Y-%m-%dT%H:%M:%SZ','now')
-            """
-        ).fetchall()
-        memory_ids = [row["id"] for row in rows]
-        if not memory_ids:
-            return 0
-
-        placeholders = ", ".join("?" for _ in memory_ids)
-        with self._conn:
-            self._conn.execute(
-                f"DELETE FROM vec_memories WHERE memory_id IN ({placeholders})",
-                memory_ids,
-            )
-            cur = self._conn.execute(
-                f"DELETE FROM memories WHERE id IN ({placeholders})",
-                memory_ids,
-            )
-        return cur.rowcount
-
-    # ── Agent KV store ────────────────────────────────────────────
-
-    _NOT_EXPIRED = "(expires_at IS NULL OR expires_at > strftime('%Y-%m-%dT%H:%M:%SZ','now'))"
-
-    def kv_get(self, agent: str, key: str, ns: str = "") -> str | None:
-        row = self._conn.execute(
-            f"SELECT value FROM agent_kv WHERE agent = ? AND ns = ? AND key = ? AND {self._NOT_EXPIRED}",
-            (agent, ns, key),
-        ).fetchone()
-        return row["value"] if row else None
-
-    def kv_set(
-        self,
-        agent: str,
-        key: str,
-        value: str,
-        ns: str = "",
-        ttl_hours: int | None = None,
-    ) -> None:
-        expires_at = None
-        if ttl_hours and ttl_hours > 0:
-            row = self._conn.execute(
-                "SELECT strftime('%Y-%m-%dT%H:%M:%SZ', 'now', ? || ' hours') AS ea",
-                (str(ttl_hours),),
-            ).fetchone()
-            expires_at = row["ea"]
-        self._conn.execute(
-            """
-            INSERT INTO agent_kv (agent, ns, key, value, expires_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(agent, ns, key) DO UPDATE SET
-                value = excluded.value,
-                updated_at = strftime('%Y-%m-%dT%H:%M:%SZ','now'),
-                expires_at = excluded.expires_at
-            """,
-            (agent, ns, key, value, expires_at),
-        )
-        self._conn.commit()
-
-    def kv_delete(self, agent: str, key: str, ns: str = "") -> bool:
-        cur = self._conn.execute(
-            "DELETE FROM agent_kv WHERE agent = ? AND ns = ? AND key = ?",
-            (agent, ns, key),
-        )
-        self._conn.commit()
-        return cur.rowcount > 0
-
-    def kv_list(
-        self,
-        agent: str,
-        ns: str = "",
-        prefix: str = "",
-    ) -> list[dict[str, Any]]:
-        if prefix:
-            rows = self._conn.execute(
-                f"SELECT key, value, expires_at FROM agent_kv WHERE agent = ? AND ns = ? AND key LIKE ? AND {self._NOT_EXPIRED} ORDER BY key",
-                (agent, ns, prefix + "%"),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                f"SELECT key, value, expires_at FROM agent_kv WHERE agent = ? AND ns = ? AND {self._NOT_EXPIRED} ORDER BY key",
-                (agent, ns),
-            ).fetchall()
-        return [dict(row) for row in rows]
-
-    def kv_sweep_expired(self) -> int:
-        cur = self._conn.execute(
-            "DELETE FROM agent_kv WHERE expires_at IS NOT NULL AND expires_at <= strftime('%Y-%m-%dT%H:%M:%SZ','now')"
-        )
-        self._conn.commit()
-        return cur.rowcount
-
-    # ── Memory state ─────────────────────────────────────────────
-
-    def get_memory_state(self, key: str) -> str | None:
-        row = self._conn.execute(
-            "SELECT value FROM memory_state WHERE key = ?",
-            (key,),
-        ).fetchone()
-        return row["value"] if row else None
-
-    def set_memory_state(self, key: str, value: str) -> None:
-        self._conn.execute(
-            "INSERT INTO memory_state (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-            (key, value),
-        )
-        self._conn.commit()
-
-    def conversations_updated_since(self, since: float) -> list[dict[str, Any]]:
-        rows = self._conn.execute(
-            "SELECT conversation_id, transport_name, metadata_json, updated_at FROM conversations WHERE updated_at > ? ORDER BY updated_at ASC",
-            (since,),
-        ).fetchall()
-        return [dict(row) for row in rows]
 
     # ── Users ────────────────────────────────────────────────────
 
@@ -1010,24 +475,13 @@ class Store:
         return [row["role"] for row in rows]
 
 
-def serialize_float32(vec: list[float]) -> bytes:
-    """Pack a list of floats into a little-endian float32 bytes buffer for sqlite-vec."""
-    return struct.pack(f"<{len(vec)}f", *vec)
-
-
 _instance: Store | None = None
 
 
-def get_store(embed_dimensions: int = 1536) -> Store:
+def get_store() -> Store:
     global _instance
     if _instance is None:
-        _instance = Store(embed_dimensions=embed_dimensions)
-    elif _instance._embed_dimensions != embed_dimensions:
-        msg = (
-            "Store already initialized with embed_dimensions="
-            f"{_instance._embed_dimensions}, requested={embed_dimensions}"
-        )
-        raise ValueError(msg)
+        _instance = Store()
     return _instance
 
 

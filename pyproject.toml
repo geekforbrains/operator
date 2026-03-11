@@ -27,8 +27,6 @@ dependencies = [
     "markdown-to-mrkdwn",
     "croniter",
     "trafilatura",
-    "sqlite-vec",
-    "pysqlite3",
     "rich",
     "typing-extensions",
     "typer",

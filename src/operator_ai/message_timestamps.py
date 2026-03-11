@@ -20,23 +20,6 @@ def attach_message_created_at(
     return stamped
 
 
-def render_message_timestamps(
-    messages: list[dict[str, Any]],
-    config: Config,
-) -> list[dict[str, Any]]:
-    rendered: list[dict[str, Any]] = []
-    for message in messages:
-        clean = dict(message)
-        created_at = clean.pop(MESSAGE_CREATED_AT_KEY, None)
-        if message.get("role") == "user" and isinstance(created_at, str) and created_at:
-            clean["content"] = _prefix_content(
-                clean.get("content"),
-                build_message_timestamp_prefix(config, created_at=created_at),
-            )
-        rendered.append(clean)
-    return rendered
-
-
 def build_message_timestamp_prefix(
     config: Config,
     *,

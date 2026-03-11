@@ -8,7 +8,6 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from croniter import croniter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 logger = logging.getLogger("operator.config")
@@ -49,9 +48,7 @@ class StrictConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ToolResultsConfig(StrictConfigModel):
-    keep: int = Field(default=5, ge=0)
-    soft_trim: int = Field(default=10, ge=0)
+# ── Defaults ────────────────────────────────────────────────────
 
 
 class DefaultsConfig(StrictConfigModel):
@@ -60,7 +57,6 @@ class DefaultsConfig(StrictConfigModel):
     max_iterations: int = Field(default=25, gt=0)
     context_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
     max_output_tokens: int | None = Field(default=None, gt=0)
-    tool_results: ToolResultsConfig = Field(default_factory=ToolResultsConfig)
 
     @model_validator(mode="before")
     @classmethod
@@ -72,6 +68,9 @@ class DefaultsConfig(StrictConfigModel):
         if not self.models:
             raise ValueError("defaults.models must contain at least one model")
         return self
+
+
+# ── Runtime ─────────────────────────────────────────────────────
 
 
 class RuntimeConfig(StrictConfigModel):
@@ -86,7 +85,10 @@ class RuntimeConfig(StrictConfigModel):
         return self
 
 
-class TransportConfig(StrictConfigModel):
+# ── Transport ───────────────────────────────────────────────────
+
+
+class TransportConfig(BaseModel):
     type: str
     options: dict[str, Any] = Field(default_factory=dict)
 
@@ -117,13 +119,22 @@ class TransportConfig(StrictConfigModel):
         return {"type": transport_type, "options": normalized}
 
 
+# ── Permissions (closed-by-default) ─────────────────────────────
+
+
 class PermissionsConfig(StrictConfigModel):
-    tools: list[str] | Literal["*"] | None = None  # None = no block = full access
-    skills: list[str] | Literal["*"] | None = None
+    tools: list[str] | Literal["*"] = Field(default_factory=list)
+    skills: list[str] | Literal["*"] = Field(default_factory=list)
+
+
+# ── Roles ───────────────────────────────────────────────────────
 
 
 class RoleConfig(StrictConfigModel):
     agents: list[str]
+
+
+# ── Agent ───────────────────────────────────────────────────────
 
 
 class AgentConfig(StrictConfigModel):
@@ -132,7 +143,6 @@ class AgentConfig(StrictConfigModel):
     max_iterations: int | None = Field(default=None, gt=0)
     context_ratio: float | None = Field(default=None, gt=0.0, le=1.0)
     max_output_tokens: int | None = Field(default=None, gt=0)
-    sandbox: bool = True
     transport: TransportConfig | None = None
     permissions: PermissionsConfig | None = None
 
@@ -142,66 +152,7 @@ class AgentConfig(StrictConfigModel):
         return _normalize_models(values)
 
 
-class ScheduledTaskConfig(StrictConfigModel):
-    enabled: bool = False
-    schedule: str = ""
-    models: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_models(cls, values: Any) -> Any:
-        return _normalize_models(values)
-
-    @model_validator(mode="after")
-    def validate_required_when_enabled(self) -> ScheduledTaskConfig:
-        if not self.enabled:
-            return self
-        label = type(self).__name__.removesuffix("Config").lower()
-        missing = []
-        if not self.schedule:
-            missing.append("schedule")
-        if not self.models:
-            missing.append("model(s)")
-        if missing:
-            raise ValueError(
-                f"memory.{label} is enabled but missing required fields: {', '.join(missing)}"
-            )
-        if not croniter.is_valid(self.schedule):
-            raise ValueError(
-                f"memory.{label}.schedule is not a valid cron expression: {self.schedule!r}"
-            )
-        return self
-
-
-class HarvesterConfig(ScheduledTaskConfig):
-    pass
-
-
-class CleanerConfig(ScheduledTaskConfig):
-    pass
-
-
-class MemoryConfig(StrictConfigModel):
-    embed_model: str = ""
-    embed_dimensions: int = Field(default=1536, gt=0)
-    max_memories: int = Field(default=10000, gt=0)
-    inject_top_k: int = Field(default=5, ge=0)
-    inject_min_relevance: float = Field(default=0.1, ge=0.0, le=1.0)
-    candidate_ttl_days: int = Field(default=14, gt=0)
-    harvester: HarvesterConfig = Field(default_factory=HarvesterConfig)
-    cleaner: CleanerConfig = Field(default_factory=CleanerConfig)
-
-    @property
-    def enabled(self) -> bool:
-        return self.harvester.enabled or self.cleaner.enabled
-
-    @model_validator(mode="after")
-    def validate_required_when_enabled(self) -> MemoryConfig:
-        if not self.enabled:
-            return self
-        if not self.embed_model:
-            raise ValueError("memory.embed_model is required when harvester or cleaner is enabled")
-        return self
+# ── Top-level Config ────────────────────────────────────────────
 
 
 class Config(StrictConfigModel):
@@ -209,13 +160,14 @@ class Config(StrictConfigModel):
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     agents: dict[str, AgentConfig] = Field(default_factory=dict)
     roles: dict[str, RoleConfig] = Field(default_factory=dict)
-    memory: MemoryConfig = Field(default_factory=MemoryConfig)
 
     @model_validator(mode="after")
     def validate_no_admin_role(self) -> Config:
         if "admin" in self.roles:
             raise ValueError("admin is a built-in role and cannot be redefined")
         return self
+
+    # ── Agent accessors (with fallback to defaults) ─────────────
 
     def agent_models(self, agent_name: str) -> list[str]:
         agent = self.agents.get(agent_name)
@@ -247,57 +199,90 @@ class Config(StrictConfigModel):
             return agent.max_output_tokens
         return self.defaults.max_output_tokens
 
-    def agent_dir(self, agent_name: str) -> Path:
-        return OPERATOR_DIR / "agents" / agent_name
+    # ── Path helpers ────────────────────────────────────────────
 
-    def agent_workspace(self, agent_name: str) -> Path:
-        return self.agent_dir(agent_name) / "workspace"
+    def agent_dir(self, name: str) -> Path:
+        return OPERATOR_DIR / "agents" / name
 
-    def agent_prompt_path(self, agent_name: str) -> Path:
-        return self.agent_dir(agent_name) / "AGENT.md"
+    def agent_workspace(self, name: str) -> Path:
+        return self.agent_dir(name) / "workspace"
+
+    def agent_prompt_path(self, name: str) -> Path:
+        return self.agent_dir(name) / "AGENT.md"
+
+    def agent_memory_dir(self, name: str) -> Path:
+        return self.agent_dir(name) / "memory"
+
+    def agent_state_dir(self, name: str) -> Path:
+        return self.agent_dir(name) / "state"
+
+    def global_memory_dir(self) -> Path:
+        return OPERATOR_DIR / "memory" / "global"
+
+    def user_memory_dir(self, username: str) -> Path:
+        return OPERATOR_DIR / "memory" / "users" / username
+
+    def system_prompt_path(self) -> Path:
+        return OPERATOR_DIR / "SYSTEM.md"
+
+    def jobs_dir(self) -> Path:
+        return OPERATOR_DIR / "jobs"
+
+    def skills_dir(self) -> Path:
+        return OPERATOR_DIR / "skills"
+
+    @property
+    def shared_dir(self) -> Path:
+        return OPERATOR_DIR / "shared"
+
+    def db_dir(self) -> Path:
+        return OPERATOR_DIR / "db"
 
     @property
     def tz(self) -> ZoneInfo:
         """Return the configured timezone as a ZoneInfo instance."""
         return ZoneInfo(self.runtime.timezone)
 
-    @property
-    def shared_dir(self) -> Path:
-        return OPERATOR_DIR / "shared"
-
     def default_agent(self) -> str:
-        """Return the first agent name from config, or 'default'."""
+        """Return the first agent name from config, or 'operator'."""
         if self.agents:
             return next(iter(self.agents))
         return "operator"
 
-    def agent_sandboxed(self, agent_name: str) -> bool:
-        agent = self.agents.get(agent_name)
-        if agent is not None:
-            return agent.sandbox
-        return True
+    # ── Permission filters (closed-by-default) ──────────────────
 
-    def agent_tool_filter(self, agent_name: str) -> Callable[[str], bool] | None:
-        """Return a predicate that returns True if a tool name is allowed, or None for no filtering."""
+    def agent_tool_filter(self, agent_name: str) -> Callable[[str], bool]:
+        """Return a predicate that returns True if a tool name is allowed.
+
+        Closed-by-default: no agent config or no permissions block means
+        nothing is allowed.  '*' means everything is allowed.
+        """
         agent = self.agents.get(agent_name)
         if not agent or not agent.permissions:
-            return None
+            return lambda _name: False
         tools = agent.permissions.tools
-        if tools is None or tools == "*":
-            return None
+        if tools == "*":
+            return lambda _name: True
         allowed = set(tools)
         return lambda name: name in allowed
 
-    def agent_skill_filter(self, agent_name: str) -> Callable[[str], bool] | None:
-        """Return a predicate that returns True if a skill name is allowed, or None for no filtering."""
+    def agent_skill_filter(self, agent_name: str) -> Callable[[str], bool]:
+        """Return a predicate that returns True if a skill name is allowed.
+
+        Closed-by-default: no agent config or no permissions block means
+        nothing is allowed.  '*' means everything is allowed.
+        """
         agent = self.agents.get(agent_name)
         if not agent or not agent.permissions:
-            return None
+            return lambda _name: False
         skills = agent.permissions.skills
-        if skills is None or skills == "*":
-            return None
+        if skills == "*":
+            return lambda _name: True
         allowed = set(skills)
         return lambda name: name in allowed
+
+
+# ── Shared symlink helper ───────────────────────────────────────
 
 
 def ensure_shared_symlink(workspace: Path, shared: Path) -> None:
@@ -316,18 +301,17 @@ def ensure_shared_symlink(workspace: Path, shared: Path) -> None:
     logger.info("shared: created symlink %s → %s", link, shared)
 
 
-def _load_env_file(env_path: str, *, base_dir: Path | None = None) -> None:
-    """Load KEY=VALUE lines from a file into os.environ (doesn't override existing)."""
-    p = Path(env_path).expanduser()
-    if not p.is_absolute() and base_dir is not None:
-        p = (base_dir / p).resolve()
-    if not p.exists():
-        return
-    for line in p.read_text().splitlines():
+# ── Env file helpers ────────────────────────────────────────────
+
+
+def parse_env_file(path: Path) -> dict[str, str]:
+    """Parse KEY=VALUE lines from a dotenv file. Returns a dict of key-value pairs."""
+    values: dict[str, str] = {}
+    if not path.exists():
+        return values
+    for line in path.read_text().splitlines():
         line = line.strip()
-        if not line or line.startswith("#"):
-            continue
-        if "=" not in line:
+        if not line or line.startswith("#") or "=" not in line:
             continue
         key, _, value = line.partition("=")
         key = key.strip()
@@ -335,14 +319,28 @@ def _load_env_file(env_path: str, *, base_dir: Path | None = None) -> None:
         if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
             value = value[1:-1]
         if key:
-            os.environ.setdefault(key, value)
+            values[key] = value
+    return values
+
+
+def _load_env_file(env_path: str, *, base_dir: Path | None = None) -> None:
+    """Load KEY=VALUE lines from a file into os.environ (doesn't override existing)."""
+    p = Path(env_path).expanduser()
+    if not p.is_absolute() and base_dir is not None:
+        p = (base_dir / p).resolve()
+    for key, value in parse_env_file(p).items():
+        os.environ.setdefault(key, value)
+
+
+# ── Config loader ───────────────────────────────────────────────
 
 
 def load_config(path: Path | None = None) -> Config:
     path = path or CONFIG_PATH
     if not path.exists():
         raise ConfigError(
-            f'Config not found: {path}\nCreate it with at least:\n  defaults:\n    models:\n      - "openai/gpt-4.1"'
+            f"Config not found: {path}\nCreate it with at least:\n"
+            '  defaults:\n    models:\n      - "openai/gpt-4.1"'
         )
     try:
         with path.open() as f:
@@ -356,7 +354,4 @@ def load_config(path: Path | None = None) -> Config:
     if config.runtime.env_file:
         _load_env_file(config.runtime.env_file, base_dir=path.parent)
 
-    from operator_ai.litellm_logging import configure_litellm_logging
-
-    configure_litellm_logging()
     return config

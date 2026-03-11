@@ -32,4 +32,5 @@ htmlcov/
 .DS_Store
 
 # Working specs
-SPEC.md
+*SPEC*.md
+TASKS.md

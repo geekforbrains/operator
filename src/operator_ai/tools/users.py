@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-try:
-    import pysqlite3 as sqlite3
-except ImportError:
-    import sqlite3
+import sqlite3
 
 from operator_ai.store import get_store
 from operator_ai.tools.registry import tool

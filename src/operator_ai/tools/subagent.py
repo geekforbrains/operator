@@ -43,7 +43,6 @@ def _resolve_agent_context(agent_name: str | None, current: dict[str, Any]) -> d
     ctx["thinking"] = config.agent_thinking(agent_name)
     ctx["context_ratio"] = config.agent_context_ratio(agent_name)
     ctx["max_output_tokens"] = config.agent_max_output_tokens(agent_name)
-    ctx["sandboxed"] = config.agent_sandboxed(agent_name)
     ctx["tool_filter"] = config.agent_tool_filter(agent_name)
     ctx["skill_filter"] = config.agent_skill_filter(agent_name)
     ctx["agent_name"] = agent_name
@@ -57,17 +56,19 @@ def _build_subagent_prompt(
     context: str,
 ) -> str:
     config = resolved.get("config")
-    context_sections = [load_prompt("subagent.md")]
+    sections = [load_prompt("subagent.md")]
     if context:
-        context_sections.append(f"## Additional Context\n\n{context}")
+        sections.append(f"## Additional Context\n\n{context}")
+
+    extra = "\n\n".join(sections)
 
     if config is None or not target_agent:
-        return "\n\n".join(context_sections)
+        return extra
 
     return assemble_system_prompt(
         config=config,
         agent_name=target_agent,
-        context_sections=context_sections,
+        transport_extra=extra,
         skill_filter=config.agent_skill_filter(target_agent),
     )
 
@@ -145,7 +146,6 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
             usage=resolved.get("usage"),
             tool_filter=resolved.get("tool_filter"),
             shared_dir=resolved.get("shared_dir"),
-            sandboxed=resolved.get("sandboxed", True),
             config=resolved.get("config"),
         )
 

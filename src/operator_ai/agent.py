@@ -13,9 +13,10 @@ import litellm
 from operator_ai.config import Config, ThinkingLevel, ensure_shared_symlink
 from operator_ai.context import prepare_context
 from operator_ai.tools import registry as tool_registry
-from operator_ai.tools import set_workspace, subagent
+from operator_ai.tools import subagent
 from operator_ai.tools.context import ROLE_GATED_TOOLS, get_skill_filter, get_user_context
 from operator_ai.tools.registry import ToolDef
+from operator_ai.tools.workspace import set_workspace
 from operator_ai.utils import truncate
 
 logger = logging.getLogger("operator.agent")
@@ -143,6 +144,43 @@ def _apply_reasoning_effort(
         )
 
 
+async def acompletion_with_fallback(
+    models: list[str],
+    *,
+    label: str,
+    **kwargs: Any,
+) -> Any | None:
+    """Call litellm.acompletion with model fallback chain.
+
+    Tries each model in order. Returns None if all models fail.
+    """
+    if not models:
+        logger.error("[%s] no models configured", label)
+        return None
+
+    last_error: Exception | None = None
+    for model in models:
+        try:
+            resp = await litellm.acompletion(model=model, **kwargs)
+            if last_error is not None:
+                logger.info("[%s] recovered using fallback model %s", label, model)
+            return resp
+        except Exception as e:
+            last_error = e
+            logger.debug("[%s] model %s failure traceback", label, model, exc_info=e)
+            if model != models[-1]:
+                logger.warning(
+                    "[%s] model %s failed (%s: %s), trying next",
+                    label,
+                    model,
+                    type(e).__name__,
+                    e,
+                )
+
+    logger.error("[%s] all models failed (%s: %s)", label, type(last_error).__name__, last_error)
+    return None
+
+
 async def run_agent(
     messages: list[dict[str, Any]],
     models: list[str],
@@ -160,7 +198,6 @@ async def run_agent(
     usage: dict[str, int] | None = None,
     tool_filter: Callable[[str], bool] | None = None,
     shared_dir: Path | None = None,
-    sandboxed: bool = True,
     config: Config | None = None,
     tool_results_keep: int = 5,
     tool_results_soft_trim: int = 10,
@@ -176,7 +213,7 @@ async def run_agent(
     ws.mkdir(parents=True, exist_ok=True)
     if shared_dir is not None:
         ensure_shared_symlink(ws, shared_dir)
-    set_workspace(ws, sandboxed=sandboxed)
+    set_workspace(ws)
 
     # Configure subagent tool with current context
     subagent.configure(
@@ -194,7 +231,6 @@ async def run_agent(
             "tool_filter": tool_filter,
             "skill_filter": get_skill_filter(),
             "shared_dir": shared_dir,
-            "sandboxed": sandboxed,
             "config": config,
         }
     )

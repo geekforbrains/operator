@@ -13,8 +13,7 @@ from operator_ai.tools.subagent import _resolve_agent_context, spawn_agent
 
 
 class FakeAgentConfig:
-    def __init__(self, sandbox: bool = True) -> None:
-        self.sandbox = sandbox
+    def __init__(self) -> None:
         self.models = ["anthropic/claude-sonnet-4-6"]
         self.thinking = "high"
         self.max_iterations = None
@@ -37,7 +36,7 @@ class FakeConfig:
             },
         )()
         self.agents = {
-            "researcher": FakeAgentConfig(sandbox=False),
+            "researcher": FakeAgentConfig(),
         }
 
     def agent_models(self, name: str) -> list[str]:
@@ -62,10 +61,6 @@ class FakeConfig:
     def agent_max_output_tokens(self, name: str) -> int | None:
         a = self.agents.get(name)
         return a.max_output_tokens if a and a.max_output_tokens else self.defaults.max_output_tokens
-
-    def agent_sandboxed(self, name: str) -> bool:
-        a = self.agents.get(name)
-        return a.sandbox if a is not None else True
 
     def agent_tool_filter(self, name: str):  # noqa: ARG002
         return None
@@ -94,7 +89,6 @@ def test_resolve_known_agent() -> None:
     result = _resolve_agent_context("researcher", current)
     assert result["models"] == ["anthropic/claude-sonnet-4-6"]
     assert "researcher" in result["workspace"]
-    assert result["sandboxed"] is False
     assert result["max_iterations"] == 25
     assert result["thinking"] == "high"
     assert result["context_ratio"] == 0.5

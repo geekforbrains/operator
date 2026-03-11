@@ -1,706 +1,411 @@
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import json
 import logging
-import math
-import string
-from abc import ABC, abstractmethod
-from collections import Counter
+import re
+import shutil
+import subprocess
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta, tzinfo
-from typing import Any, Literal
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
 
-import litellm
-from croniter import croniter
+import yaml
 
-from operator_ai.config import CleanerConfig, HarvesterConfig, MemoryConfig, ScheduledTaskConfig
-from operator_ai.log_context import set_run_context
-from operator_ai.prompts import load_prompt
-from operator_ai.store import Store, serialize_float32
+from operator_ai.config import OPERATOR_DIR
 
 logger = logging.getLogger("operator.memory")
 
-# For L2-normalized vectors, cosine similarity 0.9 ≈ L2 distance 0.447
-DEDUP_L2_THRESHOLD = math.sqrt(2 * (1 - 0.9))  # ~0.447
-MemoryRetention = Literal["candidate", "durable"]
-
-# Loaded once from prompts/*.md
-_HARVESTER_TEMPLATE = load_prompt("harvester.md")
-_CLEANER_TEMPLATE = string.Template(load_prompt("cleaner.md"))
-_MAX_HARVEST_CONVERSATION_CHARS = 8000
-_MEMORY_SCOPE_VALUES = frozenset({"user", "agent", "global"})
-_MEMORY_RETENTION_VALUES = frozenset({"candidate", "durable"})
+_TTL_RE = re.compile(r"^(\d+)\s*([mhdw])$", re.IGNORECASE)
 
 
-@dataclass(frozen=True)
-class HarvestedMemory:
-    scope: str
-    scope_id: str
-    retention: MemoryRetention
-    content: str
+def parse_ttl(ttl: str) -> timedelta:
+    """Parse a human-friendly duration string into a timedelta.
 
-
-def _l2_normalize(vec: list[float]) -> list[float]:
-    norm = math.sqrt(sum(x * x for x in vec))
-    if norm == 0:
-        return vec
-    return [x / norm for x in vec]
-
-
-def _strip_markdown_fence(text: str) -> str:
-    stripped = text.strip()
-    if not stripped.startswith("```"):
-        return stripped
-
-    lines = stripped.splitlines()
-    lines = lines[1:]
-    if lines and lines[-1].strip() == "```":
-        lines = lines[:-1]
-    return "\n".join(lines).strip()
-
-
-def _expires_at(
-    retention: MemoryRetention,
-    *,
-    pinned: bool,
-    candidate_ttl_days: int,
-    now: datetime | None = None,
-) -> str | None:
-    if pinned or retention == "durable":
-        return None
-    now = now or datetime.now(UTC)
-    return (now + timedelta(days=candidate_ttl_days)).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def format_retention_mix(memories: list[dict[str, Any]]) -> str:
-    counts = Counter(str(m.get("retention", "")) for m in memories)
-    return f"candidate={counts['candidate']} durable={counts['durable']}"
-
-
-def _parse_harvested_memories(
-    raw_output: str,
-    user_id: str,
-    agent_name: str,
-    allow_user_scope: bool,
-) -> list[HarvestedMemory]:
-    output = _strip_markdown_fence(raw_output)
-    if output == "NONE" or not output:
-        return []
-
-    data = json.loads(output)
-    if not isinstance(data, list):
-        raise ValueError("Harvester output must be a JSON array or NONE")
-
-    parsed: list[HarvestedMemory] = []
-    for item in data:
-        if not isinstance(item, dict):
-            raise ValueError("Harvester entries must be JSON objects")
-
-        scope = item.get("scope")
-        retention = item.get("retention")
-        content = item.get("content")
-        if scope not in _MEMORY_SCOPE_VALUES:
-            raise ValueError(f"Invalid harvester scope: {scope!r}")
-        if retention not in _MEMORY_RETENTION_VALUES:
-            raise ValueError(f"Invalid harvester retention: {retention!r}")
-        if not isinstance(content, str) or not content.strip():
-            raise ValueError("Harvester content must be a non-empty string")
-
-        if scope == "user":
-            if not allow_user_scope or not user_id:
-                continue
-            scope_id = user_id
-        elif scope == "agent":
-            scope_id = agent_name or "default"
-        else:
-            scope_id = "global"
-
-        parsed.append(
-            HarvestedMemory(
-                scope=scope,
-                scope_id=scope_id,
-                retention=retention,
-                content=content.strip(),
-            )
-        )
-
-    return parsed
-
-
-class MemoryStore:
-    def __init__(self, store: Store, config: MemoryConfig):
-        self._store = store
-        self._config = config
-        expired = self._store.sweep_expired_memories()
-        if expired:
-            logger.info("Swept %d expired candidate memories on startup", expired)
-
-    async def embed(self, text: str) -> list[float]:
-        resp = await litellm.aembedding(
-            model=self._config.embed_model,
-            input=[text],
-            dimensions=self._config.embed_dimensions,
-        )
-        vec = resp.data[0]["embedding"]
-        return _l2_normalize(vec)
-
-    async def save(
-        self,
-        content: str,
-        scope: str,
-        scope_id: str,
-        pinned: bool = False,
-        retention: MemoryRetention = "durable",
-    ) -> int | None:
-        expired = self._store.sweep_expired_memories()
-        if expired:
-            logger.debug("Swept %d expired candidate memories before save", expired)
-        vec = await self.embed(content)
-        vec_bytes = serialize_float32(vec)
-
-        # Dedup: search top-1 and update if very similar
-        existing = self._store.search_memories_vec(vec_bytes, scope, scope_id, top_k=1)
-        if existing and existing[0]["distance"] < DEDUP_L2_THRESHOLD:
-            existing_row = existing[0]
-            memory_id = existing_row["memory_id"]
-            merged_pinned = bool(existing_row.get("pinned")) or pinned
-            merged_retention: MemoryRetention = (
-                "durable"
-                if existing_row.get("retention") == "durable" or retention == "durable"
-                else "candidate"
-            )
-            self._store.update_memory(
-                memory_id,
-                content,
-                vec_bytes,
-                retention=merged_retention,
-                pinned=merged_pinned,
-                expires_at=_expires_at(
-                    merged_retention,
-                    pinned=merged_pinned,
-                    candidate_ttl_days=self._config.candidate_ttl_days,
-                ),
-            )
-            logger.debug(
-                "Dedup-updated memory %d (distance=%.3f, retention=%s, pinned=%s)",
-                memory_id,
-                existing_row["distance"],
-                merged_retention,
-                merged_pinned,
-            )
-            return memory_id
-
-        # Cap check
-        count = self._store.count_memories(scope, scope_id)
-        if count >= self._config.max_memories:
-            logger.warning(
-                "Memory cap reached for %s/%s (%d), skipping",
-                scope,
-                scope_id,
-                count,
-            )
-            return None
-
-        memory_id = self._store.insert_memory(
-            content=content,
-            scope=scope,
-            scope_id=scope_id,
-            embedding_bytes=vec_bytes,
-            retention=retention,
-            pinned=pinned,
-            expires_at=_expires_at(
-                retention,
-                pinned=pinned,
-                candidate_ttl_days=self._config.candidate_ttl_days,
-            ),
-        )
-        logger.debug("Saved memory %d: %s/%s retention=%s", memory_id, scope, scope_id, retention)
-        return memory_id
-
-    async def search(
-        self,
-        query: str,
-        scopes: list[tuple[str, str]],
-        top_k: int | None = None,
-        min_relevance: float | None = None,
-    ) -> list[dict[str, Any]]:
-        expired = self._store.sweep_expired_memories()
-        if expired:
-            logger.debug("Swept %d expired candidate memories before search", expired)
-
-        top_k = self._config.inject_top_k if top_k is None else top_k
-        min_relevance = (
-            min_relevance if min_relevance is not None else self._config.inject_min_relevance
-        )
-        if top_k <= 0:
-            logger.info(
-                "memory recall disabled for query=%r (requested_top_k=%d)",
-                query[:80],
-                top_k,
-            )
-            return []
-
-        vec = await self.embed(query)
-        vec_bytes = serialize_float32(vec)
-
-        results = self._store.search_memories_multi_scope(vec_bytes, scopes, top_k)
-
-        # Filter by cosine similarity: for L2-normalized vectors,
-        # cosine = 1 - (distance^2 / 2)
-        filtered = []
-        for r in results:
-            cosine = 1 - (r["distance"] ** 2 / 2)
-            if cosine >= min_relevance:
-                r["relevance"] = round(cosine, 3)
-                filtered.append(r)
-
-        returned = filtered[:top_k]
-        logger.info(
-            "memory recall: requested_top_k=%d raw_matches=%d filtered_matches=%d returned=%d min_relevance=%.3f",
-            top_k,
-            len(results),
-            len(filtered),
-            len(returned),
-            min_relevance,
-        )
-        return returned
-
-    def forget(self, memory_id: int) -> bool:
-        return self._store.delete_memory(memory_id)
-
-    def list_memories(
-        self,
-        scope: str | None = None,
-        scope_id: str | None = None,
-        limit: int = 50,
-        offset: int = 0,
-    ) -> list[dict[str, Any]]:
-        expired = self._store.sweep_expired_memories()
-        if expired:
-            logger.debug("Swept %d expired candidate memories before list", expired)
-        return self._store.list_memories(scope, scope_id, limit, offset)
-
-    def get_pinned_memories(self, scope: str, scope_id: str) -> list[dict[str, Any]]:
-        expired = self._store.sweep_expired_memories()
-        if expired:
-            logger.debug("Swept %d expired candidate memories before pinned lookup", expired)
-        return self._store.get_pinned_memories(scope, scope_id)
-
-
-async def _completion_with_fallback(
-    models: list[str],
-    *,
-    label: str,
-    **kwargs: Any,
-) -> Any | None:
-    """Call litellm.acompletion with model fallback chain.
-
-    Tries each model in order.  Transient errors (rate-limit, server errors)
-    fall through to the next model.  Returns ``None`` and logs a clean ERROR
-    if all models fail.
+    Supported formats: ``"30m"`` (minutes), ``"1h"`` (hours),
+    ``"3d"`` (days), ``"2w"`` (weeks).
     """
-    if not models:
-        logger.error("[%s] no models configured", label)
+    m = _TTL_RE.match(ttl.strip())
+    if not m:
+        raise ValueError(f"Invalid TTL format: {ttl!r} (expected e.g. '3d', '2w', '1h', '30m')")
+    value = int(m.group(1))
+    unit = m.group(2).lower()
+    if unit == "m":
+        return timedelta(minutes=value)
+    if unit == "h":
+        return timedelta(hours=value)
+    if unit == "d":
+        return timedelta(days=value)
+    if unit == "w":
+        return timedelta(weeks=value)
+    raise ValueError(f"Unknown TTL unit: {unit!r}")  # pragma: no cover
+
+
+def _slugify(content: str, max_len: int = 60) -> str:
+    """Generate a slug from the first ~max_len chars of content."""
+    text = content[:max_len].lower()
+    text = re.sub(r"[^a-z0-9]+", "-", text)
+    text = re.sub(r"-{2,}", "-", text)
+    text = text.strip("-")
+    return text or "untitled"
+
+
+def _unique_path(directory: Path, slug: str) -> Path:
+    """Return a unique .md path in *directory* based on *slug*."""
+    candidate = directory / f"{slug}.md"
+    if not candidate.exists():
+        return candidate
+    counter = 2
+    while True:
+        candidate = directory / f"{slug}-{counter}.md"
+        if not candidate.exists():
+            return candidate
+        counter += 1
+
+
+def _now_utc() -> datetime:
+    return datetime.now(UTC)
+
+
+def _format_dt(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _write_memory_file(
+    path: Path,
+    content: str,
+    *,
+    created_at: datetime | None = None,
+    updated_at: datetime | None = None,
+    expires_at: datetime | None = None,
+) -> None:
+    """Write a memory file with YAML frontmatter."""
+    now = _now_utc()
+    created = created_at or now
+    updated = updated_at or now
+
+    frontmatter: dict[str, Any] = {
+        "created_at": _format_dt(created),
+        "updated_at": _format_dt(updated),
+    }
+    if expires_at is not None:
+        frontmatter["expires_at"] = _format_dt(expires_at)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["---"]
+    lines.append(yaml.dump(frontmatter, default_flow_style=False).rstrip())
+    lines.append("---")
+    lines.append("")
+    lines.append(content.rstrip())
+    lines.append("")
+    path.write_text("\n".join(lines))
+
+
+def _parse_memory_file(path: Path, relative_to: Path) -> MemoryFile | None:
+    """Parse a memory file, returning None on read errors."""
+    try:
+        text = path.read_text()
+    except OSError:
+        logger.warning("could not read memory file: %s", path)
         return None
 
-    last_error: Exception | None = None
-    for model in models:
-        try:
-            resp = await litellm.acompletion(model=model, **kwargs)
-            if last_error is not None:
-                logger.info("[%s] recovered using fallback model %s", label, model)
-            return resp
-        except Exception as e:
-            last_error = e
-            logger.debug("[%s] model %s failure traceback", label, model, exc_info=e)
-            if model != models[-1]:
-                logger.warning(
-                    "[%s] model %s failed (%s: %s), trying next",
-                    label,
-                    model,
-                    type(e).__name__,
-                    e,
-                )
+    relative_path = str(path.relative_to(relative_to))
+    created_at = None
+    updated_at = None
+    expires_at = None
+    content = text
 
-    logger.error("[%s] all models failed (%s: %s)", label, type(last_error).__name__, last_error)
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) >= 3:
+            frontmatter_text = parts[1]
+            content = parts[2].strip()
+            try:
+                fm = yaml.safe_load(frontmatter_text) or {}
+            except yaml.YAMLError:
+                fm = {}
+            if isinstance(fm, dict):
+                created_at = _parse_dt(fm.get("created_at"))
+                updated_at = _parse_dt(fm.get("updated_at"))
+                expires_at = _parse_dt(fm.get("expires_at"))
+
+    return MemoryFile(
+        path=path,
+        relative_path=relative_path,
+        created_at=created_at,
+        updated_at=updated_at,
+        expires_at=expires_at,
+        content=content,
+    )
+
+
+def _parse_dt(value: Any) -> datetime | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=UTC)
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
     return None
 
 
-class ScheduledWorker(ABC):
-    _label: str = "worker"
+def _resolve_scope(scope: str, base_dir: Path) -> Path:
+    """Resolve a scope string to a directory path."""
+    if scope == "global":
+        return base_dir / "memory" / "global"
+    if scope.startswith("agent:"):
+        name = scope[6:]
+        return base_dir / "agents" / name / "memory"
+    if scope.startswith("user:"):
+        name = scope[5:]
+        return base_dir / "memory" / "users" / name
+    raise ValueError(f"Invalid scope: {scope!r}")
 
-    def __init__(
-        self,
-        memory_store: MemoryStore,
-        store: Store,
-        config: ScheduledTaskConfig,
-        tz: tzinfo = UTC,
-    ):
-        self._memory_store = memory_store
-        self._store = store
-        self._config = config
-        self._tz = tz
-        self._task: asyncio.Task | None = None
 
-    def start(self) -> None:
-        self._task = asyncio.create_task(self._tick_loop())
-        logger.info("%s started (schedule: %s)", type(self).__name__, self._config.schedule)
+def _has_ripgrep() -> bool:
+    """Check if ripgrep (rg) is available on PATH."""
+    return shutil.which("rg") is not None
 
-    async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
-            self._task = None
-        logger.info("%s stopped", type(self).__name__)
 
-    async def _tick_loop(self) -> None:
-        set_run_context(agent=self._label)
+@dataclass
+class MemoryFile:
+    path: Path
+    relative_path: str
+    created_at: datetime | None
+    updated_at: datetime | None
+    expires_at: datetime | None
+    content: str
+
+
+class MemoryStore:
+    """File-backed memory store. No embeddings, no SQLite, no vectors."""
+
+    def __init__(self, base_dir: Path = OPERATOR_DIR):
+        self._base_dir = base_dir
+
+    def _scope_dir(self, scope: str) -> Path:
+        return _resolve_scope(scope, self._base_dir)
+
+    def _relative_to(self) -> Path:
+        return self._base_dir
+
+    # ── Create ───────────────────────────────────────────────────
+
+    def create_rule(self, scope: str, content: str, ttl: str | None = None) -> str:
+        """Write a rule file and return its relative path."""
+        scope_dir = self._scope_dir(scope)
+        rules_dir = scope_dir / "rules"
+        rules_dir.mkdir(parents=True, exist_ok=True)
+
+        slug = _slugify(content)
+        path = _unique_path(rules_dir, slug)
+
+        expires_at = None
+        if ttl:
+            expires_at = _now_utc() + parse_ttl(ttl)
+
+        _write_memory_file(path, content, expires_at=expires_at)
+        relative = str(path.relative_to(self._relative_to()))
+        logger.info("created rule: %s", relative)
+        return relative
+
+    def create_note(self, scope: str, content: str, ttl: str | None = None) -> str:
+        """Write a note file and return its relative path."""
+        scope_dir = self._scope_dir(scope)
+        notes_dir = scope_dir / "notes"
+        notes_dir.mkdir(parents=True, exist_ok=True)
+
+        slug = _slugify(content)
+        path = _unique_path(notes_dir, slug)
+
+        expires_at = None
+        if ttl:
+            expires_at = _now_utc() + parse_ttl(ttl)
+
+        _write_memory_file(path, content, expires_at=expires_at)
+        relative = str(path.relative_to(self._relative_to()))
+        logger.info("created note: %s", relative)
+        return relative
+
+    # ── List ─────────────────────────────────────────────────────
+
+    def list_rules(self, scope: str) -> list[MemoryFile]:
+        """List all rule files in the given scope."""
+        rules_dir = self._scope_dir(scope) / "rules"
+        return self._list_files(rules_dir)
+
+    def list_notes(self, scope: str) -> list[MemoryFile]:
+        """List all note files in the given scope."""
+        notes_dir = self._scope_dir(scope) / "notes"
+        return self._list_files(notes_dir)
+
+    def _list_files(self, directory: Path) -> list[MemoryFile]:
+        if not directory.is_dir():
+            return []
+        results: list[MemoryFile] = []
+        for path in sorted(directory.glob("*.md")):
+            mf = _parse_memory_file(path, self._relative_to())
+            if mf is not None:
+                results.append(mf)
+        return results
+
+    # ── Search ───────────────────────────────────────────────────
+
+    def search_notes(self, scope: str, query: str) -> list[MemoryFile]:
+        """Search notes by filename and content substring.
+
+        Uses ripgrep for content search when available, falls back to
+        pathlib glob + read.
+        """
+        notes_dir = self._scope_dir(scope) / "notes"
+        if not notes_dir.is_dir():
+            return []
+
+        query_lower = query.lower()
+
+        # Filename matches (always via glob)
+        filename_matches: list[MemoryFile] = []
+        content_matches: list[MemoryFile] = []
+
+        if _has_ripgrep():
+            # Use ripgrep for content search
+            rg_matches = self._rg_search(notes_dir, query)
+            all_files = {mf.path: mf for mf in self._list_files(notes_dir)}
+
+            for path in rg_matches:
+                if path in all_files:
+                    mf = all_files[path]
+                    slug_part = path.stem.lower()
+                    if query_lower in slug_part:
+                        filename_matches.append(mf)
+                    else:
+                        content_matches.append(mf)
+
+            # Also add filename matches that ripgrep may not have found
+            for path, mf in all_files.items():
+                slug_part = path.stem.lower()
+                if query_lower in slug_part and mf not in filename_matches:
+                    filename_matches.append(mf)
+        else:
+            # Fallback: pathlib glob + read
+            for mf in self._list_files(notes_dir):
+                slug_part = mf.path.stem.lower()
+                if query_lower in slug_part:
+                    filename_matches.append(mf)
+                elif query_lower in mf.content.lower():
+                    content_matches.append(mf)
+
+        # Filename matches first, then content matches
+        seen: set[Path] = set()
+        results: list[MemoryFile] = []
+        for mf in filename_matches + content_matches:
+            if mf.path not in seen:
+                seen.add(mf.path)
+                results.append(mf)
+        return results
+
+    def _rg_search(self, directory: Path, query: str) -> list[Path]:
+        """Run ripgrep and return matching file paths."""
         try:
-            while True:
-                await asyncio.sleep(60)
-                now = datetime.now(self._tz)
-                if not croniter.match(self._config.schedule, now):
-                    continue
-                try:
-                    await self._tick()
-                except Exception as exc:
-                    logger.error("[%s] tick failed: %s: %s", self._label, type(exc).__name__, exc)
-        except asyncio.CancelledError:
-            return
-
-    @abstractmethod
-    async def _tick(self) -> None: ...
-
-
-class MemoryHarvester(ScheduledWorker):
-    _label = "harvester"
-
-    def __init__(
-        self,
-        memory_store: MemoryStore,
-        store: Store,
-        config: HarvesterConfig,
-        tz: tzinfo = UTC,
-    ):
-        super().__init__(memory_store, store, config, tz)
-
-    async def _tick(self) -> None:
-        expired = self._store.sweep_expired_memories()
-        if expired:
-            logger.info("Harvester swept %d expired candidate memories", expired)
-
-        watermark_str = self._store.get_memory_state("watermark")
-        watermark = float(watermark_str) if watermark_str else 0.0
-
-        conversations = self._store.conversations_updated_since(watermark)
-        if not conversations:
-            logger.debug("no updated conversations")
-            return
-
-        total_extracted = 0
-        total_messages = 0
-        conversations_reviewed = 0
-        new_watermark = watermark
-        extraction_failed = False
-
-        for conv in conversations:
-            conv_id = conv["conversation_id"]
-            metadata = json.loads(conv["metadata_json"]) if conv["metadata_json"] else {}
-
-            user_id = metadata.get("user_id", "")
-            is_private = bool(metadata.get("is_private", False))
-            agent_name = metadata.get("agent", "")
-
-            messages = self._store.load_messages(conv_id)
-            # Filter to user+assistant text only
-            text_parts = []
-            for msg in messages:
-                role = msg.get("role", "")
-                if role not in ("user", "assistant"):
-                    continue
-                content = msg.get("content", "")
-                if isinstance(content, str) and content.strip():
-                    text_parts.append(f"{role}: {content}")
-
-            if not text_parts:
-                new_watermark = max(new_watermark, conv["updated_at"])
-                continue
-
-            conversations_reviewed += 1
-            total_messages += len(text_parts)
-
-            conversation_text = "\n".join(text_parts)
-            # Truncate to avoid excessive token usage
-            if len(conversation_text) > _MAX_HARVEST_CONVERSATION_CHARS:
-                conversation_text = conversation_text[-_MAX_HARVEST_CONVERSATION_CHARS:]
-
-            extracted = await self._extract_memories(
-                conversation_text,
-                user_id,
-                agent_name,
-                allow_user_scope=is_private,
+            result = subprocess.run(
+                ["rg", "--files-with-matches", "--ignore-case", "--no-messages", query],
+                cwd=str(directory),
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
-            if extracted < 0:
-                extraction_failed = True
-                # Stop at first failure so we do not advance the global watermark past
-                # a conversation that failed extraction.
-                break
-            total_extracted += extracted
+            paths: list[Path] = []
+            for line in result.stdout.strip().splitlines():
+                if line:
+                    paths.append(directory / line)
+            return paths
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return []
 
-            new_watermark = max(new_watermark, conv["updated_at"])
+    # ── Read ─────────────────────────────────────────────────────
 
-        if extraction_failed:
-            logger.warning(
-                "extraction failed; watermark advanced to %.6f (skipping failed conversation)",
-                new_watermark,
-            )
+    def read(self, relative_path: str) -> MemoryFile | None:
+        """Read a specific memory file by its relative path."""
+        path = self._base_dir / relative_path
+        if not path.is_file():
+            return None
+        return _parse_memory_file(path, self._relative_to())
 
-        if new_watermark > watermark:
-            self._store.set_memory_state("watermark", str(new_watermark))
+    # ── Update ───────────────────────────────────────────────────
 
-        logger.info(
-            "reviewed %d conversations, %d messages → %d memories extracted",
-            conversations_reviewed,
-            total_messages,
-            total_extracted,
+    def update(self, relative_path: str, content: str) -> bool:
+        """Update a memory file's content and bump updated_at."""
+        path = self._base_dir / relative_path
+        if not path.is_file():
+            return False
+
+        existing = _parse_memory_file(path, self._relative_to())
+        if existing is None:
+            return False
+
+        _write_memory_file(
+            path,
+            content,
+            created_at=existing.created_at,
+            updated_at=_now_utc(),
+            expires_at=existing.expires_at,
         )
+        logger.info("updated memory: %s", relative_path)
+        return True
 
-    async def _extract_memories(
-        self,
-        conversation_text: str,
-        user_id: str,
-        agent_name: str,
-        *,
-        allow_user_scope: bool,
-    ) -> int:
-        prompt = _HARVESTER_TEMPLATE.replace("{conversation}", conversation_text)
+    # ── Forget ───────────────────────────────────────────────────
 
-        resp = await _completion_with_fallback(
-            self._config.models,
-            label="harvester",
-            messages=[{"role": "user", "content": prompt}],
-            # Keep memory-worker requests free of explicit sampling params so
-            # mixed-provider fallback chains remain portable across stricter
-            # models like OpenAI GPT-5.
-            max_tokens=1024,
-        )
-        if resp is None:
-            return -1
+    def forget(self, relative_path: str) -> bool:
+        """Move a memory file to trash (not hard delete)."""
+        path = self._base_dir / relative_path
+        if not path.is_file():
+            return False
 
-        output = _strip_markdown_fence(resp.choices[0].message.content or "")
+        # Determine the trash directory: it's a sibling of rules/ or notes/
+        # e.g., agents/<name>/memory/notes/foo.md → agents/<name>/memory/trash/foo.md
+        parent = path.parent
+        trash_dir = parent.parent / "trash"
+        trash_dir.mkdir(parents=True, exist_ok=True)
 
-        if output == "NONE":
-            return 0
+        dest = _unique_path(trash_dir, path.stem)
+        path.rename(dest)
+        logger.info("moved to trash: %s → %s", relative_path, dest.name)
+        return True
 
-        try:
-            harvested = _parse_harvested_memories(output, user_id, agent_name, allow_user_scope)
-        except (ValueError, json.JSONDecodeError) as exc:
-            logger.warning("Harvester returned invalid output: %s", exc)
-            return 0
+    # ── Sweep expired ────────────────────────────────────────────
 
+    def sweep_expired(self) -> int:
+        """Move expired memory files to trash. Returns count of swept files."""
+        now = _now_utc()
         count = 0
-        for memory in harvested:
-            result = await self._memory_store.save(
-                memory.content,
-                memory.scope,
-                memory.scope_id,
-                retention=memory.retention,
-            )
-            if result is not None:
-                count += 1
 
-        return count
+        # Walk all memory directories looking for .md files with expires_at
+        memory_roots = [
+            self._base_dir / "memory" / "global",
+            self._base_dir / "memory" / "users",
+            self._base_dir / "agents",
+        ]
 
-
-class MemoryCleaner(ScheduledWorker):
-    _label = "cleaner"
-
-    def __init__(
-        self,
-        memory_store: MemoryStore,
-        store: Store,
-        config: CleanerConfig,
-        tz: tzinfo = UTC,
-    ):
-        super().__init__(memory_store, store, config, tz)
-
-    async def _tick(self) -> None:
-        expired = self._store.sweep_expired_memories()
-        if expired:
-            logger.info("Cleaner swept %d expired candidate memories", expired)
-
-        scopes = self._store.get_distinct_scopes()
-        if not scopes:
-            logger.debug("no memory scopes to process")
-            return
-
-        cleaned = 0
-        for scope, scope_id in scopes:
-            state_key = f"cleaner:{scope}:{scope_id}"
-            watermark_str = self._store.get_memory_state(state_key)
-            watermark = int(watermark_str) if watermark_str else 0
-
-            if not self._store.memories_exist_since(scope, scope_id, watermark):
+        for root in memory_roots:
+            if not root.is_dir():
                 continue
+            for md_path in root.rglob("*.md"):
+                # Only process files in rules/ or notes/ directories
+                if md_path.parent.name not in ("rules", "notes"):
+                    continue
 
-            try:
-                await self._clean_scope(scope, scope_id)
-                new_watermark = self._store.get_max_memory_id(scope, scope_id)
-                self._store.set_memory_state(state_key, str(new_watermark))
-                cleaned += 1
-            except Exception as exc:
-                logger.error(
-                    "Cleaner failed for %s/%s: %s: %s", scope, scope_id, type(exc).__name__, exc
-                )
+                mf = _parse_memory_file(md_path, self._relative_to())
+                if mf is None:
+                    continue
+                if mf.expires_at is not None and mf.expires_at <= now:
+                    relative = str(md_path.relative_to(self._relative_to()))
+                    if self.forget(relative):
+                        count += 1
 
-        if cleaned:
-            logger.info("Cleaner: processed %d scope(s)", cleaned)
-
-    async def _clean_scope(self, scope: str, scope_id: str) -> None:
-        memories = self._store.get_all_memories_for_scope(scope, scope_id)
-        if len(memories) < 2:
-            return
-
-        mem_lines = "\n".join(
-            f"[id={m['id']}] [{m['retention']}] {m['content']}"
-            + (" [PINNED]" if m["pinned"] else "")
-            for m in memories
-        )
-        prompt = _CLEANER_TEMPLATE.safe_substitute(memories=mem_lines)
-
-        resp = await _completion_with_fallback(
-            self._config.models,
-            label="cleaner",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=2048,
-        )
-        if resp is None:
-            return
-
-        output = _strip_markdown_fence(resp.choices[0].message.content or "")
-
-        try:
-            plan = json.loads(output)
-        except json.JSONDecodeError:
-            logger.warning("Cleaner: LLM returned invalid JSON for %s/%s", scope, scope_id)
-            return
-
-        validated = self._validate_cleaner_plan(plan, memories, scope, scope_id)
-        if validated is None:
-            return
-        kept, added, deleted = validated
-        memory_by_id = {m["id"]: m for m in memories}
-
-        # Apply updates to kept memories (content may have changed)
-        for item in kept:
-            mid = item["id"]
-            new_content = item["content"]
-            original = memory_by_id[mid]
-            if original["content"] != new_content:
-                vec = await self._memory_store.embed(new_content)
-                vec_bytes = serialize_float32(vec)
-                self._store.update_memory(mid, new_content, vec_bytes)
-
-        # Insert new split-out memories
-        for item in added:
-            await self._memory_store.save(item["content"], scope, scope_id, retention="durable")
-
-        # Delete removed memories
-        for mid in deleted:
-            self._store.delete_memory(mid)
-
-        logger.info(
-            "Cleaner %s/%s: kept=%d, added=%d, deleted=%d",
-            scope,
-            scope_id,
-            len(kept),
-            len(added),
-            len(deleted),
-        )
-
-    def _validate_cleaner_plan(
-        self,
-        plan: Any,
-        memories: list[dict[str, Any]],
-        scope: str,
-        scope_id: str,
-    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[int]] | None:
-        if not isinstance(plan, dict):
-            logger.warning("Cleaner: non-object JSON plan for %s/%s", scope, scope_id)
-            return None
-
-        raw_keep = plan.get("keep")
-        raw_add = plan.get("add")
-        raw_delete = plan.get("delete")
-        if (
-            not isinstance(raw_keep, list)
-            or not isinstance(raw_add, list)
-            or not isinstance(raw_delete, list)
-        ):
-            logger.warning("Cleaner: malformed plan keys for %s/%s", scope, scope_id)
-            return None
-
-        known_ids = {m["id"] for m in memories}
-        pinned_ids = {m["id"] for m in memories if m["pinned"]}
-        seen_ids: set[int] = set()
-
-        keep: list[dict[str, Any]] = []
-        for item in raw_keep:
-            if not isinstance(item, dict):
-                logger.warning("Cleaner: invalid keep item for %s/%s", scope, scope_id)
-                return None
-            mid = item.get("id")
-            content = item.get("content")
-            if (
-                not isinstance(mid, int)
-                or mid not in known_ids
-                or mid in seen_ids
-                or not isinstance(content, str)
-                or not content.strip()
-            ):
-                logger.warning("Cleaner: invalid keep entry for %s/%s", scope, scope_id)
-                return None
-            keep.append({"id": mid, "content": content.strip()})
-            seen_ids.add(mid)
-
-        delete: list[int] = []
-        for item in raw_delete:
-            if not isinstance(item, int) or item not in known_ids or item in seen_ids:
-                logger.warning("Cleaner: invalid delete entry for %s/%s", scope, scope_id)
-                return None
-            if item in pinned_ids:
-                logger.warning(
-                    "Cleaner: attempted to delete pinned memory %d in %s/%s",
-                    item,
-                    scope,
-                    scope_id,
-                )
-                return None
-            delete.append(item)
-            seen_ids.add(item)
-
-        if seen_ids != known_ids:
-            logger.warning(
-                "Cleaner: incomplete ID coverage for %s/%s (covered=%d expected=%d)",
-                scope,
-                scope_id,
-                len(seen_ids),
-                len(known_ids),
-            )
-            return None
-
-        add: list[dict[str, Any]] = []
-        for item in raw_add:
-            if not isinstance(item, dict):
-                logger.warning("Cleaner: invalid add item for %s/%s", scope, scope_id)
-                return None
-            content = item.get("content")
-            if not isinstance(content, str) or not content.strip():
-                logger.warning("Cleaner: invalid add content for %s/%s", scope, scope_id)
-                return None
-            add.append({"content": content.strip()})
-
-        return keep, add, delete
+        if count:
+            logger.info("swept %d expired memory files", count)
+        return count

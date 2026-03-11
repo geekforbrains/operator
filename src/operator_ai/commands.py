@@ -3,9 +3,9 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from operator_ai.config import SKILLS_DIR, Config
+from operator_ai.config import Config
 from operator_ai.job_specs import JOBS_DIR as _JOBS_DIR
 from operator_ai.job_specs import find_job_spec, scan_job_specs
 from operator_ai.skills import scan_skills
@@ -170,7 +170,7 @@ async def _job_subcommand(ctx: CommandContext) -> str:
 
 @command("skills", "List discovered skills")
 async def cmd_skills(ctx: CommandContext) -> str:
-    skills = scan_skills(SKILLS_DIR)
+    skills = scan_skills(ctx.config.skills_dir())
     if not skills:
         return "No skills found."
 
@@ -188,34 +188,36 @@ async def cmd_skills(ctx: CommandContext) -> str:
     return "\n".join(lines)
 
 
-@command("memories", "List pinned memories")
+@command("memories", "List active rules")
 async def cmd_memories(ctx: CommandContext) -> str:
     if not ctx.memory_store:
-        return "Memory system is not enabled."
+        return "Memory system is not available."
 
     if ctx.args:
         return await _memories_subcommand(ctx)
-    return _list_pinned_memories(ctx)
+    return _list_rules(ctx)
 
 
-def _list_pinned_memories(ctx: CommandContext) -> str:
+def _list_rules(ctx: CommandContext) -> str:
     scopes = [
-        ("agent", ctx.agent_name),
-        ("global", "global"),
+        f"agent:{ctx.agent_name}",
+        "global",
     ]
-    all_pinned: list[dict[str, Any]] = []
-    for scope, scope_id in scopes:
-        all_pinned.extend(ctx.memory_store.get_pinned_memories(scope, scope_id))  # type: ignore[union-attr]
 
-    if not all_pinned:
-        return "No pinned memories."
+    all_rules: list[str] = []
+    for scope in scopes:
+        rules = ctx.memory_store.list_rules(scope)  # type: ignore[union-attr]
+        for mf in rules:
+            content = mf.content.replace("\n", " ")
+            if len(content) > 120:
+                content = content[:117] + "..."
+            all_rules.append(f"`{mf.relative_path}` {content}")
 
-    lines = ["*Pinned memories:*\n"]
-    for m in all_pinned:
-        content = m["content"].replace("\n", " ")
-        if len(content) > 120:
-            content = content[:117] + "..."
-        lines.append(f"`#{m['id']}` [{m['scope']}/{m['scope_id']}] {content}")
+    if not all_rules:
+        return "No active rules."
+
+    lines = ["*Active rules:*\n"]
+    lines.extend(all_rules)
     return "\n".join(lines)
 
 
@@ -223,9 +225,9 @@ async def _memories_subcommand(ctx: CommandContext) -> str:
     action = ctx.args[0].lower()
 
     if action == "clear":
-        return "Memory mutation is disabled in chat. Use CLI tooling for memory updates."
+        return "Memory mutation is disabled in chat. Use CLI tooling or memory tools."
 
     if action == "delete":
-        return "Memory mutation is disabled in chat. Use CLI tooling for memory updates."
+        return "Memory mutation is disabled in chat. Use CLI tooling or memory tools."
 
     return f"Unknown memories subcommand: `{action}`. Use `clear` or `delete <id>`."

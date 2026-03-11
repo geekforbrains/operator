@@ -5,10 +5,10 @@ import contextlib
 import getpass
 import json
 import logging
-import logging.handlers
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import textwrap
@@ -16,11 +16,6 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
-try:
-    import pysqlite3 as sqlite3
-except ImportError:
-    import sqlite3
 
 import typer
 from rich.console import Console
@@ -30,11 +25,10 @@ from rich.text import Text
 
 import operator_ai.tools  # noqa: F401
 from operator_ai.agents import scan_agents
-from operator_ai.config import OPERATOR_DIR, ConfigError, load_config
+from operator_ai.config import OPERATOR_DIR, ConfigError, load_config, parse_env_file
 from operator_ai.job_specs import find_job_spec, scan_job_specs
 from operator_ai.jobs import run_job_now
-from operator_ai.litellm_logging import configure_litellm_logging
-from operator_ai.log_context import RunContextFilter
+from operator_ai.log_context import setup_logging
 from operator_ai.main import async_main
 from operator_ai.memory import MemoryStore
 from operator_ai.prompts import load_prompt
@@ -45,7 +39,7 @@ from operator_ai.skills import (
     rewrite_frontmatter,
     scan_skills,
 )
-from operator_ai.store import get_store
+from operator_ai.store import USERNAME_RE, get_store
 from operator_ai.tools.registry import get_tools
 from operator_ai.transport.cli import CliTransport
 from operator_ai.transport.registry import (
@@ -60,16 +54,14 @@ console = Console()
 logger = logging.getLogger("operator.cli")
 
 app = typer.Typer(add_completion=False)
-kv_app = typer.Typer(help="Key-value store operations.")
 job_app = typer.Typer(help="Job inspection and management.")
 service_app = typer.Typer(help="Manage the operator background service.")
-memory_app = typer.Typer(help="Browse and inspect memories.")
+memory_app = typer.Typer(help="Browse and search memories.")
 skill_app = typer.Typer(help="Manage skills.")
 user_app = typer.Typer(help="Manage users, identities, and roles.")
-app.add_typer(kv_app, name="kv")
 app.add_typer(job_app, name="job")
 app.add_typer(service_app, name="service")
-app.add_typer(memory_app, name="memories")
+app.add_typer(memory_app, name="memory")
 app.add_typer(skill_app, name="skills")
 app.add_typer(user_app, name="user")
 
@@ -110,31 +102,11 @@ def _require_launchd_plist() -> None:
 
 def _setup_cli_logging() -> None:
     """Set up logging for CLI commands — writes to the shared log file + stderr."""
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    fmt = logging.Formatter(
-        "%(asctime)s %(levelname)-5s %(run_ctx)s%(message)s", datefmt="%H:%M:%S"
+    setup_logging(
+        log_dir=LOG_DIR,
+        stderr=True,
+        noisy_loggers=("httpx", "httpcore", "litellm", "openai", *transport_logger_names()),
     )
-    ctx_filter = RunContextFilter()
-
-    fh = logging.handlers.RotatingFileHandler(LOG_FILE, maxBytes=5_000_000, backupCount=3)
-    fh.setFormatter(fmt)
-    fh.setLevel(logging.DEBUG)
-    fh.addFilter(ctx_filter)
-
-    sh = logging.StreamHandler()
-    sh.setFormatter(fmt)
-    sh.setLevel(logging.INFO)
-    sh.addFilter(ctx_filter)
-
-    root = logging.getLogger("operator")
-    root.setLevel(logging.DEBUG)
-    root.addHandler(fh)
-    root.addHandler(sh)
-
-    configure_litellm_logging()
-
-    for name in ("httpx", "httpcore", "litellm", "openai", *transport_logger_names()):
-        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def _resolve_agent(agent: str | None) -> str:
@@ -151,10 +123,6 @@ def _resolve_agent(agent: str | None) -> str:
         raise typer.Exit(code=1) from None
 
 
-def _store():
-    return get_store()
-
-
 def _is_macos() -> bool:
     return sys.platform == "darwin"
 
@@ -163,7 +131,6 @@ def _is_macos() -> bool:
 
 _DEFAULT_AGENT_NAME = "operator"
 _DEFAULT_PROVIDER = "anthropic"
-_USERNAME_RE = re.compile(r"^[a-z0-9.\-]{1,64}$")
 
 
 @dataclass(frozen=True)
@@ -271,21 +238,6 @@ def _build_starter_config(
         roles:
           guest:
             agents: []
-
-        # memory:
-        #   embed_model: "openai/text-embedding-3-small"
-        #   embed_dimensions: 1536
-        #   inject_top_k: 3
-        #   inject_min_relevance: 0.3
-        #   candidate_ttl_days: 14
-        #   harvester:
-        #     enabled: true
-        #     schedule: "*/30 * * * *"
-        #     model: "openai/gpt-4.1-mini"
-        #   cleaner:
-        #     enabled: true
-        #     schedule: "0 3 * * *"
-        #     model: "openai/gpt-4.1-mini"
         """)
 
 
@@ -367,24 +319,6 @@ def _scaffold_operator_home(
         wrote_config=wrote_config,
         wrote_env_file=wrote_env_file,
     )
-
-
-def _parse_env_file(path: Path) -> dict[str, str]:
-    values: dict[str, str] = {}
-    if not path.exists():
-        return values
-    for line in path.read_text().splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, _, value = stripped.partition("=")
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
-            value = value[1:-1]
-        if key:
-            values[key] = value
-    return values
 
 
 def _quote_env_value(value: str) -> str:
@@ -513,7 +447,7 @@ def _prompt_timezone(timezone: str | None) -> str:
 def _prompt_username(username: str | None) -> str:
     if username is not None:
         value = username.strip()
-        if not _USERNAME_RE.match(value):
+        if not USERNAME_RE.match(value):
             raise typer.BadParameter(
                 "Username must be 1-64 chars using lowercase letters, numbers, dots, and hyphens."
             )
@@ -522,7 +456,7 @@ def _prompt_username(username: str | None) -> str:
     default = _default_setup_username()
     while True:
         value = typer.prompt("Admin username", default=default).strip()
-        if _USERNAME_RE.match(value):
+        if USERNAME_RE.match(value):
             return value
         console.print(
             "[red]Username must be 1-64 chars using lowercase letters, numbers, dots, and hyphens.[/red]"
@@ -621,7 +555,7 @@ def _ensure_setup_identity(
     transport: SetupTransport,
     external_id: str,
 ) -> str:
-    store = _store()
+    store = get_store()
     user = store.get_user(username)
     platform_id = f"{transport.name}:{external_id}"
     existing_username = store.resolve_username(platform_id)
@@ -734,7 +668,7 @@ def setup(
         ),
         emit_output=False,
     )
-    env_file_values = _parse_env_file(result.env_file)
+    env_file_values = parse_env_file(result.env_file)
 
     secrets: dict[str, str] = {}
     provider_secret = _resolve_secret(
@@ -1024,57 +958,6 @@ def logs(
         subprocess.run(cmd)
 
 
-# ── KV commands ──────────────────────────────────────────────
-
-
-@kv_app.command("get")
-def kv_get(
-    key: str = typer.Argument(help="Key to look up."),
-    agent: str | None = typer.Option(None, "--agent", "-a", help="Agent name."),
-    ns: str = typer.Option("", "--ns", "-n", help="Namespace."),
-) -> None:
-    """Get a value from the KV store."""
-    value = _store().kv_get(_resolve_agent(agent), key, ns=ns)
-    if value is None:
-        raise typer.Exit(code=1)
-    print(value)
-
-
-@kv_app.command("set")
-def kv_set(
-    key: str = typer.Argument(help="Key to store."),
-    value: str = typer.Argument(help="Value to store."),
-    agent: str | None = typer.Option(None, "--agent", "-a", help="Agent name."),
-    ns: str = typer.Option("", "--ns", "-n", help="Namespace."),
-    ttl: int | None = typer.Option(None, "--ttl", help="Auto-expire after N hours."),
-) -> None:
-    """Set a key-value pair."""
-    _store().kv_set(_resolve_agent(agent), key, value, ns=ns, ttl_hours=ttl)
-    print("OK")
-
-
-@kv_app.command("delete")
-def kv_delete(
-    key: str = typer.Argument(help="Key to delete."),
-    agent: str | None = typer.Option(None, "--agent", "-a", help="Agent name."),
-    ns: str = typer.Option("", "--ns", "-n", help="Namespace."),
-) -> None:
-    """Delete a key from the KV store."""
-    if not _store().kv_delete(_resolve_agent(agent), key, ns=ns):
-        raise typer.Exit(code=1)
-    print("OK")
-
-
-@kv_app.command("list")
-def kv_list(
-    agent: str | None = typer.Option(None, "--agent", "-a", help="Agent name."),
-    ns: str = typer.Option("", "--ns", "-n", help="Namespace."),
-    prefix: str = typer.Option("", "--prefix", "-p", help="Key prefix filter."),
-) -> None:
-    """List keys in the KV store (JSON output)."""
-    print(json.dumps(_store().kv_list(_resolve_agent(agent), ns=ns, prefix=prefix), indent=2))
-
-
 # ── Job commands ─────────────────────────────────────────────
 
 
@@ -1094,7 +977,7 @@ def job_list() -> None:
     if not jobs:
         console.print("No jobs found.")
         raise typer.Exit()
-    store = _store()
+    store = get_store()
     table = Table(show_header=True, show_edge=False, pad_edge=False)
     table.add_column("Name", style="bold", no_wrap=True)
     table.add_column("Status")
@@ -1152,7 +1035,7 @@ def job_info(
         console.print(f"Job '{name}' not found.", style="red")
         raise typer.Exit(code=1)
 
-    state = _store().load_job_state(name)
+    state = get_store().load_job_state(name)
     enabled = Text("yes", style="green") if job.enabled else Text("no", style="red")
 
     table = Table(show_header=False, show_edge=False, pad_edge=False, box=None)
@@ -1199,12 +1082,8 @@ def job_run(
     except ConfigError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(code=1) from None
-    store = (
-        get_store(embed_dimensions=config.memory.embed_dimensions)
-        if config.memory.enabled
-        else get_store()
-    )
-    memory_store = MemoryStore(store, config.memory) if config.memory.enabled else None
+    store = get_store()
+    memory_store = MemoryStore(base_dir=OPERATOR_DIR)
 
     job = next((job for job in _scan_jobs() if job.name == name), None)
     if not job:
@@ -1258,7 +1137,7 @@ def job_disable(
 
 def _toggle_job(name: str, *, enabled: bool) -> None:
     jobs_dir = OPERATOR_DIR / "jobs"
-    job_md = jobs_dir / name / "JOB.md"
+    job_md = jobs_dir / f"{name}.md"
     if not job_md.exists():
         # Try matching by frontmatter name
         job = _find_job(name)
@@ -1280,100 +1159,76 @@ def _toggle_job(name: str, *, enabled: bool) -> None:
 
 
 @memory_app.callback(invoke_without_command=True)
-def memories_main(
-    ctx: typer.Context,
-    scope: str | None = typer.Option(None, "--scope", "-s", help="Filter by scope."),
-    scope_id: str | None = typer.Option(None, "--scope-id", "-i", help="Filter by scope_id."),
-    pinned: bool = typer.Option(False, "--pinned", help="Show only pinned memories."),
-    limit: int = typer.Option(50, "--limit", "-n", help="Number to show."),
+def memory_main(ctx: typer.Context) -> None:
+    """Browse and search file-backed memories."""
+    if ctx.invoked_subcommand is None:
+        memory_list_cmd(scope="global")
+
+
+@memory_app.command("list")
+def memory_list_cmd(
+    scope: str = typer.Argument("global", help="Scope: global, agent:<name>, or user:<name>."),
 ) -> None:
-    """List memories."""
-    if ctx.invoked_subcommand is not None:
-        return
+    """List rules and notes for a scope."""
+    mem = MemoryStore(base_dir=OPERATOR_DIR)
+    rules = mem.list_rules(scope)
+    notes = mem.list_notes(scope)
 
-    store = _store()
-
-    if pinned and scope and scope_id:
-        rows = store.get_pinned_memories(scope, scope_id)
-    elif pinned:
-        # Get pinned across all scopes
-        rows = store.list_memories(scope=scope, scope_id=scope_id, limit=limit)
-        rows = [r for r in rows if r["pinned"]]
-    else:
-        rows = store.list_memories(scope=scope, scope_id=scope_id, limit=limit)
-
-    if not rows:
-        console.print("No memories found.")
+    if not rules and not notes:
+        console.print(f"No memories in scope '{scope}'.")
         raise typer.Exit()
 
     table = Table(show_header=True, show_edge=False, pad_edge=False)
-    table.add_column("ID", justify="right", style="dim")
-    table.add_column("Scope")
-    table.add_column("Retention", style="magenta")
+    table.add_column("Type", style="bold")
+    table.add_column("Path", style="dim")
+    table.add_column("Updated", style="dim")
     table.add_column("Expires", style="dim")
     table.add_column("Content")
-    table.add_column("", width=1)  # pin marker
-    for row in rows:
-        content = row["content"].replace("\n", " ")
-        if len(content) > 100:
-            content = content[:97] + "..."
-        pin = Text("\u2691", style="yellow") if row["pinned"] else Text("")
-        expires = row["expires_at"] or ""
-        table.add_row(
-            str(row["id"]),
-            Text(f"{row['scope']}/{row['scope_id']}", style="cyan"),
-            row["retention"],
-            expires,
-            content,
-            pin,
-        )
+
+    for mf in rules:
+        content = mf.content.replace("\n", " ")
+        if len(content) > 80:
+            content = content[:77] + "..."
+        updated = mf.updated_at.strftime("%Y-%m-%d %H:%M") if mf.updated_at else "-"
+        expires = mf.expires_at.strftime("%Y-%m-%d %H:%M") if mf.expires_at else "-"
+        table.add_row("rule", mf.relative_path, updated, expires, content)
+
+    for mf in notes:
+        content = mf.content.replace("\n", " ")
+        if len(content) > 80:
+            content = content[:77] + "..."
+        updated = mf.updated_at.strftime("%Y-%m-%d %H:%M") if mf.updated_at else "-"
+        expires = mf.expires_at.strftime("%Y-%m-%d %H:%M") if mf.expires_at else "-"
+        table.add_row("note", mf.relative_path, updated, expires, content)
+
     console.print(table)
 
 
-@memory_app.command("stats")
-def memories_stats() -> None:
-    """Show memory counts per scope."""
-    store = _store()
-    rows = store.count_all_memories_by_scope()
-    if not rows:
-        console.print("No memories.")
+@memory_app.command("search")
+def memory_search_cmd(
+    query: str = typer.Argument(help="Search query."),
+    scope: str = typer.Option("global", "--scope", "-s", help="Scope to search."),
+) -> None:
+    """Search notes by filename and content."""
+    mem = MemoryStore(base_dir=OPERATOR_DIR)
+    results = mem.search_notes(scope, query)
+
+    if not results:
+        console.print(f"No notes matching '{query}' in scope '{scope}'.")
         raise typer.Exit()
 
     table = Table(show_header=True, show_edge=False, pad_edge=False)
-    table.add_column("Scope", style="cyan")
-    table.add_column("Count", justify="right")
-    table.add_column("Candidate", justify="right", style="magenta")
-    table.add_column("Durable", justify="right", style="green")
-    table.add_column("Pinned", justify="right", style="yellow")
+    table.add_column("Path", style="dim")
+    table.add_column("Updated", style="dim")
+    table.add_column("Content")
 
-    total = 0
-    total_candidate = 0
-    total_durable = 0
-    total_pinned = 0
-    for row in rows:
-        count = row["count"]
-        candidate_count = row["candidate_count"] or 0
-        durable_count = row["durable_count"] or 0
-        pinned_count = row["pinned"] or 0
-        total += count
-        total_candidate += candidate_count
-        total_durable += durable_count
-        total_pinned += pinned_count
-        table.add_row(
-            f"{row['scope']}/{row['scope_id']}",
-            str(count),
-            str(candidate_count) if candidate_count else "",
-            str(durable_count) if durable_count else "",
-            str(pinned_count) if pinned_count else "",
-        )
-    table.add_section()
-    table.add_row(
-        Text("Total", style="bold"),
-        Text(str(total), style="bold"),
-        str(total_candidate),
-        str(total_durable),
-        str(total_pinned),
-    )
+    for mf in results:
+        content = mf.content.replace("\n", " ")
+        if len(content) > 80:
+            content = content[:77] + "..."
+        updated = mf.updated_at.strftime("%Y-%m-%d %H:%M") if mf.updated_at else "-"
+        table.add_row(mf.relative_path, updated, content)
+
     console.print(table)
 
 
@@ -1527,7 +1382,7 @@ def user_add(
         except ConfigError:
             pass
 
-    store = _store()
+    store = get_store()
     platform_id = f"{transport}:{external_id}"
     try:
         store.add_user(username)
@@ -1550,7 +1405,7 @@ def user_link(
     external_id: str = typer.Argument(help="External ID on that transport."),
 ) -> None:
     """Link a transport identity to an existing user."""
-    store = _store()
+    store = get_store()
     if store.get_user(username) is None:
         console.print(f"[red]Error:[/red] user '{username}' not found.")
         raise typer.Exit(code=1)
@@ -1571,7 +1426,7 @@ def user_unlink(
     external_id: str = typer.Argument(help="External ID on that transport."),
 ) -> None:
     """Remove a transport identity from a user."""
-    store = _store()
+    store = get_store()
     platform_id = f"{transport}:{external_id}"
     if not store.remove_identity(platform_id):
         console.print(f"[red]Error:[/red] identity '{platform_id}' not found.")
@@ -1584,7 +1439,7 @@ def user_remove(
     username: str = typer.Argument(help="Username to remove."),
 ) -> None:
     """Remove a user entirely (cascades identities and roles)."""
-    store = _store()
+    store = get_store()
     if not store.remove_user(username):
         console.print(f"[red]Error:[/red] user '{username}' not found.")
         raise typer.Exit(code=1)
@@ -1594,7 +1449,7 @@ def user_remove(
 @user_app.command("list")
 def user_list() -> None:
     """List all users with identities and roles."""
-    store = _store()
+    store = get_store()
     users = store.list_users()
     if not users:
         console.print("No users found.")
@@ -1616,7 +1471,7 @@ def user_info(
     username: str = typer.Argument(help="Username to inspect."),
 ) -> None:
     """Show details for one user."""
-    store = _store()
+    store = get_store()
     user = store.get_user(username)
     if user is None:
         console.print(f"[red]Error:[/red] user '{username}' not found.")
@@ -1641,7 +1496,7 @@ def user_add_role(
     role: str = typer.Argument(help="Role to add."),
 ) -> None:
     """Add a role to a user."""
-    store = _store()
+    store = get_store()
     if store.get_user(username) is None:
         console.print(f"[red]Error:[/red] user '{username}' not found.")
         raise typer.Exit(code=1)
@@ -1660,7 +1515,7 @@ def user_remove_role(
     role: str = typer.Argument(help="Role to remove."),
 ) -> None:
     """Remove a role from a user."""
-    store = _store()
+    store = get_store()
     if not store.remove_role(username, role):
         console.print(f"[red]Error:[/red] user '{username}' does not have role '{role}'.")
         raise typer.Exit(code=1)

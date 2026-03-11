@@ -1,12 +1,23 @@
 from __future__ import annotations
 
 import asyncio
+import io
+import sys
+from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
+import pytest
+
 import operator_ai.tools  # noqa: F401  — warm up circular imports
-from operator_ai.transport.base import IncomingMessage, MessageContext
+from operator_ai.transport.base import Attachment, IncomingMessage, MessageContext, Transport
+from operator_ai.transport.cli import CliTransport
+from operator_ai.transport.registry import (
+    normalize_transport_options,
+    transport_logger_names,
+)
 from operator_ai.transport.slack import SlackTransport, SlackUserProfile
 
 
@@ -833,3 +844,398 @@ def test_resolve_context_sets_chat_type() -> None:
         assert group_ctx.chat_type == "group"
 
     asyncio.run(_run())
+
+
+# ============================================================
+# Phase 7: Transport base / CLI / registry tests
+# ============================================================
+
+
+# --- IncomingMessage dataclass ---
+
+
+def test_incoming_message_creation() -> None:
+    msg = IncomingMessage(
+        text="hello",
+        user_id="U123",
+        channel_id="C456",
+        message_id="msg-1",
+        root_message_id="root-1",
+        transport_name="slack",
+    )
+    assert msg.text == "hello"
+    assert msg.user_id == "U123"
+    assert msg.channel_id == "C456"
+    assert msg.message_id == "msg-1"
+    assert msg.root_message_id == "root-1"
+    assert msg.transport_name == "slack"
+    assert msg.is_private is False
+    assert msg.was_mentioned is False
+    assert msg.attachments == []
+    assert msg.created_at is None
+
+
+def test_incoming_message_with_all_fields() -> None:
+    now = datetime.now(tz=UTC)
+    attachment = Attachment(
+        filename="test.png",
+        content_type="image/png",
+        size=1024,
+        url="https://example.com/test.png",
+        platform_id="F123",
+    )
+    msg = IncomingMessage(
+        text="check this",
+        user_id="U99",
+        channel_id="D100",
+        message_id="m-2",
+        root_message_id="m-1",
+        transport_name="cli",
+        is_private=True,
+        was_mentioned=True,
+        attachments=[attachment],
+        created_at=now,
+    )
+    assert msg.is_private is True
+    assert msg.was_mentioned is True
+    assert len(msg.attachments) == 1
+    assert msg.attachments[0].filename == "test.png"
+    assert msg.created_at == now
+
+
+# --- Attachment dataclass ---
+
+
+def test_attachment_creation() -> None:
+    a = Attachment(
+        filename="doc.pdf",
+        content_type="application/pdf",
+        size=2048,
+        url="https://files.example.com/doc.pdf",
+    )
+    assert a.filename == "doc.pdf"
+    assert a.content_type == "application/pdf"
+    assert a.size == 2048
+    assert a.platform_id == ""
+
+
+# --- MessageContext.to_prompt ---
+
+
+def test_to_prompt_all_fields_rendered() -> None:
+    ctx = MessageContext(
+        platform="slack",
+        channel_id="C123",
+        channel_name="#general",
+        user_id="U456",
+        user_name="Alice",
+        username="alice",
+        chat_type="channel",
+    )
+    result = ctx.to_prompt(workspace="/home/agent/workspace", operator_home="/home/.operator")
+    assert "# Context" in result
+    assert "- Platform: slack" in result
+    assert "- Chat type: channel" in result
+    assert "- Channel: #general (`C123`)" in result
+    assert "- User: alice (Alice via slack)" in result
+    assert "- Workspace: `/home/agent/workspace`" in result
+    assert "- Operator home: `/home/.operator` (also `$OPERATOR_HOME`)" in result
+
+
+def test_to_prompt_minimal_fields() -> None:
+    ctx = MessageContext(
+        platform="cli",
+        channel_id="cli",
+        channel_name="cli",
+        user_id="cli",
+        user_name="cli",
+    )
+    result = ctx.to_prompt()
+    assert "# Context" in result
+    assert "- Platform: cli" in result
+    assert "- Channel: cli (`cli`)" in result
+    assert "- User: cli (`cli`)" in result
+    assert "Chat type" not in result
+    assert "Workspace" not in result
+    assert "Operator home" not in result
+
+
+# --- Transport.build_conversation_id ---
+
+
+def test_build_conversation_id_format() -> None:
+    cli = CliTransport(agent_name="hermy")
+    msg = IncomingMessage(
+        text="test",
+        user_id="cli",
+        channel_id="C123",
+        message_id="m-1",
+        root_message_id="root-42",
+        transport_name="hermy",
+    )
+    result = cli.build_conversation_id(msg)
+    assert result == "cli:hermy:C123:root-42"
+
+
+def test_build_conversation_id_uses_root_message_id() -> None:
+    cli = CliTransport(agent_name="cora")
+    msg1 = IncomingMessage(
+        text="a",
+        user_id="u",
+        channel_id="C1",
+        message_id="m1",
+        root_message_id="thread-1",
+        transport_name="cora",
+    )
+    msg2 = IncomingMessage(
+        text="b",
+        user_id="u",
+        channel_id="C1",
+        message_id="m2",
+        root_message_id="thread-1",
+        transport_name="cora",
+    )
+    # Same thread -> same conversation ID
+    assert cli.build_conversation_id(msg1) == cli.build_conversation_id(msg2)
+
+
+# --- Transport base defaults ---
+
+
+def test_transport_base_get_tools_returns_empty() -> None:
+    cli = CliTransport(agent_name="test")
+    assert cli.get_tools() == []
+
+
+def test_transport_base_get_thread_context_returns_none() -> None:
+    cli = CliTransport(agent_name="test")
+    msg = IncomingMessage(
+        text="hi",
+        user_id="u",
+        channel_id="c",
+        message_id="m",
+        root_message_id="r",
+        transport_name="test",
+    )
+    result = asyncio.run(cli.get_thread_context(msg))
+    assert result is None
+
+
+def test_transport_base_download_file_raises() -> None:
+    cli = CliTransport(agent_name="test")
+    attachment = Attachment(filename="f.txt", content_type="text/plain", size=100, url="http://x")
+    with pytest.raises(NotImplementedError, match="CliTransport"):
+        asyncio.run(cli.download_file(attachment))
+
+
+def test_transport_base_send_file_raises() -> None:
+    cli = CliTransport(agent_name="test")
+    with pytest.raises(NotImplementedError, match="CliTransport"):
+        asyncio.run(cli.send_file("C1", b"data", "file.txt"))
+
+
+def test_transport_base_get_prompt_extra_returns_empty() -> None:
+    cli = CliTransport(agent_name="test")
+    assert cli.get_prompt_extra() == ""
+
+
+def test_transport_base_update_is_noop() -> None:
+    cli = CliTransport(agent_name="test")
+    # Should not raise
+    asyncio.run(cli.update("C1", "m1", "new text"))
+
+
+def test_transport_base_delete_is_noop() -> None:
+    cli = CliTransport(agent_name="test")
+    # Should not raise
+    asyncio.run(cli.delete("C1", "m1"))
+
+
+def test_transport_base_resolve_channel_id_passthrough() -> None:
+    cli = CliTransport(agent_name="test")
+    result = asyncio.run(cli.resolve_channel_id("anything"))
+    assert result == "anything"
+
+
+# --- CliTransport ---
+
+
+def test_cli_transport_send_prints_to_stderr() -> None:
+    async def _run() -> str:
+        cli = CliTransport(agent_name="hermy")
+        old_stderr = sys.stderr
+        capture = io.StringIO()
+        sys.stderr = capture
+        try:
+            msg_id = await cli.send("C123", "Hello world")
+        finally:
+            sys.stderr = old_stderr
+        return capture.getvalue() + "|" + msg_id
+
+    output = asyncio.run(_run())
+    parts = output.split("|")
+    stderr_output = parts[0]
+    msg_id = parts[1]
+    assert "[send_message" in stderr_output
+    assert "C123" in stderr_output
+    assert "Hello world" in stderr_output
+    assert msg_id == "cli-1"
+
+
+def test_cli_transport_send_with_thread_id() -> None:
+    async def _run() -> str:
+        cli = CliTransport(agent_name="hermy")
+        old_stderr = sys.stderr
+        capture = io.StringIO()
+        sys.stderr = capture
+        try:
+            await cli.send("C123", "Reply", thread_id="t-42")
+        finally:
+            sys.stderr = old_stderr
+        return capture.getvalue()
+
+    output = asyncio.run(_run())
+    assert "(thread: t-42)" in output
+
+
+def test_cli_transport_message_counter_increments() -> None:
+    async def _run() -> list[str]:
+        cli = CliTransport(agent_name="hermy")
+        old_stderr = sys.stderr
+        sys.stderr = io.StringIO()
+        try:
+            ids = []
+            for _ in range(3):
+                ids.append(await cli.send("C1", "msg"))
+            return ids
+        finally:
+            sys.stderr = old_stderr
+
+    ids = asyncio.run(_run())
+    assert ids == ["cli-1", "cli-2", "cli-3"]
+
+
+def test_cli_transport_resolve_context_returns_cli_values() -> None:
+    async def _run() -> MessageContext:
+        cli = CliTransport(agent_name="hermy")
+        msg = IncomingMessage(
+            text="test",
+            user_id="whoever",
+            channel_id="wherever",
+            message_id="m1",
+            root_message_id="m1",
+            transport_name="hermy",
+        )
+        return await cli.resolve_context(msg)
+
+    ctx = asyncio.run(_run())
+    assert ctx.platform == "cli"
+    assert ctx.channel_id == "cli"
+    assert ctx.channel_name == "cli"
+    assert ctx.user_id == "cli"
+    assert ctx.user_name == "cli"
+
+
+def test_cli_transport_start_raises() -> None:
+    cli = CliTransport(agent_name="test")
+    with pytest.raises(NotImplementedError, match="does not accept inbound"):
+        asyncio.run(cli.start(AsyncMock()))
+
+
+def test_cli_transport_platform_and_name() -> None:
+    cli = CliTransport(agent_name="hermy")
+    assert cli.platform == "cli"
+    assert cli.name == "hermy"
+    assert cli.agent_name == "hermy"
+
+
+# --- Transport registry ---
+
+
+def test_normalize_transport_options_slack() -> None:
+    options = {
+        "bot_token_env": "MY_BOT_TOKEN",
+        "app_token_env": "MY_APP_TOKEN",
+    }
+    result = normalize_transport_options("slack", options)
+    assert result["bot_token_env"] == "MY_BOT_TOKEN"
+    assert result["app_token_env"] == "MY_APP_TOKEN"
+    # Defaults should be populated
+    assert result["include_archived_channels"] is False
+    assert result["inject_channels_into_prompt"] is True
+    assert result["inject_users_into_prompt"] is True
+    assert result["expand_mentions"] is True
+
+
+def test_normalize_transport_options_unknown_type_raises() -> None:
+    with pytest.raises(ValueError, match="Unsupported transport type"):
+        normalize_transport_options("telegram", {})
+
+
+def test_normalize_transport_options_rejects_extra_fields() -> None:
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="extra_forbidden"):
+        normalize_transport_options(
+            "slack",
+            {
+                "bot_token_env": "TOK",
+                "app_token_env": "APP",
+                "unknown_field": True,
+            },
+        )
+
+
+def test_transport_logger_names_includes_slack() -> None:
+    names = transport_logger_names()
+    assert "slack_bolt" in names
+    assert "slack_sdk" in names
+
+
+def test_transport_logger_names_returns_tuple() -> None:
+    names = transport_logger_names()
+    assert isinstance(names, tuple)
+
+
+# --- No memory code in transport layer (structural verification) ---
+
+
+def test_transport_base_has_no_memory_imports() -> None:
+    """Verify the transport base module does not import from memory modules."""
+    import operator_ai.transport.base as base_mod
+
+    source = Path(base_mod.__file__).read_text()
+    assert "from operator_ai.memory" not in source
+    assert "import operator_ai.memory" not in source
+
+
+def test_cli_transport_has_no_memory_imports() -> None:
+    """Verify the CLI transport module does not import from memory modules."""
+    import operator_ai.transport.cli as cli_mod
+
+    source = Path(cli_mod.__file__).read_text()
+    assert "from operator_ai.memory" not in source
+    assert "import operator_ai.memory" not in source
+
+
+def test_transport_abc_defines_required_interface() -> None:
+    """Verify the Transport ABC defines the expected interface methods."""
+    import inspect
+
+    methods = {name for name, _ in inspect.getmembers(Transport, predicate=inspect.isfunction)}
+    expected = {
+        "start",
+        "stop",
+        "send",
+        "resolve_context",
+        "build_conversation_id",
+        "get_tools",
+        "get_thread_context",
+        "download_file",
+        "send_file",
+        "get_prompt_extra",
+        "update",
+        "delete",
+        "resolve_channel_id",
+    }
+    assert expected.issubset(methods)

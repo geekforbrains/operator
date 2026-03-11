@@ -1,29 +1,30 @@
 from __future__ import annotations
 
-import shutil
 import stat
 from pathlib import Path
 
 from croniter import croniter
 
-from operator_ai.config import ConfigError, load_config
-from operator_ai.jobs import JOBS_DIR, scan_jobs
+from operator_ai.config import OPERATOR_DIR, ConfigError, load_config
+from operator_ai.job_specs import JOBS_DIR
+from operator_ai.jobs import scan_jobs
 from operator_ai.skills import parse_frontmatter, rewrite_frontmatter
 from operator_ai.store import get_store
 from operator_ai.tools.registry import safe_name, tool
 
 
-def _safe_job_relative_path(job_dir: Path, path: str) -> Path:
+def _safe_hook_relative_path(base_dir: Path, path: str) -> Path:
+    """Validate a hook script path is relative and stays within base_dir."""
     if not path:
         raise ValueError("hook script path cannot be empty")
     p = Path(path)
     if p.is_absolute():
         raise ValueError(f"hook script path must be relative: {path!r}")
-    resolved = (job_dir / p).resolve()
+    resolved = (base_dir / p).resolve()
     try:
-        resolved.relative_to(job_dir.resolve())
+        resolved.relative_to(base_dir.resolve())
     except ValueError as e:
-        raise ValueError(f"hook script path escapes job directory: {path!r}") from e
+        raise ValueError(f"hook script path escapes operator directory: {path!r}") from e
     return resolved
 
 
@@ -35,8 +36,12 @@ async def manage_job(action: str, name: str = "", config: str = "") -> str:
 
     Args:
         action: One of: list, create, update, delete, enable, disable.
-        name: Job directory name (required for all actions except list).
-        config: Full JOB.md content for create/update. YAML frontmatter (between --- delimiters) with fields: name, description, schedule (cron, required), agent (optional — agent name to run as), model (optional, litellm format), enabled, hooks (prerun/postrun scripts). Body is the prompt — include posting instructions (channels, threading) since the agent uses send_message to deliver output.
+        name: Job name (required for all actions except list).
+        config: Full job .md content for create/update. YAML frontmatter (between --- delimiters)
+            with fields: name, description, schedule (cron, required), agent (optional -- agent
+            name to run as), model (optional, litellm format), enabled, hooks (prerun/postrun
+            scripts, paths relative to ~/.operator/). Body is the prompt -- include posting
+            instructions (channels, threading) since the agent uses send_message to deliver output.
     """
     action = action.lower().strip()
 
@@ -84,10 +89,10 @@ def _list_jobs() -> str:
 
 def _validate_frontmatter(fm: dict) -> str | None:
     try:
-        config = load_config()
+        cfg = load_config()
     except ConfigError:
         return "[error: unable to load config]"
-    agent_names = list(config.agents.keys())
+    agent_names = list(cfg.agents.keys())
 
     if not fm.get("schedule"):
         return "[error: frontmatter must include a 'schedule' field]"
@@ -103,12 +108,11 @@ def _validate_frontmatter(fm: dict) -> str | None:
     if hooks is not None and not isinstance(hooks, dict):
         return "[error: 'hooks' must be a mapping (e.g. hooks:\\n  prerun: scripts/check.sh)]"
     if isinstance(hooks, dict):
-        job_dir = JOBS_DIR / "__validation__"
         for hook_name, script_path in hooks.items():
             if not isinstance(script_path, str):
                 return f"[error: hooks.{hook_name} must be a string path]"
             try:
-                _safe_job_relative_path(job_dir, script_path)
+                _safe_hook_relative_path(OPERATOR_DIR, script_path)
             except ValueError as e:
                 return f"[error: {e}]"
 
@@ -119,15 +123,15 @@ def _create_job(name: str, config: str) -> str:
     if not name:
         return "[error: 'name' is required for create]"
     if not config:
-        return "[error: 'config' (JOB.md content) is required for create]"
+        return "[error: 'config' (job .md content) is required for create]"
 
     try:
         slug = safe_name(name, "job")
     except ValueError as e:
         return f"[error: {e}]"
 
-    job_dir = JOBS_DIR / slug
-    if job_dir.exists():
+    job_file = JOBS_DIR / f"{slug}.md"
+    if job_file.exists():
         return f"[error: job '{name}' already exists. Use 'update' to modify.]"
 
     fm = parse_frontmatter(config)
@@ -138,15 +142,15 @@ def _create_job(name: str, config: str) -> str:
     if err:
         return err
 
-    job_dir.mkdir(parents=True, exist_ok=True)
-    (job_dir / "JOB.md").write_text(config)
+    JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    job_file.write_text(config)
 
     # Create placeholder hook scripts if referenced
     hooks = fm.get("hooks") or {}
     if isinstance(hooks, dict):
         for hook_name, script_path in hooks.items():
             try:
-                full_path = _safe_job_relative_path(job_dir, str(script_path))
+                full_path = _safe_hook_relative_path(OPERATOR_DIR, str(script_path))
             except ValueError as e:
                 return f"[error: {e}]"
             full_path.parent.mkdir(parents=True, exist_ok=True)
@@ -154,22 +158,22 @@ def _create_job(name: str, config: str) -> str:
                 full_path.write_text(f"#!/bin/bash\n# {hook_name} hook for {name}\nexit 0\n")
                 full_path.chmod(full_path.stat().st_mode | stat.S_IEXEC)
 
-    return f"Created job '{name}' at {job_dir}"
+    return f"Created job '{name}' at {job_file}"
 
 
 def _update_job(name: str, config: str) -> str:
     if not name:
         return "[error: 'name' is required for update]"
     if not config:
-        return "[error: 'config' (JOB.md content) is required for update]"
+        return "[error: 'config' (job .md content) is required for update]"
 
     try:
         slug = safe_name(name, "job")
     except ValueError as e:
         return f"[error: {e}]"
 
-    job_dir = JOBS_DIR / slug
-    if not job_dir.exists():
+    job_file = JOBS_DIR / f"{slug}.md"
+    if not job_file.exists():
         return f"[error: job '{name}' not found]"
 
     fm = parse_frontmatter(config)
@@ -180,7 +184,7 @@ def _update_job(name: str, config: str) -> str:
     if err:
         return err
 
-    (job_dir / "JOB.md").write_text(config)
+    job_file.write_text(config)
     return f"Updated job '{name}'"
 
 
@@ -193,11 +197,11 @@ def _delete_job(name: str) -> str:
     except ValueError as e:
         return f"[error: {e}]"
 
-    job_dir = JOBS_DIR / slug
-    if not job_dir.exists():
+    job_file = JOBS_DIR / f"{slug}.md"
+    if not job_file.exists():
         return f"[error: job '{name}' not found]"
 
-    shutil.rmtree(job_dir)
+    job_file.unlink()
     return f"Deleted job '{name}'"
 
 
@@ -210,12 +214,11 @@ def _toggle_job(name: str, *, enabled: bool) -> str:
     except ValueError as e:
         return f"[error: {e}]"
 
-    job_dir = JOBS_DIR / slug
-    job_md = job_dir / "JOB.md"
-    if not job_md.exists():
+    job_file = JOBS_DIR / f"{slug}.md"
+    if not job_file.exists():
         return f"[error: job '{name}' not found]"
 
-    if not rewrite_frontmatter(job_md, {"enabled": enabled}):
+    if not rewrite_frontmatter(job_file, {"enabled": enabled}):
         return f"[error: could not parse frontmatter for '{name}']"
 
     action = "Enabled" if enabled else "Disabled"

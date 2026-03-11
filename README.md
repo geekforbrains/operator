@@ -7,7 +7,18 @@
 
 Operator deploys autonomous AI agents into your team's chat — Slack today, more platforms coming. Define agents in markdown, give them tools and permissions, and let them work alongside your team. They remember context, hand off tasks to each other, and run scheduled jobs while you sleep.
 
-Built for teams, not just individuals. Multi-user auth, role-based access, isolated memories, agent-to-agent delegation, model failover — the boring-but-critical stuff that makes agents actually work in a team setting.
+Built for teams, not just individuals. Multi-user auth, role-based access,
+isolated memories, agent-to-agent delegation, model failover — the
+boring-but-critical stuff that makes agents actually work in a team setting.
+
+At a high level, Operator is intentionally opinionated: agents are defined in
+markdown, work in files, and keep long-term memory as file-backed `rules/` and
+`notes/` rather than hidden vector state. `rules/` are always injected,
+`notes/` are searched on demand, and expired memory moves to `trash/` instead of
+disappearing silently.
+
+See [PRINCIPLES.md](PRINCIPLES.md) for the full product and engineering
+guidelines behind Operator.
 
 ## Why Operator
 
@@ -17,7 +28,7 @@ Built for teams, not just individuals. Multi-user auth, role-based access, isola
 - **Markdown-driven.** Agents, jobs, and skills are markdown files with YAML frontmatter. Version them in git, review them in PRs, edit them in your editor. No dashboards, no YAML hellscapes.
 - **Time-aware request history.** User requests, job prompts, and sub-agent task messages carry their creation time into model input, rendered like `[Monday, 2026-03-09T09:22:40-07:00]` in your configured timezone without mutating the stable system prompt.
 - **Portable thinking controls.** Set `thinking: off|low|medium|high` instead of provider-specific reasoning budgets. Operator maps it when the concrete model supports reasoning and drops it safely when it does not.
-- **Model-agnostic.** Supports 100+ LLM providers out of the box. Define fallback chains so if your primary model is down, the next one picks up automatically. Failover applies to agents, jobs, memory harvesting, and memory cleaning.
+- **Model-agnostic.** Supports 100+ LLM providers out of the box. Define fallback chains so if your primary model is down, the next one picks up automatically. Failover applies to agents, jobs, and other model-backed operations.
 - **Runs on your machine.** No SaaS, no cloud dependency, no data leaving your network. Install it, run it, own it.
 
 ## Quickstart
@@ -75,12 +86,6 @@ defaults:
     - "anthropic/claude-sonnet-4-6"
   thinking: medium
   max_iterations: 25
-
-memory:
-  embed_model: "openai/text-embedding-3-small"
-  inject_top_k: 3
-  inject_min_relevance: 0.3
-  candidate_ttl_days: 14
 
 agents:
   operator:
@@ -149,25 +154,29 @@ Reusable capabilities at `~/.operator/skills/<name>/SKILL.md` — scripts, refer
 
 ### Memory
 
-Vector memory with automatic harvesting. Operator extracts facts from conversations, stores them as embeddings, and injects relevant context into future messages. Memories are scoped per-user, per-agent, and globally — so agents remember your preferences without leaking them to your teammates.
+Operator keeps long-term memory as files, not hidden vector state. Memory is scoped per-user, per-agent, and globally so agents can remember preferences and reusable knowledge without leaking them across the wrong contexts.
 
-Memories can be:
+Memory has two behaviors:
 
-- `candidate`: short-lived recall that auto-expires after `memory.candidate_ttl_days`
-- `durable`: long-lived memory until explicitly removed
-- `pinned`: separate from retention and always injected into the system prompt
+- `rules/`: always injected and meant to stay short, curated, and high-signal
+- `notes/`: searched on demand for durable knowledge that should not bloat every prompt
 
-Tune recall with `memory.inject_top_k`, `memory.inject_min_relevance`, and `memory.candidate_ttl_days`. Inspect live memory state with `operator memories` and `operator memories stats`.
+Each memory item lives in its own markdown file with minimal frontmatter. Short-lived memory uses `expires_at`, and expired items move to `trash/` instead of disappearing silently. See [PRINCIPLES.md](PRINCIPLES.md) for the full memory model and reasoning behind it.
 
 ### Permissions
 
-Opt-in access control. No permissions block = full access. Add one to lock an agent down to specific tools and skills. Roles control which users can talk to which agents. Simple to understand, hard to misconfigure.
+Closed by default. A new agent with no `permissions` block has access to nothing — permissions are an allowlist. Use `"*"` to grant full access. Roles control which users can talk to which agents.
 
 ```yaml
 agents:
+  operator:
+    permissions:
+      tools: "*"
+      skills: "*"
+
   public-bot:
     permissions:
-      tools: [read_file, web_fetch, search_memories]
+      tools: [read_file, web_fetch, search_notes]
       skills: [summarize]
 
 roles:
@@ -235,8 +244,8 @@ operator job list                 # show all jobs with status
 operator job run <name>           # trigger a job now
 operator user list                # show all users
 operator user add <name> ...      # add a user
-operator memories                 # browse stored memories
-operator kv list                  # inspect the key-value store
+operator memory list              # browse file-backed memory
+operator memory search <query>    # search notes
 operator logs -f                  # tail logs
 operator service install          # install as a system service
 ```

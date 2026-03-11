@@ -14,7 +14,7 @@ from typing import Any
 from croniter import croniter
 
 from operator_ai.config import OPERATOR_DIR, Config
-from operator_ai.job_specs import JOBS_DIR
+from operator_ai.job_specs import scan_job_specs
 from operator_ai.log_context import new_run_id, set_run_context
 from operator_ai.memory import MemoryStore
 from operator_ai.message_timestamps import attach_message_created_at
@@ -32,7 +32,7 @@ class Job:
     description: str
     schedule: str
     prompt: str
-    job_dir: Path
+    path: Path  # absolute path to the .md file
     agent: str = ""
     model: str = ""
     max_iterations: int = 0
@@ -41,52 +41,41 @@ class Job:
 
 
 def scan_jobs() -> list[Job]:
-    """Scan jobs/*/JOB.md, parse frontmatter, validate schedule, return jobs."""
+    """Scan jobs/*.md via scan_job_specs, enrich with prompt/hooks/validation."""
     jobs: list[Job] = []
-    if not JOBS_DIR.is_dir():
-        return jobs
 
-    for job_dir in sorted(JOBS_DIR.iterdir()):
-        if not job_dir.is_dir():
+    for spec in scan_job_specs():
+        if not spec.schedule or not croniter.is_valid(spec.schedule):
+            logger.warning("Invalid schedule '%s' in %s, skipping", spec.schedule, spec.path)
             continue
-        job_md = job_dir / "JOB.md"
-        if not job_md.exists():
-            continue
+
+        job_md = Path(spec.path)
         try:
             text = job_md.read_text()
             fm = parse_frontmatter(text)
-            if not fm:
-                logger.warning("No frontmatter in %s, skipping", job_md)
-                continue
-
-            schedule = fm.get("schedule", "")
-            if not schedule or not croniter.is_valid(schedule):
-                logger.warning("Invalid schedule '%s' in %s, skipping", schedule, job_md)
-                continue
-
             body = extract_body(text)
 
             # Coerce hooks to dict (agents sometimes write [] instead of {})
-            hooks = fm.get("hooks") or {}
+            hooks = (fm or {}).get("hooks") or {}
             if not isinstance(hooks, dict):
                 hooks = {}
 
             jobs.append(
                 Job(
-                    name=fm.get("name", job_dir.name),
-                    description=fm.get("description", ""),
-                    schedule=schedule,
+                    name=spec.name,
+                    description=spec.description,
+                    schedule=spec.schedule,
                     prompt=body,
-                    job_dir=job_dir,
-                    agent=fm.get("agent", ""),
-                    model=fm.get("model", ""),
-                    max_iterations=fm.get("max_iterations", 0),
+                    path=job_md,
+                    agent=spec.agent,
+                    model=spec.model,
+                    max_iterations=(fm or {}).get("max_iterations", 0),
                     hooks=hooks,
-                    enabled=fm.get("enabled", True),
+                    enabled=spec.enabled,
                 )
             )
         except Exception as e:
-            logger.warning("Failed to parse %s: %s", job_md, e)
+            logger.warning("Failed to parse %s: %s", spec.path, e)
 
     return jobs
 
@@ -98,7 +87,7 @@ async def _run_hook(
     stdin_data: str = "",
     timeout: int = 30,
 ) -> tuple[int, str]:
-    """Run a hook script from the job's scripts/ directory."""
+    """Run a hook script, resolved relative to OPERATOR_DIR."""
     script_path = job.hooks.get(hook_name, "")
     if not script_path:
         return 0, ""
@@ -130,7 +119,7 @@ async def _run_hook(
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            cwd=str(job.job_dir),
+            cwd=str(OPERATOR_DIR),
             env=env,
         )
         stdout, _ = await asyncio.wait_for(
@@ -156,40 +145,8 @@ async def _run_hook(
         logger.warning("Hook %s for job '%s' timed out after %ds", hook_name, job.name, timeout)
         return 1, f"[hook timed out after {timeout}s]"
     except Exception as e:
-        elapsed = round(time.time() - hook_start, 1)
-        logger.exception("Hook %s for job '%s' failed after %.1fs", hook_name, job.name, elapsed)
+        logger.exception("Hook %s for job '%s' failed", hook_name, job.name)
         return 1, f"[hook error: {e}]"
-
-
-def _job_memory_scopes(agent_name: str) -> list[tuple[str, str]]:
-    return [("agent", agent_name), ("global", "global")]
-
-
-async def _job_memory_context(
-    job: Job,
-    agent_name: str,
-    memory_store: MemoryStore | None,
-) -> tuple[list[str], list[str]]:
-    if memory_store is None:
-        return [], []
-
-    pinned_lines: list[str] = []
-    scopes = _job_memory_scopes(agent_name)
-    for scope, scope_id in scopes:
-        for memory in memory_store.get_pinned_memories(scope, scope_id):
-            pinned_lines.append(f"- [{memory['scope']}] {memory['content']}")
-
-    context_sections: list[str] = []
-    relevant = await memory_store.search(job.prompt, scopes)
-    if relevant:
-        context_sections.append(
-            '<context_snapshot source="memories">\n'
-            "Relevant memories from previous work:\n"
-            + "\n".join(f"- {item['content']}" for item in relevant)
-            + "\n</context_snapshot>"
-        )
-
-    return pinned_lines, context_sections
 
 
 async def _build_job_prompt(
@@ -206,30 +163,31 @@ async def _build_job_prompt(
         f"- Name: {job.name}\n"
         f"- Schedule: `{job.schedule}`\n"
         f"- Description: {job.description}\n"
-        f"- Job directory: `{job.job_dir}`\n"
+        f"- Job file: `{job.path}`\n"
         f"- Workspace: `{workspace}`\n"
         f"- Operator home: `{OPERATOR_DIR}` (also `$OPERATOR_HOME`)"
     )
     job_ctx = load_prompt("job.md").replace("{job_details}", job_details)
 
-    pinned_lines, memory_sections = await _job_memory_context(job, agent_name, memory_store)
-
-    context_sections: list[str] = [job_ctx]
-    context_sections.extend(memory_sections)
-
+    sections: list[str] = [job_ctx]
+    if transport:
+        transport_prompt = transport.get_prompt_extra()
+        if transport_prompt:
+            sections.append(transport_prompt)
     if prerun_output:
-        context_sections.append(f"<prerun_output>\n{prerun_output}\n</prerun_output>")
+        sections.append(f"<prerun_output>\n{prerun_output}\n</prerun_output>")
+
     return assemble_system_prompt(
         config=config,
         agent_name=agent_name,
-        context_sections=context_sections,
-        pinned_memory_lines=pinned_lines,
-        transport_extra=transport.get_prompt_extra() if transport else "",
+        memory_store=memory_store,
+        transport_extra="\n\n".join(sections),
         skill_filter=config.agent_skill_filter(agent_name),
     )
 
 
 def _resolve_hook_script_path(job: Job, hook_name: str, script_path: str) -> Path | None:
+    """Resolve a hook script path relative to OPERATOR_DIR."""
     try:
         rel_path = Path(script_path)
     except Exception:
@@ -246,12 +204,12 @@ def _resolve_hook_script_path(job: Job, hook_name: str, script_path: str) -> Pat
         return None
 
     try:
-        resolved = (job.job_dir / rel_path).resolve()
-        resolved.relative_to(job.job_dir.resolve())
+        resolved = (OPERATOR_DIR / rel_path).resolve()
+        resolved.relative_to(OPERATOR_DIR.resolve())
         return resolved
     except Exception:
         logger.warning(
-            "Out-of-job-dir %s hook path is not allowed in job '%s': %s",
+            "Hook %s path escapes OPERATOR_DIR in job '%s': %s",
             hook_name,
             job.name,
             script_path,
@@ -297,9 +255,9 @@ async def _execute_job(
         # Lazy imports to avoid circular dependency:
         # jobs -> agent -> tools/__init__ -> tools/jobs -> jobs
         from operator_ai.agent import run_agent
-        from operator_ai.tools import kv as kv_tools
         from operator_ai.tools import memory as memory_tools
         from operator_ai.tools import messaging
+        from operator_ai.tools import state as state_tools
         from operator_ai.tools.context import set_skill_filter
 
         transport = transports.get(agent_name)
@@ -328,7 +286,7 @@ async def _execute_job(
 
         # Configure tools with execution context
         messaging.configure({"transport": transport})
-        kv_tools.configure({"agent_name": agent_name})
+        state_tools.configure({"agent_name": agent_name})
         memory_tools.configure(
             {
                 "memory_store": memory_store,
@@ -355,7 +313,6 @@ async def _execute_job(
             extra_tools=extra_tools,
             tool_filter=config.agent_tool_filter(agent_name),
             shared_dir=config.shared_dir,
-            sandboxed=config.agent_sandboxed(agent_name),
             config=config,
         )
 

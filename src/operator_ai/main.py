@@ -5,7 +5,6 @@ import base64
 import collections
 import fcntl
 import logging
-import logging.handlers
 import os
 import signal
 import sys
@@ -18,18 +17,18 @@ from operator_ai.agent import run_agent
 from operator_ai.commands import CommandContext, dispatch_command
 from operator_ai.config import OPERATOR_DIR, Config, ConfigError, RoleConfig, load_config
 from operator_ai.jobs import JobRunner
-from operator_ai.litellm_logging import configure_litellm_logging
-from operator_ai.log_context import RunContextFilter, new_run_id, set_run_context
-from operator_ai.memory import MemoryCleaner, MemoryHarvester, MemoryStore, format_retention_mix
+from operator_ai.layout import ensure_layout
+from operator_ai.log_context import new_run_id, set_run_context, setup_logging
+from operator_ai.memory import MemoryStore
 from operator_ai.message_timestamps import attach_message_created_at
 from operator_ai.messages import trim_incomplete_tool_turns
-from operator_ai.prompts import SKILLS_DIR, assemble_system_prompt
+from operator_ai.prompts import assemble_system_prompt
 from operator_ai.skills import install_bundled_skills
 from operator_ai.status import StatusIndicator
 from operator_ai.store import Store, get_store
-from operator_ai.tools import kv as kv_tools
 from operator_ai.tools import memory as memory_tools
 from operator_ai.tools import messaging
+from operator_ai.tools import state as state_tools
 from operator_ai.tools.context import (
     UserContext,
     get_user_context,
@@ -69,19 +68,6 @@ def _format_usage(usage: dict[str, int]) -> str:
 
 class AgentCancelledError(Exception):
     pass
-
-
-def _conversation_memory_scopes(
-    *,
-    user_id: str,
-    agent_name: str,
-    is_private: bool,
-) -> list[tuple[str, str]]:
-    scopes: list[tuple[str, str]] = []
-    if is_private and user_id:
-        scopes.append(("user", user_id))
-    scopes.extend([("agent", agent_name), ("global", "global")])
-    return scopes
 
 
 def resolve_allowed_agents(
@@ -408,33 +394,6 @@ class Dispatcher:
                     "</context_snapshot>"
                 )
 
-        # Memory injection
-        if self.memory_store:
-            scopes = _conversation_memory_scopes(
-                user_id=username,
-                agent_name=transport.agent_name,
-                is_private=msg.is_private,
-            )
-            try:
-                relevant = await self.memory_store.search(msg.text, scopes)
-                logger.info(
-                    "memory injection: injected=%d retention_mix=%s",
-                    len(relevant),
-                    format_retention_mix(relevant),
-                )
-                if relevant:
-                    lines = [r["content"] for r in relevant]
-                    context_parts.append(
-                        '<context_snapshot source="memories">\n'
-                        "Relevant memories from previous interactions:\n"
-                        + "\n".join(f"- {line}" for line in lines)
-                        + "\n</context_snapshot>"
-                    )
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                logger.exception("Memory search failed")
-
         # Prepend to user message text
         msg_text = msg.text
         if context_parts:
@@ -470,17 +429,17 @@ class Dispatcher:
                 "thread_id": msg.root_message_id,
             }
         )
-        kv_tools.configure({"agent_name": transport.agent_name})
 
-        if self.memory_store:
-            memory_tools.configure(
-                {
-                    "memory_store": self.memory_store,
-                    "user_id": username,
-                    "agent_name": transport.agent_name,
-                    "allow_user_scope": msg.is_private,
-                }
-            )
+        # Configure memory and state tools with execution context
+        memory_tools.configure(
+            {
+                "memory_store": self.memory_store,
+                "user_id": username,
+                "agent_name": transport.agent_name,
+                "allow_user_scope": msg.is_private,
+            }
+        )
+        state_tools.configure({"agent_name": transport.agent_name})
 
         set_skill_filter(self.config.agent_skill_filter(agent_name))
 
@@ -534,10 +493,7 @@ class Dispatcher:
                 usage=usage,
                 tool_filter=self.config.agent_tool_filter(agent_name),
                 shared_dir=self.config.shared_dir,
-                sandboxed=self.config.agent_sandboxed(agent_name),
                 config=self.config,
-                tool_results_keep=self.config.defaults.tool_results.keep,
-                tool_results_soft_trim=self.config.defaults.tool_results.soft_trim,
             )
             logger.info("conversation %s — done", conversation_id)
             if usage:
@@ -572,26 +528,24 @@ class Dispatcher:
         transport: Transport,
         is_private: bool,
     ) -> str:
-        pinned_lines: list[str] = []
-        if self.memory_store:
-            for scope, scope_id in _conversation_memory_scopes(
-                user_id=user_id,
-                agent_name=transport.agent_name,
-                is_private=is_private,
-            ):
-                for m in self.memory_store.get_pinned_memories(scope, scope_id):
-                    pinned_lines.append(f"- [{m['scope']}] {m['content']}")
+        sections: list[str] = []
+        transport_prompt = transport.get_prompt_extra()
+        if transport_prompt:
+            sections.append(transport_prompt)
+        context_prompt = ctx.to_prompt(
+            workspace=str(self.config.agent_workspace(agent_name)),
+            operator_home=str(OPERATOR_DIR),
+        )
+        if context_prompt:
+            sections.append(context_prompt)
+
         return assemble_system_prompt(
             config=self.config,
             agent_name=agent_name,
-            context_sections=[
-                ctx.to_prompt(
-                    workspace=str(self.config.agent_workspace(agent_name)),
-                    operator_home=str(OPERATOR_DIR),
-                )
-            ],
-            pinned_memory_lines=pinned_lines,
-            transport_extra=transport.get_prompt_extra(),
+            memory_store=self.memory_store,
+            username=user_id,
+            is_private=is_private,
+            transport_extra="\n\n".join(sections),
             skill_filter=self.config.agent_skill_filter(agent_name),
         )
 
@@ -652,41 +606,11 @@ def create_transports(config: Config, store: Store) -> list[Transport]:
 
 
 def _setup_logging() -> None:
-    LOGS_DIR.mkdir(parents=True, exist_ok=True)
-    log_file = LOGS_DIR / "operator.log"
-
-    fmt = logging.Formatter(
-        "%(asctime)s %(levelname)-5s %(run_ctx)s%(message)s", datefmt="%H:%M:%S"
+    setup_logging(
+        log_dir=LOGS_DIR,
+        stderr=os.isatty(2),
+        noisy_loggers=("httpx", "httpcore", "litellm", "openai", *transport_logger_names()),
     )
-    ctx_filter = RunContextFilter()
-
-    # File handler — rotating, 5MB x 3 files
-    fh = logging.handlers.RotatingFileHandler(
-        log_file,
-        maxBytes=5_000_000,
-        backupCount=3,
-    )
-    fh.setFormatter(fmt)
-    fh.setLevel(logging.DEBUG)
-    fh.addFilter(ctx_filter)
-
-    root = logging.getLogger("operator")
-    root.setLevel(logging.DEBUG)
-    root.addHandler(fh)
-
-    # Stderr — only when running interactively (avoid duplicates under launchd)
-    if os.isatty(2):
-        sh = logging.StreamHandler()
-        sh.setFormatter(fmt)
-        sh.setLevel(logging.INFO)
-        sh.addFilter(ctx_filter)
-        root.addHandler(sh)
-
-    configure_litellm_logging()
-
-    # Quiet noisy libs
-    for name in ("httpx", "httpcore", "litellm", "openai", *transport_logger_names()):
-        logging.getLogger(name).setLevel(logging.WARNING)
 
 
 def _acquire_lock() -> int:
@@ -706,6 +630,22 @@ def _acquire_lock() -> int:
     return fd
 
 
+_SWEEP_INTERVAL = 3600  # seconds — sweep expired memories once per hour
+
+
+async def _sweep_loop(memory_store: MemoryStore) -> None:
+    """Periodically sweep expired memory files to trash."""
+    try:
+        while True:
+            await asyncio.sleep(_SWEEP_INTERVAL)
+            try:
+                memory_store.sweep_expired()
+            except Exception:
+                logger.exception("Memory sweep failed")
+    except asyncio.CancelledError:
+        return
+
+
 async def async_main() -> None:
     _setup_logging()
 
@@ -714,8 +654,7 @@ async def async_main() -> None:
     stop = asyncio.Event()
     handlers_installed = False
     job_runner: JobRunner | None = None
-    harvester: MemoryHarvester | None = None
-    cleaner: MemoryCleaner | None = None
+    sweep_task: asyncio.Task[None] | None = None
     transports: list[Transport] = []
     loop = asyncio.get_running_loop()
 
@@ -727,28 +666,18 @@ async def async_main() -> None:
             config = load_config()
         except ConfigError as e:
             raise SystemExit(str(e)) from None
-        install_bundled_skills(SKILLS_DIR)
+
+        # Bootstrap directory layout
+        ensure_layout(config)
+
+        install_bundled_skills(config.skills_dir())
 
         if not any(a.transport for a in config.agents.values()):
             logger.error("No transports configured in %s", OPERATOR_DIR / "operator.yaml")
             sys.exit(1)
 
-        if config.memory.enabled:
-            store = get_store(embed_dimensions=config.memory.embed_dimensions)
-            memory_store: MemoryStore | None = MemoryStore(store, config.memory)
-            harvester = (
-                MemoryHarvester(memory_store, store, config.memory.harvester, tz=config.tz)
-                if config.memory.harvester.enabled
-                else None
-            )
-            cleaner = (
-                MemoryCleaner(memory_store, store, config.memory.cleaner, tz=config.tz)
-                if config.memory.cleaner.enabled
-                else None
-            )
-        else:
-            store = get_store()
-            memory_store = None
+        store = get_store()
+        memory_store = MemoryStore(base_dir=OPERATOR_DIR)
 
         if not store.list_users():
             logger.warning(
@@ -767,13 +696,10 @@ async def async_main() -> None:
         for transport in transports:
             dispatcher.register_transport(transport)
 
-        # Start job runner and memory services.
+        # Start job runner and memory sweep.
         job_runner = JobRunner(config, dispatcher.transports, store, memory_store=memory_store)
         job_runner.start()
-        if harvester:
-            harvester.start()
-        if cleaner:
-            cleaner.start()
+        sweep_task = asyncio.create_task(_sweep_loop(memory_store))
 
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.add_signal_handler(sig, _signal_handler)
@@ -821,10 +747,11 @@ async def async_main() -> None:
                 with suppress(NotImplementedError):
                     loop.remove_signal_handler(sig)
 
-        if cleaner:
-            await cleaner.stop()
-        if harvester:
-            await harvester.stop()
+        if sweep_task:
+            sweep_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await sweep_task
+
         if job_runner:
             await job_runner.stop()
 

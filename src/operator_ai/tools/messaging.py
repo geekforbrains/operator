@@ -49,7 +49,7 @@ async def send_file(path: str, channel: str = "", thread_id: str = "") -> str:
     """Upload a file to a channel.
 
     Args:
-        path: File path (relative to workspace, or absolute when unsandboxed).
+        path: File path (relative to workspace, or absolute).
         channel: Channel name or ID. Defaults to the current conversation channel.
         thread_id: Message ID to reply in a thread. Defaults to the current thread.
     """

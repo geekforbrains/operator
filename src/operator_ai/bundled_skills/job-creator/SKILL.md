@@ -4,7 +4,7 @@ description: >-
   Creates, updates, and manages scheduled jobs using the manage_job tool.
   Use when the user wants to automate a recurring task — daily summaries,
   monitors, alerts, syncs, digests, periodic reports, or any cron-scheduled
-  workflow. Covers JOB.md anatomy, cron schedules, prompt writing, stateful
+  workflow. Covers job file anatomy, cron schedules, prompt writing, stateful
   KV patterns, hooks, and the critical send_message delivery rule.
 metadata:
   author: operator
@@ -26,7 +26,7 @@ clear recurring schedule.
 
 ## How Jobs Work
 
-1. The job runner ticks every 60s, scanning `$OPERATOR_HOME/jobs/*/JOB.md`
+1. The job runner ticks every 60s, scanning `$OPERATOR_HOME/jobs/*.md`
 2. If a job's cron matches the current minute and it's enabled, it fires
 3. If the job is already running, the tick is skipped (tracked via `skip_count`)
 4. Optional `prerun` hook can gate execution (non-zero exit = skip, tracked via `gate_count`)
@@ -56,7 +56,7 @@ delivered anywhere. Every job prompt MUST specify:
 
 ---
 
-## JOB.md Anatomy
+## Job File Anatomy
 
 ```markdown
 ---
@@ -77,7 +77,7 @@ The prompt body — becomes the user message. Be explicit about what to do and w
 
 | Field | Required | Default | Description |
 |-------|----------|---------|-------------|
-| `name` | No | directory name | Display name |
+| `name` | No | filename stem | Display name |
 | `description` | No | — | Human-readable summary |
 | `schedule` | **Yes** | — | Cron expression (validated by croniter) |
 | `agent` | No | default agent | Which agent runs it |
@@ -381,7 +381,7 @@ The prompt body with explicit channel targeting and delivery instructions.
 
 ```python
 manage_job(action="list")                          # List all jobs with status
-manage_job(action="update", name="my-job", config="...")  # Replace JOB.md content
+manage_job(action="update", name="my-job", config="...")  # Replace job file content
 manage_job(action="enable", name="my-job")         # Re-enable a disabled job
 manage_job(action="disable", name="my-job")        # Pause without deleting
 manage_job(action="delete", name="my-job")         # Remove entirely
@@ -407,4 +407,4 @@ manage_job(action="delete", name="my-job")         # Remove entirely
 - [ ] `max_iterations` set if job needs many tool calls (>10 steps)
 - [ ] `agent` field set if it should run as a specific agent
 - [ ] Description is clear and concise
-- [ ] Directory name matches `name` in frontmatter
+- [ ] Filename matches `name` in frontmatter

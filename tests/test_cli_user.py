@@ -14,9 +14,9 @@ runner = CliRunner()
 
 @pytest.fixture(autouse=True)
 def _patch_store(tmp_path: Path):
-    """Monkeypatch _store() to return a Store backed by a temp database."""
+    """Monkeypatch get_store() to return a Store backed by a temp database."""
     store = Store(path=tmp_path / "test.db")
-    with patch("operator_ai.cli._store", return_value=store):
+    with patch("operator_ai.cli.get_store", return_value=store):
         yield store
 
 

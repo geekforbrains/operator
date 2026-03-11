@@ -1,188 +1,229 @@
+"""Agent-facing memory tools.
+
+These functions use :class:`MemoryStore` to create, search, list, update,
+and forget memory files.  Context (memory_store, agent_name, username) is
+set via :func:`configure` before tool calls.
+"""
+
 from __future__ import annotations
 
 import contextvars
 import logging
 from typing import Any
 
+from operator_ai.memory import MemoryStore
 from operator_ai.tools.registry import tool
 
-logger = logging.getLogger("operator.memory")
+logger = logging.getLogger("operator.tools.memory")
 
-_context_var: contextvars.ContextVar[dict[str, Any]] = contextvars.ContextVar("_memory_context")
+_context_var: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "_memory_context", default=None
+)
 
 
 def configure(context: dict[str, Any]) -> None:
     _context_var.set(context)
 
 
-def _allow_user_scope() -> bool:
-    ctx = _context_var.get({})
-    return bool(ctx.get("allow_user_scope", True))
-
-
-def _scope_id(scope: str, ctx: dict[str, Any]) -> str:
-    user_id = ctx.get("user_id", "")
-    agent_name = ctx.get("agent_name", "default")
-    return {"user": user_id, "agent": agent_name, "global": "global"}[scope]
-
-
-@tool(
-    description="Save a memory for future reference. Memories persist across conversations.",
-)
-async def save_memory(
-    content: str,
-    scope: str = "user",
-    retention: str = "durable",
-    pinned: bool = False,
-) -> str:
-    """Save a fact or piece of information to long-term memory.
-
-    Args:
-        content: The fact or information to remember.
-        scope: One of "user" (personal), "agent" (agent-specific), or "global" (shared).
-        retention: One of "durable" (long-lived) or "candidate" (auto-expires by TTL).
-        pinned: If true, the memory is always injected into the system prompt.
-    """
-    ctx = _context_var.get({})
-    memory_store = ctx.get("memory_store")
-    if memory_store is None:
-        return "[error: memory system not configured]"
-
-    if scope not in ("user", "agent", "global"):
-        return f"[error: invalid scope '{scope}', must be user/agent/global]"
-    if retention not in ("candidate", "durable"):
-        return f"[error: invalid retention '{retention}', must be candidate/durable]"
-    if scope == "user" and not _allow_user_scope():
-        return "[error: user-scoped memory is only allowed in private conversations]"
-
-    scope_id = _scope_id(scope, ctx)
-    if not scope_id:
-        return "[error: no user_id available for user-scoped memory]"
-
-    result = await memory_store.save(content, scope, scope_id, pinned=pinned, retention=retention)
-    if result is None:
-        logger.warning("save_memory: cap reached for %s/%s", scope, scope_id)
-        return "[memory cap reached, memory not saved]"
-    label = "pinned " if pinned else ""
-    logger.info(
-        "save_memory: id=%d %sscope=%s/%s retention=%s",
-        result,
-        label,
-        scope,
-        scope_id,
-        retention,
+def _get_context() -> tuple[MemoryStore, str, str, bool]:
+    """Return (memory_store, agent_name, username, allow_user_scope)."""
+    ctx = _context_var.get()
+    if ctx is None:
+        raise RuntimeError("memory tools not configured")
+    store = ctx.get("memory_store")
+    if store is None:
+        raise RuntimeError("memory_store not set")
+    return (
+        store,
+        ctx.get("agent_name", ""),
+        ctx.get("user_id", ""),
+        ctx.get("allow_user_scope", False),
     )
-    return f"Memory saved (id={result}, retention={retention}{', pinned' if pinned else ''})"
+
+
+def _resolve_scope(scope: str, agent_name: str, username: str) -> str:
+    """Map a tool-facing scope label to a MemoryStore scope string."""
+    if scope == "agent":
+        return f"agent:{agent_name}"
+    if scope == "user":
+        if not username:
+            raise ValueError("username is required for user-scoped memory")
+        return f"user:{username}"
+    if scope == "global":
+        return "global"
+    raise ValueError(f"Invalid scope: {scope!r} (expected 'agent', 'user', or 'global')")
 
 
 @tool(
-    description="Search memories for information relevant to a query.",
+    description="Create a rule memory (always injected into the prompt). Use for behavioral instructions that should shape every interaction.",
 )
-async def search_memories(query: str, scope: str = "", top_k: int = 5) -> str:
-    """Search long-term memory for relevant facts.
+async def remember_rule(content: str, scope: str = "agent") -> str:
+    """Create a rule memory.
 
     Args:
-        query: What to search for.
-        scope: Filter to "user", "agent", or "global". Empty string searches all scopes.
-        top_k: Maximum number of results.
+        content: The rule text.
+        scope: One of "agent", "user", or "global".
     """
-    ctx = _context_var.get({})
-    memory_store = ctx.get("memory_store")
-    if memory_store is None:
-        return "[error: memory system not configured]"
+    memory_store, agent_name, username, allow_user_scope = _get_context()
 
-    if scope:
-        if scope not in ("user", "agent", "global"):
-            return f"[error: invalid scope '{scope}', must be user/agent/global or empty]"
-        if scope == "user" and not _allow_user_scope():
-            return "[error: user-scoped memory is only allowed in private conversations]"
-        scopes = [(scope, _scope_id(scope, ctx))]
-    else:
-        user_id = ctx.get("user_id", "")
-        agent_name = ctx.get("agent_name", "default")
-        scopes = [("agent", agent_name), ("global", "global")]
-        if _allow_user_scope() and user_id:
-            scopes.insert(0, ("user", user_id))
+    if scope == "user" and not allow_user_scope:
+        return "[error: user-scoped memory is only available in private conversations]"
 
-    results = await memory_store.search(query, scopes, top_k=top_k)
-    logger.info("search_memories: query=%r → %d results", query[:60], len(results))
+    try:
+        resolved = _resolve_scope(scope, agent_name, username)
+    except ValueError as e:
+        return f"[error: {e}]"
+
+    path = memory_store.create_rule(resolved, content)
+    logger.info("remember_rule: %s (scope=%s)", path, scope)
+    return f"Rule saved: {path}"
+
+
+@tool(
+    description="Create a note memory (searched on demand). Use for durable knowledge that doesn't need to be injected every time.",
+)
+async def remember_note(content: str, scope: str = "agent", ttl: str = "") -> str:
+    """Create a note memory.
+
+    Args:
+        content: The note text.
+        scope: One of "agent", "user", or "global".
+        ttl: Optional time-to-live (e.g. "3d", "2w", "1h", "30m"). Empty for no expiry.
+    """
+    memory_store, agent_name, username, allow_user_scope = _get_context()
+
+    if scope == "user" and not allow_user_scope:
+        return "[error: user-scoped memory is only available in private conversations]"
+
+    try:
+        resolved = _resolve_scope(scope, agent_name, username)
+    except ValueError as e:
+        return f"[error: {e}]"
+
+    try:
+        path = memory_store.create_note(resolved, content, ttl=ttl or None)
+    except ValueError as e:
+        return f"[error: {e}]"
+
+    ttl_msg = f" (expires in {ttl})" if ttl else ""
+    logger.info("remember_note: %s (scope=%s%s)", path, scope, ttl_msg)
+    return f"Note saved: {path}{ttl_msg}"
+
+
+@tool(
+    description="Search notes by filename and content.",
+)
+async def search_notes(query: str, scope: str = "agent") -> str:
+    """Search notes.
+
+    Args:
+        query: Search query string.
+        scope: One of "agent", "user", or "global".
+    """
+    memory_store, agent_name, username, _allow_user_scope = _get_context()
+
+    try:
+        resolved = _resolve_scope(scope, agent_name, username)
+    except ValueError as e:
+        return f"[error: {e}]"
+
+    results = memory_store.search_notes(resolved, query)
     if not results:
-        return "No relevant memories found."
+        return "No matching notes found."
 
-    lines = []
-    for r in results:
-        lines.append(
-            f"[id={r['memory_id']}] [{r['scope']}] [{r['retention']}] "
-            f"{r['content']} (relevance={r['relevance']})"
-        )
+    lines: list[str] = []
+    for mf in results:
+        expires = f" [expires {mf.expires_at}]" if mf.expires_at else ""
+        preview = mf.content[:120].replace("\n", " ")
+        lines.append(f"[{mf.relative_path}]{expires} {preview}")
     return "\n".join(lines)
 
 
 @tool(
-    description="Delete a memory by its ID.",
+    description="List all rule memories in a scope.",
 )
-async def forget_memory(memory_id: int) -> str:
-    """Remove a memory from long-term storage.
+async def list_rules(scope: str = "agent") -> str:
+    """List rules.
 
     Args:
-        memory_id: The ID of the memory to delete.
+        scope: One of "agent", "user", or "global".
     """
-    ctx = _context_var.get({})
-    memory_store = ctx.get("memory_store")
-    if memory_store is None:
-        return "[error: memory system not configured]"
+    memory_store, agent_name, username, _allow_user_scope = _get_context()
 
-    if memory_store.forget(memory_id):
-        logger.info("forget_memory: deleted id=%d", memory_id)
-        return f"Memory {memory_id} deleted."
-    logger.info("forget_memory: id=%d not found", memory_id)
-    return f"Memory {memory_id} not found."
+    try:
+        resolved = _resolve_scope(scope, agent_name, username)
+    except ValueError as e:
+        return f"[error: {e}]"
+
+    results = memory_store.list_rules(resolved)
+    if not results:
+        return "No rules found."
+
+    lines: list[str] = []
+    for mf in results:
+        preview = mf.content[:120].replace("\n", " ")
+        lines.append(f"[{mf.relative_path}] {preview}")
+    return "\n".join(lines)
 
 
 @tool(
-    description="List stored memories. Returns a deterministic listing, optionally filtered by scope.",
+    description="List all note memories in a scope.",
 )
-async def list_memories(scope: str = "", limit: int = 50, offset: int = 0) -> str:
-    """List memories from long-term storage.
+async def list_notes(scope: str = "agent") -> str:
+    """List notes.
 
     Args:
-        scope: Filter to "user", "agent", or "global". Empty string lists all scopes.
-        limit: Maximum number of memories to return.
-        offset: Number of memories to skip (for pagination).
+        scope: One of "agent", "user", or "global".
     """
-    ctx = _context_var.get({})
-    memory_store = ctx.get("memory_store")
-    if memory_store is None:
-        return "[error: memory system not configured]"
+    memory_store, agent_name, username, _allow_user_scope = _get_context()
 
-    if scope:
-        if scope not in ("user", "agent", "global"):
-            return f"[error: invalid scope '{scope}', must be user/agent/global or empty]"
-        if scope == "user" and not _allow_user_scope():
-            return "[error: user-scoped memory is only allowed in private conversations]"
-        results = memory_store.list_memories(scope, _scope_id(scope, ctx), limit, offset)
-    else:
-        scopes = [("agent", _scope_id("agent", ctx)), ("global", "global")]
-        if _allow_user_scope():
-            user_scope_id = _scope_id("user", ctx)
-            if user_scope_id:
-                scopes.insert(0, ("user", user_scope_id))
+    try:
+        resolved = _resolve_scope(scope, agent_name, username)
+    except ValueError as e:
+        return f"[error: {e}]"
 
-        pool_size = max(limit + offset, limit)
-        results = []
-        for scoped_name, scoped_id in scopes:
-            results.extend(memory_store.list_memories(scoped_name, scoped_id, pool_size, 0))
-        results.sort(key=lambda m: int(m["id"]))
-        results = results[offset : offset + limit]
-
+    results = memory_store.list_notes(resolved)
     if not results:
-        return "No memories found."
+        return "No notes found."
 
-    lines = []
-    for m in results:
-        pin = " [PINNED]" if m.get("pinned") else ""
-        expires = f" [expires {m['expires_at']}]" if m.get("expires_at") else ""
-        lines.append(
-            f"[id={m['id']}] [{m['scope']}] [{m['retention']}] {m['content']}{pin}{expires}"
-        )
+    lines: list[str] = []
+    for mf in results:
+        expires = f" [expires {mf.expires_at}]" if mf.expires_at else ""
+        preview = mf.content[:120].replace("\n", " ")
+        lines.append(f"[{mf.relative_path}]{expires} {preview}")
     return "\n".join(lines)
+
+
+@tool(
+    description="Update an existing memory file's content.",
+)
+async def update_memory(path: str, content: str) -> str:
+    """Update a memory file.
+
+    Args:
+        path: The relative path of the memory file.
+        content: The new content.
+    """
+    memory_store, _agent_name, _username, _allow_user_scope = _get_context()
+
+    if memory_store.update(path, content):
+        logger.info("update_memory: %s", path)
+        return f"Updated: {path}"
+    return f"Not found: {path}"
+
+
+@tool(
+    description="Move a memory file to trash (soft delete).",
+)
+async def forget_memory(path: str) -> str:
+    """Forget a memory file.
+
+    Args:
+        path: The relative path of the memory file.
+    """
+    memory_store, _agent_name, _username, _allow_user_scope = _get_context()
+
+    if memory_store.forget(path):
+        logger.info("forget_memory: %s", path)
+        return f"Moved to trash: {path}"
+    return f"Not found: {path}"

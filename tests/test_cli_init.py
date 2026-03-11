@@ -201,7 +201,7 @@ def test_setup_creates_env_and_admin_user(tmp_path: Path):
     with (
         patch("operator_ai.cli._detect_local_timezone", return_value="America/Vancouver"),
         patch("operator_ai.cli.OPERATOR_DIR", op_dir),
-        patch("operator_ai.cli._store", return_value=store),
+        patch("operator_ai.cli.get_store", return_value=store),
         patch("operator_ai.cli.getpass.getuser", return_value="gavin"),
         patch("operator_ai.skills.install_bundled_skills", return_value=[]),
     ):
@@ -239,7 +239,7 @@ def test_setup_run_invokes_runtime(tmp_path: Path):
 
     with (
         patch("operator_ai.cli.OPERATOR_DIR", op_dir),
-        patch("operator_ai.cli._store", return_value=store),
+        patch("operator_ai.cli.get_store", return_value=store),
         patch("operator_ai.skills.install_bundled_skills", return_value=[]),
         patch("operator_ai.cli.async_main", async_main),
     ):
@@ -284,7 +284,7 @@ def test_setup_gemini_uses_google_api_key_from_env_file(tmp_path: Path):
 
     with (
         patch("operator_ai.cli.OPERATOR_DIR", op_dir),
-        patch("operator_ai.cli._store", return_value=store),
+        patch("operator_ai.cli.get_store", return_value=store),
         patch("operator_ai.skills.install_bundled_skills", return_value=[]),
     ):
         result = runner.invoke(
