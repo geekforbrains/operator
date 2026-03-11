@@ -79,7 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 ### Added
 
 - Agent frontmatter — `AGENT.md` files support optional YAML frontmatter with `name` and `description` for inter-agent discovery
-- Cross-agent spawning — `spawn_agent` accepts an optional `agent` parameter to delegate tasks to a different agent with its own prompt, models, workspace, sandbox, and permissions
+- Cross-agent spawning — `spawn_agent` accepts an optional `agent` parameter to delegate tasks to a different agent with its own prompt, models, workspace, and permissions
 - Spawn logging — every `spawn_agent` call is logged with parent agent, target agent, and nesting depth
 - `OPERATOR_HOME` env var exposed in all shell commands, skill scripts, and job hooks
 - `job-creator` bundled skill for teaching agents to create and manage scheduled jobs
@@ -89,7 +89,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 - `AGENT.md` frontmatter is stripped before prompt injection — the LLM only sees the markdown body
 - `operator agents` CLI now shows a Description column from agent frontmatter
-- Sub-agent sandbox and permissions inheritance respects the target agent's config when spawning a different agent
+- Sub-agent config and permissions inheritance respects the target agent's config when spawning a different agent
 - System prompt trimmed and reworded for clarity
 
 ### Fixed
@@ -105,7 +105,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - Users, roles, and auth — every inbound message is authenticated against a user database with role-based agent access control
 - Agent permissions — flat allow-lists for tools and skills per agent
 - Skill access tools (`read_skill`, `run_skill`) for agents without shell access
-- Agent sandbox — `sandbox` config flag confines file tools to the workspace (default) or grants full filesystem access
+- File tools resolve paths from the workspace but are not limited to it
 - File/media support — Slack users can upload images, PDFs, and documents; images are sent as vision input, other files saved to `workspace/uploads/`
 - `send_file` tool for uploading workspace files back to chat
 - `operator job run` CLI command with dedicated CLI transport and logging

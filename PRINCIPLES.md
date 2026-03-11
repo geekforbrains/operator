@@ -23,7 +23,7 @@ The core loop is:
 1. A user or job triggers an agent.
 2. The agent receives its standing instructions and relevant context.
 3. The agent works in its workspace using tools.
-4. The agent replies through the transport.
+4. The agent returns results to the user or destination when needed.
 5. The system persists the right state so the agent can continue later.
 
 Everything in Operator should justify itself against that loop.
@@ -355,6 +355,11 @@ This is an allowlist model, not a denylist. In a team-facing system, the safe
 default is locked down. Forgetting to configure permissions should result in
 less access, not more.
 
+Agents should get the smallest tool and skill surface that still lets them do
+their job. High-impact capabilities such as arbitrary shell execution should be
+granted sparingly and only where they are clearly needed. The goal is to reduce
+unnecessary exposure to risky actions.
+
 The first admin user is created through the CLI during setup. From there,
 admins can manage access through the CLI or by asking an agent with user
 management tools.
@@ -526,4 +531,3 @@ At a high level, the memory tool layer should support:
 
 The tools may hide the file details from the agent, but the files remain the
 source of truth for humans.
-

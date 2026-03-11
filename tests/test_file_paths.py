@@ -1,4 +1,4 @@
-"""Tests for file path resolution (no sandboxing — paths are unrestricted)."""
+"""Tests for unrestricted file path resolution."""
 
 from __future__ import annotations
 

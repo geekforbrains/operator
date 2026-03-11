@@ -31,7 +31,7 @@ clear recurring schedule.
 3. If the job is already running, the tick is skipped (tracked via `skip_count`)
 4. Optional `prerun` hook can gate execution (non-zero exit = skip, tracked via `gate_count`)
 5. A fresh agent conversation starts — the job body becomes the user message
-6. The agent runs with the selected agent's prompt, tools, skills, sandbox, and permissions
+6. The agent runs with the selected agent's prompt, tools, skills, workspace, and permissions
 7. Optional `postrun` hook receives agent output on stdin
 8. Job state (last_run, result, duration, error, counts) is persisted in SQLite
 

@@ -58,7 +58,6 @@ def _resolve_agent_context(agent_name: str | None, current: dict[str, Any]) -> d
     ctx["thinking"] = config.agent_thinking(agent_name)
     ctx["context_ratio"] = config.agent_context_ratio(agent_name)
     ctx["max_output_tokens"] = config.agent_max_output_tokens(agent_name)
-    ctx["sandboxed"] = config.agent_sandboxed(agent_name)
     ctx["tool_filter"] = config.agent_tool_filter(agent_name)
     ctx["skill_filter"] = config.agent_skill_filter(agent_name)
     ctx["agent_name"] = agent_name
@@ -168,7 +167,6 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
             usage=resolved.get("usage"),
             tool_filter=resolved.get("tool_filter"),
             shared_dir=resolved.get("shared_dir"),
-            sandboxed=resolved.get("sandboxed", True),
             config=resolved.get("config"),
         )
 

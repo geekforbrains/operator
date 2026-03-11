@@ -274,6 +274,6 @@ def test_send_file_tool_outside_workspace_resolves(tmp_path: Path):
     transport = FakeTransport()
     messaging.configure({"transport": transport, "channel_id": "C1", "thread_id": "t1"})
 
-    # Paths outside workspace are now allowed (no sandboxing); file just needs to exist
+    # Paths outside workspace are allowed; the file just needs to exist
     result = asyncio.run(messaging.send_file("../../nonexistent_file.txt"))
     assert "not found" in result

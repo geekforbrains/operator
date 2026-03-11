@@ -115,7 +115,6 @@ class AgentConfig(StrictConfigModel):
     max_iterations: int | None = Field(default=None, gt=0)
     context_ratio: float | None = Field(default=None, gt=0.0, le=1.0)
     max_output_tokens: int | None = Field(default=None, gt=0)
-    sandbox: bool = True
     transport: TransportConfig | None = None
     permissions: PermissionsConfig | None = None
 
@@ -273,12 +272,6 @@ class Config(StrictConfigModel):
         if self.agents:
             return next(iter(self.agents))
         return "operator"
-
-    def agent_sandboxed(self, agent_name: str) -> bool:
-        agent = self.agents.get(agent_name)
-        if agent is not None:
-            return agent.sandbox
-        return True
 
     def _expand_permission_list(self, items: list[str], kind: str = "tools") -> set[str]:
         """Expand @group references in a permission list."""
