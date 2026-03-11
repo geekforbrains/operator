@@ -282,6 +282,18 @@ This covers:
 
 Database state is not user-facing. Users do not inspect or edit it directly.
 
+All timestamps in the database are stored as unix timestamps (REAL columns,
+seconds since epoch). This is compact, timezone-agnostic, and supports
+efficient range queries without string parsing. Conversion to human-readable
+format happens at the display boundary using the user's timezone from their
+profile.
+
+Human-facing files — memory frontmatter, job definitions, skill metadata —
+use ISO 8601 strings because those are authored or inspected by humans.
+
+The boundary rule: unix floats go into the database, human-readable strings
+go into files and display output.
+
 #### Agent state
 
 Small, per-agent operational data lives in file-backed state documents in a
@@ -326,11 +338,13 @@ When a subagent is spawned, it receives its own identity — its own `AGENT.md`,
 memory, and skills. It does not inherit the parent agent's context or memory
 scope.
 
-However, a subagent's permissions cannot exceed those of the agent that spawned
-it. The effective permissions are the intersection of the subagent's own
-permissions and the calling agent's permissions. This prevents privilege
-escalation through delegation — a restricted agent cannot gain broader access
-by spawning a less restricted one.
+Subagent access is controlled by the calling user's roles, not the parent
+agent's permissions. When an agent spawns a subagent targeting a different
+agent, the system checks whether the user whose conversation initiated the
+chain has a role that grants access to the target agent. The parent agent's
+own permissions are not a factor — what matters is whether the user is
+authorized. This prevents privilege escalation through delegation while
+keeping the access model consistent with direct user interaction.
 
 ### Skills
 
@@ -354,6 +368,11 @@ available to users unless explicitly granted.
   agent can use.
 - A new agent with no permissions block has access to nothing. Access must be
   explicitly opened.
+
+Permission groups allow clusters of related tools to be referenced by name
+using an `@group` prefix (e.g., `@memory`, `@files`). Groups are defined once
+in `operator.yaml` under `permission_groups` and expanded at runtime. This
+reduces duplication when multiple agents share similar tool sets.
 
 Permissions are enforced at two layers. Only permitted tools and skills are
 injected into the agent's context, so the agent never sees what it cannot use.
@@ -656,8 +675,10 @@ Operator is a markdown-defined, team-facing agent runtime where:
 - determinism comes from write-time tooling — good filenames make search simple
 - expired memory moves to `trash/` instead of being deleted
 - agent state is file-backed and separate from memory and workspace
-- database state covers high-volume runtime data in SQLite
+- database state covers high-volume runtime data in SQLite with unix timestamps
+- permission groups reduce duplication across agent permission configs
 - access is closed by default — permissions are an allowlist, not a denylist
-- subagents cannot exceed the permissions of the agent that spawned them
+- subagent access is gated by the calling user's roles, not the parent agent
+- timezone is per-user, stored on the user profile, applied at display time
 - context is pruned continuously, not compacted after overflow
 - transports are generic interaction adapters, not the architecture itself
