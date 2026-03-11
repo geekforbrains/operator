@@ -53,6 +53,7 @@ class SlackTransportOptions(BaseModel):
     include_archived_channels: bool = False
     inject_channels_into_prompt: bool = True
     inject_users_into_prompt: bool = True
+    expand_mentions: bool = True
 
 
 def _extract_attachments(event: dict) -> list[Attachment]:
@@ -120,6 +121,7 @@ class SlackTransport(Transport):
         include_archived_channels: bool = False,
         inject_channels_into_prompt: bool = True,
         inject_users_into_prompt: bool = True,
+        expand_mentions: bool = True,
     ):
         self.name = name
         self.platform = "slack"
@@ -131,6 +133,7 @@ class SlackTransport(Transport):
         self._include_archived_channels = include_archived_channels
         self._inject_channels_into_prompt = inject_channels_into_prompt
         self._inject_users_into_prompt = inject_users_into_prompt
+        self._expand_mentions = expand_mentions
         self._app: AsyncApp | None = None
         self._handler: AsyncSocketModeHandler | None = None
         self._background_tasks: set[asyncio.Task] = set()
@@ -403,11 +406,53 @@ class SlackTransport(Transport):
             if not cursor:
                 break
 
+    # --- Outbound mention resolution ---
+
+    _CODE_BLOCK_RE = re.compile(r"(```[\s\S]*?```|`[^`\n]+`)")
+
+    def _resolve_outbound_mentions(self, text: str) -> str:
+        """Best-effort resolve @Name and #channel to Slack link syntax.
+
+        Skips content inside inline code and fenced code blocks.
+        """
+        if not self._expand_mentions:
+            return text
+        if not self._user_directory and not self._channel_ids:
+            return text
+
+        # Split text into code vs non-code segments
+        parts = self._CODE_BLOCK_RE.split(text)
+        for i, part in enumerate(parts):
+            if self._CODE_BLOCK_RE.fullmatch(part):
+                continue
+            parts[i] = self._expand_mentions_in(part)
+        return "".join(parts)
+
+    def _expand_mentions_in(self, text: str) -> str:
+        if self._user_directory:
+            by_name: dict[str, str] = {}
+            for profile in self._user_directory.values():
+                if profile.is_deleted:
+                    continue
+                by_name[profile.display_name.lower()] = profile.user_id
+            for name in sorted(by_name, key=len, reverse=True):
+                uid = by_name[name]
+                pattern = re.compile(r"(?<![<\w])@" + re.escape(name) + r"\b", re.IGNORECASE)
+                text = pattern.sub(f"<@{uid}>", text)
+
+        if self._channel_ids:
+            for ch_name, ch_id in self._channel_ids.items():
+                pattern = re.compile(r"(?<!<)#" + re.escape(ch_name) + r"\b", re.IGNORECASE)
+                text = pattern.sub(f"<#{ch_id}>", text)
+
+        return text
+
     # --- Messaging ---
 
     @override
     async def send(self, channel_id: str, text: str, thread_id: str | None = None) -> str:
         app = self._require_app()
+        text = self._resolve_outbound_mentions(text)
         kwargs = {"channel": channel_id, "text": _mrkdwn.convert(text)}
         if thread_id:
             kwargs["thread_ts"] = thread_id
@@ -422,6 +467,7 @@ class SlackTransport(Transport):
         self, channel_id: str, message_id: str, text: str, thread_id: str | None = None
     ) -> None:
         app = self._require_app()
+        text = self._resolve_outbound_mentions(text)
         await self._api_call(
             "chat.update",
             lambda: app.client.chat_update(
@@ -793,7 +839,8 @@ class SlackTransport(Transport):
             "It returns a Slack message timestamp you can pass as `thread_id` to reply in a thread.",
             "Use `list_channels` if you need to inspect Slack destinations first.",
             "Use `find_slack_users` to resolve people by name, Slack ID, or linked Operator username.",
-            "To mention a person: `<@U123ABC45>`. To link a channel: `<#C012AB3CD>`.",
+            "When mentioning users or channels in messages, use `@Name` or `#channel`.",
+            "Explicit `<@UID>` and `<#CID>` syntax also works.",
         ]
         if self._inject_users_into_prompt:
             if self._user_directory:
@@ -943,6 +990,7 @@ def create_slack_transport(
         include_archived_channels=normalized.include_archived_channels,
         inject_channels_into_prompt=normalized.inject_channels_into_prompt,
         inject_users_into_prompt=normalized.inject_users_into_prompt,
+        expand_mentions=normalized.expand_mentions,
     )
 
 

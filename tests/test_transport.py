@@ -356,7 +356,7 @@ def test_prompt_extra_omits_channel_list_when_disabled() -> None:
     assert "## Channels" not in result
     assert "list_channels" in result
     assert "find_slack_users" in result
-    assert "<@U123ABC45>" in result
+    assert "`@Name`" in result
 
 
 def test_prompt_extra_injects_cached_channel_list_by_default() -> None:
@@ -710,6 +710,85 @@ def test_to_prompt_omits_chat_type_when_empty() -> None:
     )
     result = ctx.to_prompt()
     assert "Chat type" not in result
+
+
+# --- Outbound mention resolution tests ---
+
+
+def test_resolve_outbound_mentions_replaces_at_name() -> None:
+    transport = _make_transport()
+    transport._user_directory = {"U1": _make_user_profile("U1", "Gavin")}
+    assert transport._resolve_outbound_mentions("Hey @Gavin!") == "Hey <@U1>!"
+
+
+def test_resolve_outbound_mentions_replaces_channel() -> None:
+    transport = _make_transport()
+    transport._channel_ids = {"general": "C1"}
+    assert transport._resolve_outbound_mentions("Post in #general") == "Post in <#C1>"
+
+
+def test_resolve_outbound_mentions_skips_already_resolved() -> None:
+    transport = _make_transport()
+    transport._user_directory = {"U1": _make_user_profile("U1", "Gavin")}
+    transport._channel_ids = {"general": "C1"}
+    text = "Hey <@U1> check <#C1>"
+    assert transport._resolve_outbound_mentions(text) == text
+
+
+def test_resolve_outbound_mentions_case_insensitive() -> None:
+    transport = _make_transport()
+    transport._user_directory = {"U1": _make_user_profile("U1", "Gavin")}
+    assert transport._resolve_outbound_mentions("Hi @gavin") == "Hi <@U1>"
+
+
+def test_resolve_outbound_mentions_no_match_leaves_as_is() -> None:
+    transport = _make_transport()
+    transport._user_directory = {"U1": _make_user_profile("U1", "Gavin")}
+    assert transport._resolve_outbound_mentions("Hi @Unknown") == "Hi @Unknown"
+
+
+def test_resolve_outbound_mentions_no_partial_match() -> None:
+    transport = _make_transport()
+    transport._user_directory = {"U1": _make_user_profile("U1", "gavin")}
+    text = "email@gavin.com"
+    assert transport._resolve_outbound_mentions(text) == text
+
+
+def test_resolve_outbound_mentions_longest_match_first() -> None:
+    transport = _make_transport()
+    transport._user_directory = {
+        "U1": _make_user_profile("U1", "Gavin"),
+        "U2": _make_user_profile("U2", "Gavin Vickery"),
+    }
+    result = transport._resolve_outbound_mentions("Hey @Gavin Vickery!")
+    assert result == "Hey <@U2>!"
+
+
+def test_resolve_outbound_mentions_skips_code_blocks() -> None:
+    transport = _make_transport()
+    transport._user_directory = {"U1": _make_user_profile("U1", "Gavin")}
+    transport._channel_ids = {"general": "C1"}
+
+    # Inline code
+    assert transport._resolve_outbound_mentions("Use `@Gavin` syntax") == "Use `@Gavin` syntax"
+    # Fenced code block
+    text = "Example:\n```\n@Gavin in #general\n```\nDone"
+    result = transport._resolve_outbound_mentions(text)
+    assert "@Gavin" in result  # still inside code block
+    assert "#general" in result  # still inside code block
+    assert result.startswith("Example:")
+    assert result.endswith("Done")
+
+    # Mixed: code + real mention
+    text = "Hey @Gavin, run `@Gavin` to test"
+    result = transport._resolve_outbound_mentions(text)
+    assert result == "Hey <@U1>, run `@Gavin` to test"
+
+
+def test_resolve_outbound_mentions_disabled_by_config() -> None:
+    transport = _make_transport(expand_mentions=False)
+    transport._user_directory = {"U1": _make_user_profile("U1", "Gavin")}
+    assert transport._resolve_outbound_mentions("Hey @Gavin") == "Hey @Gavin"
 
 
 def test_resolve_context_sets_chat_type() -> None:
