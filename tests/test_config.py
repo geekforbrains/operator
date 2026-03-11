@@ -190,10 +190,11 @@ def test_transport_config_slack_channel_defaults() -> None:
         bot_token_env="SLACK_BOT_TOKEN",
         app_token_env="SLACK_APP_TOKEN",
     )
-    assert transport.include_archived_channels is False
-    assert transport.inject_channels_into_prompt is False
-    assert transport.channel_cache_ttl_seconds == 900
-    assert transport.warm_channels_on_startup is True
+    assert transport.options["bot_token_env"] == "SLACK_BOT_TOKEN"
+    assert transport.options["app_token_env"] == "SLACK_APP_TOKEN"
+    assert transport.options["include_archived_channels"] is False
+    assert transport.options["inject_channels_into_prompt"] is True
+    assert transport.options["inject_users_into_prompt"] is True
 
 
 def test_transport_config_slack_channel_overrides() -> None:
@@ -203,13 +204,9 @@ def test_transport_config_slack_channel_overrides() -> None:
         app_token_env="SLACK_APP_TOKEN",
         include_archived_channels=True,
         inject_channels_into_prompt=True,
-        channel_cache_ttl_seconds=60,
-        warm_channels_on_startup=False,
     )
-    assert transport.include_archived_channels is True
-    assert transport.inject_channels_into_prompt is True
-    assert transport.channel_cache_ttl_seconds == 60
-    assert transport.warm_channels_on_startup is False
+    assert transport.options["include_archived_channels"] is True
+    assert transport.options["inject_channels_into_prompt"] is True
 
 
 # ── MemoryConfig ─────────────────────────────────────────────

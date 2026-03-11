@@ -30,6 +30,7 @@ class IncomingMessage:
     root_message_id: str
     transport_name: str
     is_private: bool = False
+    was_mentioned: bool = False
     attachments: list[Attachment] = field(default_factory=list)
     created_at: datetime | None = None
 
@@ -44,6 +45,7 @@ class MessageContext:
     user_id: str
     user_name: str
     username: str = ""
+    chat_type: str = ""  # "dm", "channel", "group"
 
     def to_prompt(self, workspace: str = "", operator_home: str = "") -> str:
         if self.username:
@@ -54,6 +56,10 @@ class MessageContext:
             "# Context",
             "",
             f"- Platform: {self.platform}",
+        ]
+        if self.chat_type:
+            lines.append(f"- Chat type: {self.chat_type}")
+        lines += [
             f"- Channel: {self.channel_name} (`{self.channel_id}`)",
             user_line,
         ]

@@ -37,10 +37,16 @@ def format_process_output(
 
 
 class ToolDef:
-    def __init__(self, func: Callable[..., Any], description: str):
+    def __init__(
+        self,
+        func: Callable[..., Any],
+        description: str,
+        status_label: str | Callable[[dict[str, Any]], str] | None = None,
+    ):
         self.func = func
         self.name = func.__name__
         self.description = description
+        self.status_label = status_label
         self.parameters = _build_parameters(func)
 
     def to_openai_tool(self) -> dict[str, Any]:

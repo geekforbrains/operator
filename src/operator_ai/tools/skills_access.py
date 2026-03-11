@@ -10,6 +10,7 @@ from operator_ai.config import SKILLS_DIR, ConfigError, load_config
 from operator_ai.tools.context import get_skill_filter
 from operator_ai.tools.registry import MAX_OUTPUT, format_process_output, safe_name, tool
 from operator_ai.tools.workspace import get_workspace
+from operator_ai.transport.registry import transport_secret_env_vars
 
 logger = logging.getLogger("operator.tools.skills_access")
 _SKILL_SUBDIRS = ("scripts/", "references/", "assets/")
@@ -128,10 +129,7 @@ async def run_skill(skill: str, command: str, timeout: int = 120) -> str:
             tc = agent_cfg.transport
             if tc is None:
                 continue
-            if tc.bot_token_env:
-                strip_keys.add(tc.bot_token_env)
-            if tc.app_token_env:
-                strip_keys.add(tc.app_token_env)
+            strip_keys.update(transport_secret_env_vars(tc.type, tc.options))
         for key in strip_keys:
             env.pop(key, None)
     except ConfigError:

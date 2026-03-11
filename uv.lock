@@ -1178,22 +1178,22 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "aiohttp", specifier = "==3.13.3" },
-    { name = "croniter", specifier = "==6.0.0" },
-    { name = "litellm", specifier = "==1.82.0" },
-    { name = "markdown-to-mrkdwn", specifier = "==0.3.1" },
-    { name = "pydantic", specifier = "==2.12.5" },
-    { name = "pysqlite3", specifier = "==0.6.0" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = "==9.0.2" },
-    { name = "pyyaml", specifier = "==6.0.3" },
-    { name = "rich", specifier = "==14.3.3" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.2" },
-    { name = "slack-bolt", specifier = "==1.27.0" },
-    { name = "slack-sdk", specifier = "==3.40.1" },
-    { name = "sqlite-vec", specifier = "==0.1.6" },
-    { name = "trafilatura", specifier = "==2.0.0" },
-    { name = "typer", specifier = "==0.24.1" },
-    { name = "typing-extensions", specifier = "==4.15.0" },
+    { name = "aiohttp" },
+    { name = "croniter" },
+    { name = "litellm" },
+    { name = "markdown-to-mrkdwn" },
+    { name = "pydantic" },
+    { name = "pysqlite3" },
+    { name = "pytest", marker = "extra == 'dev'" },
+    { name = "pyyaml" },
+    { name = "rich" },
+    { name = "ruff", marker = "extra == 'dev'" },
+    { name = "slack-bolt" },
+    { name = "slack-sdk" },
+    { name = "sqlite-vec" },
+    { name = "trafilatura" },
+    { name = "typer" },
+    { name = "typing-extensions" },
 ]
 provides-extras = ["dev"]
 

@@ -72,9 +72,6 @@ TOOL_LABELS: dict[str, Callable[[dict], str]] = {
     "kv_set": _label_static("Saving state..."),
     "kv_delete": _label_static("Deleting state..."),
     "kv_list": _label_static("Listing state..."),
-    "list_channels": _label_static("Listing channels..."),
-    "read_channel": _label_static("Reading channel..."),
-    "read_thread": _label_static("Reading thread..."),
 }
 
 
@@ -91,7 +88,13 @@ def _humanize(name: str) -> str:
 class StatusIndicator:
     """Transient status message shown while the agent is processing."""
 
-    def __init__(self, transport: Transport, channel_id: str, thread_id: str | None = None):
+    def __init__(
+        self,
+        transport: Transport,
+        channel_id: str,
+        thread_id: str | None = None,
+        tool_labels: dict[str, Callable[[dict[str, Any]], str]] | None = None,
+    ):
         self._transport = transport
         self._channel_id = channel_id
         self._thread_id = thread_id
@@ -99,6 +102,7 @@ class StatusIndicator:
         self._ticker_task: asyncio.Task | None = None
         self._start_time: float = 0.0
         self._tool_label: str | None = None
+        self._tool_labels = dict(tool_labels or {})
 
         # Shuffle idle messages for this run
         self._idle_messages = list(IDLE_MESSAGES)
@@ -118,7 +122,7 @@ class StatusIndicator:
         self._ticker_task = asyncio.create_task(self._tick_loop())
 
     def set_tool(self, name: str, args: dict[str, Any]) -> None:
-        formatter = TOOL_LABELS.get(name)
+        formatter = self._tool_labels.get(name) or TOOL_LABELS.get(name)
         if formatter:
             self._tool_label = formatter(args)
         else:

@@ -37,7 +37,7 @@ from operator_ai.tools.context import (
 )
 from operator_ai.tools.web import close_session
 from operator_ai.transport.base import Attachment, IncomingMessage, MessageContext, Transport
-from operator_ai.transport.slack import SlackTransport
+from operator_ai.transport.registry import create_transport, transport_logger_names
 
 logger = logging.getLogger("operator")
 
@@ -485,6 +485,14 @@ class Dispatcher:
 
         msg_count = sum(1 for m in messages if m.get("role") == "user")
         logger.info("conversation %s — message #%d", conversation_id, msg_count)
+        extra_tools = transport.get_tools()
+        extra_tool_labels: dict[str, collections.abc.Callable[[dict[str, object]], str]] = {}
+        for tool in extra_tools:
+            if callable(tool.status_label):
+                extra_tool_labels[tool.name] = tool.status_label
+            elif isinstance(tool.status_label, str):
+                label = tool.status_label
+                extra_tool_labels[tool.name] = lambda _args, text=label: text
 
         async def on_message(text: str) -> None:
             preview = text[:25].replace("\n", " ")
@@ -492,7 +500,12 @@ class Dispatcher:
             message_id = await transport.send(msg.channel_id, text, thread_id=msg.root_message_id)
             self.store.index_platform_message(msg.transport_name, message_id, conversation_id)
 
-        status = StatusIndicator(transport, msg.channel_id, msg.root_message_id)
+        status = StatusIndicator(
+            transport,
+            msg.channel_id,
+            msg.root_message_id,
+            tool_labels=extra_tool_labels,
+        )
 
         async def on_tool_call(name: str, args: dict) -> None:
             if name:
@@ -516,7 +529,7 @@ class Dispatcher:
                 context_ratio=self.config.agent_context_ratio(agent_name),
                 max_output_tokens=self.config.agent_max_output_tokens(agent_name),
                 thinking=self.config.agent_thinking(agent_name),
-                extra_tools=transport.get_tools(),
+                extra_tools=extra_tools,
                 usage=usage,
                 tool_filter=self.config.agent_tool_filter(agent_name),
                 shared_dir=self.config.shared_dir,
@@ -616,30 +629,24 @@ class Dispatcher:
         # "ignore" = silently drop
 
 
-def create_transports(config: Config) -> list[Transport]:
+def create_transports(config: Config, store: Store) -> list[Transport]:
     transports: list[Transport] = []
     for agent_name, agent_cfg in config.agents.items():
         tc = agent_cfg.transport
         if tc is None:
             continue
-        if tc.type == "slack":
-            try:
-                transport = SlackTransport(
-                    name=agent_name,
-                    agent_name=agent_name,
-                    bot_token=tc.resolve_env("bot_token_env", agent_name),
-                    app_token=tc.resolve_env("app_token_env", agent_name),
-                    tz=config.tz,
-                    include_archived_channels=tc.include_archived_channels,
-                    inject_channels_into_prompt=tc.inject_channels_into_prompt,
-                    channel_cache_ttl_seconds=tc.channel_cache_ttl_seconds,
-                    warm_channels_on_startup=tc.warm_channels_on_startup,
-                )
-                transports.append(transport)
-            except ValueError as e:
-                logger.warning("Skipping transport for agent '%s': %s", agent_name, e)
-        else:
-            logger.warning("Unknown transport type '%s' for agent '%s'", tc.type, agent_name)
+        try:
+            transport = create_transport(
+                type_name=tc.type,
+                name=agent_name,
+                agent_name=agent_name,
+                options=tc.options,
+                tz=config.tz,
+                store=store,
+            )
+            transports.append(transport)
+        except ValueError as e:
+            logger.warning("Skipping transport for agent '%s': %s", agent_name, e)
     return transports
 
 
@@ -675,7 +682,7 @@ def _setup_logging() -> None:
         root.addHandler(sh)
 
     # Quiet noisy libs
-    for name in ("httpx", "httpcore", "slack_bolt", "slack_sdk", "litellm", "openai"):
+    for name in ("httpx", "httpcore", "litellm", "openai", *transport_logger_names()):
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
@@ -747,7 +754,7 @@ async def async_main() -> None:
 
         runtimes = RuntimeManager()
         dispatcher = Dispatcher(config, store, runtimes, memory_store=memory_store)
-        transports = create_transports(config)
+        transports = create_transports(config, store)
 
         if not transports:
             logger.error("No transports could be started (check env vars)")

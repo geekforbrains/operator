@@ -88,32 +88,33 @@ class RuntimeConfig(StrictConfigModel):
 
 class TransportConfig(StrictConfigModel):
     type: str
-    bot_token_env: str | None = None
-    app_token_env: str | None = None
-    include_archived_channels: bool = False
-    inject_channels_into_prompt: bool = False
-    channel_cache_ttl_seconds: int = Field(default=900, gt=0)
-    warm_channels_on_startup: bool = True
+    options: dict[str, Any] = Field(default_factory=dict)
 
-    @model_validator(mode="after")
-    def validate_transport(self) -> TransportConfig:
-        self.type = self.type.strip()
-        if self.type != "slack":
-            raise ValueError(f"Unsupported transport type: {self.type!r}")
-        if not self.bot_token_env:
-            raise ValueError("transport.bot_token_env is required for slack transport")
-        if not self.app_token_env:
-            raise ValueError("transport.app_token_env is required for slack transport")
-        return self
+    model_config = ConfigDict(extra="allow")
 
-    def resolve_env(self, key: str, agent_name: str) -> str:
-        env_var = getattr(self, key, None)
-        if env_var is None:
-            raise ValueError(f"Agent '{agent_name}' transport missing '{key}'")
-        value = os.environ.get(env_var)
-        if not value:
-            raise ValueError(f"Agent '{agent_name}' transport: env var '{env_var}' not set")
-        return value
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_transport(cls, values: Any) -> Any:
+        if not isinstance(values, dict):
+            return values
+
+        data = dict(values)
+        transport_type = str(data.pop("type", "")).strip()
+        if not transport_type:
+            raise ValueError("transport.type is required")
+
+        explicit_options = data.pop("options", {})
+        if explicit_options in ("", None):
+            explicit_options = {}
+        if not isinstance(explicit_options, dict):
+            raise ValueError("transport.options must be an object")
+
+        options = {**explicit_options, **data}
+
+        from operator_ai.transport.registry import normalize_transport_options
+
+        normalized = normalize_transport_options(transport_type, options)
+        return {"type": transport_type, "options": normalized}
 
 
 class PermissionsConfig(StrictConfigModel):

@@ -88,13 +88,9 @@ agents:
       type: slack
       bot_token_env: SLACK_BOT_TOKEN
       app_token_env: SLACK_APP_TOKEN
-      include_archived_channels: false
-      inject_channels_into_prompt: false
-      channel_cache_ttl_seconds: 900
-      warm_channels_on_startup: true
 ```
 
-Slack channel discovery is cached per bot, warms once on startup, refreshes lazily on demand, and ignores archived channels by default. Override those defaults in the transport block if you want archived channels included, prompt-time channel injection enabled, or a different cache TTL.
+All transport options have sensible defaults. The only required fields are `type`, `bot_token_env`, and `app_token_env`. Users and channels are injected into the agent prompt by default so the agent knows who and what is available without a tool call. Override with `inject_users_into_prompt: false` or `inject_channels_into_prompt: false` for large workspaces.
 
 Add your keys to `~/.operator/.env` or export them in your shell:
 

@@ -47,6 +47,13 @@ from operator_ai.skills import (
 from operator_ai.store import get_store
 from operator_ai.tools.registry import get_tools
 from operator_ai.transport.cli import CliTransport
+from operator_ai.transport.registry import (
+    SetupSecret,
+    SetupTransport,
+    default_setup_transport,
+    list_setup_transports,
+    transport_logger_names,
+)
 
 console = Console()
 logger = logging.getLogger("operator.cli")
@@ -123,7 +130,7 @@ def _setup_cli_logging() -> None:
     root.addHandler(fh)
     root.addHandler(sh)
 
-    for name in ("httpx", "httpcore", "litellm", "openai"):
+    for name in ("httpx", "httpcore", "litellm", "openai", *transport_logger_names()):
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
@@ -154,19 +161,6 @@ def _is_macos() -> bool:
 _DEFAULT_AGENT_NAME = "operator"
 _DEFAULT_PROVIDER = "anthropic"
 _USERNAME_RE = re.compile(r"^[a-z0-9.\-]{1,64}$")
-_SLACK_USER_ID_RE = re.compile(r"^(?:slack:)?(?:<@)?([UW][A-Z0-9]+)(?:\|[^>]+)?>?$", re.I)
-
-
-@dataclass(frozen=True)
-class SetupSecret:
-    env_vars: tuple[str, ...]
-    prompt: str
-    hidden: bool = True
-    warning_prefix: str | None = None
-
-    @property
-    def env_var(self) -> str:
-        return self.env_vars[0]
 
 
 @dataclass(frozen=True)
@@ -175,16 +169,6 @@ class SetupProvider:
     label: str
     default_model: str
     secret: SetupSecret
-
-
-@dataclass(frozen=True)
-class SetupTransport:
-    name: str
-    label: str
-    description: str
-    identity_prompt: str
-    identity_help: str
-    secrets: tuple[SetupSecret, ...]
 
 
 @dataclass(frozen=True)
@@ -234,37 +218,24 @@ _SETUP_PROVIDERS: dict[str, SetupProvider] = {
     ),
 }
 _DEFAULT_MODEL = _SETUP_PROVIDERS[_DEFAULT_PROVIDER].default_model
-_SETUP_TRANSPORTS: dict[str, SetupTransport] = {
-    "slack": SetupTransport(
-        name="slack",
-        label="Slack",
-        description="Slack Socket Mode bot",
-        identity_prompt="Your Slack user ID",
-        identity_help="Paste your Slack user ID, for example U123ABC45.",
-        secrets=(
-            SetupSecret(
-                env_vars=("SLACK_BOT_TOKEN",),
-                prompt="Slack bot token (xoxb-*)",
-                warning_prefix="xoxb-",
-            ),
-            SetupSecret(
-                env_vars=("SLACK_APP_TOKEN",),
-                prompt="Slack app token (xapp-*)",
-                warning_prefix="xapp-",
-            ),
-        ),
-    )
-}
 
 
 def _build_starter_config(
     *,
     default_model: str = _DEFAULT_MODEL,
     timezone: str = "UTC",
-    transport_name: str = "slack",
-    bot_token_env: str = "SLACK_BOT_TOKEN",
-    app_token_env: str = "SLACK_APP_TOKEN",
+    transport_name: str | None = None,
+    transport_options: dict[str, object] | None = None,
 ) -> str:
+    selected_transport = default_setup_transport()
+    resolved_transport_name = transport_name or selected_transport.name
+    resolved_transport_options = transport_options or dict(selected_transport.config_defaults)
+    transport_lines = [f"type: {resolved_transport_name}"]
+    for key, value in resolved_transport_options.items():
+        rendered = json.dumps(value) if isinstance(value, str) else str(value).lower()
+        transport_lines.append(f"{key}: {rendered}")
+    transport_block = "\n".join(f"          {line}" for line in transport_lines)
+
     return textwrap.dedent(f"""\
         # Operator configuration
         # Docs: https://operator.geekforbrains.com
@@ -292,9 +263,7 @@ def _build_starter_config(
         agents:
           {_DEFAULT_AGENT_NAME}:
             transport:
-              type: {transport_name}
-              bot_token_env: {bot_token_env}
-              app_token_env: {app_token_env}
+{transport_block}
 
         roles:
           guest:
@@ -556,22 +525,30 @@ def _prompt_username(username: str | None) -> str:
         )
 
 
-def _normalize_slack_user_id(value: str) -> str:
-    match = _SLACK_USER_ID_RE.match(value.strip())
-    if not match:
-        raise ValueError("Use a Slack user ID like U123ABC45.")
-    return match.group(1).upper()
-
-
 def _resolve_setup_transport(name: str | None) -> SetupTransport:
     if name is None:
-        return _SETUP_TRANSPORTS["slack"]
+        return default_setup_transport()
     key = name.strip().lower()
-    transport = _SETUP_TRANSPORTS.get(key)
+    transports = {transport.name: transport for transport in list_setup_transports()}
+    transport = transports.get(key)
     if transport is None:
-        available = ", ".join(sorted(_SETUP_TRANSPORTS))
+        available = ", ".join(sorted(transports))
         raise typer.BadParameter(f"Unknown transport {name!r}. Available: {available}")
     return transport
+
+
+def _parse_secret_overrides(values: list[str] | None) -> dict[str, str]:
+    overrides: dict[str, str] = {}
+    for raw in values or []:
+        key, sep, value = raw.partition("=")
+        env_var = key.strip()
+        if not sep or not env_var:
+            raise typer.BadParameter(
+                "Use --secret ENV_VAR=value.",
+                param_hint="--secret",
+            )
+        overrides[env_var] = value
+    return overrides
 
 
 def _resolve_setup_provider(name: str | None) -> SetupProvider:
@@ -702,22 +679,19 @@ def setup(
         "--timezone",
         help="IANA timezone to write into operator.yaml, for example America/Vancouver.",
     ),
-    transport: str | None = typer.Option(
-        None, "--transport", help="Transport to configure. Currently only 'slack'."
-    ),
-    slack_user: str | None = typer.Option(
+    transport: str | None = typer.Option(None, "--transport", help="Transport to configure."),
+    identity: str | None = typer.Option(
         None,
-        "--slack-user",
-        help="Slack user ID for your admin identity.",
+        "--identity",
+        help="Transport identity for your admin user.",
     ),
     api_key: str | None = typer.Option(
         None, "--api-key", help="Provider API key to persist into ~/.operator/.env."
     ),
-    slack_bot_token: str | None = typer.Option(
-        None, "--slack-bot-token", help="Slack bot token to persist into ~/.operator/.env."
-    ),
-    slack_app_token: str | None = typer.Option(
-        None, "--slack-app-token", help="Slack app token to persist into ~/.operator/.env."
+    secret: list[str] | None = typer.Option(  # noqa: B008
+        None,
+        "--secret",
+        help="Transport secret override as ENV_VAR=value. Repeat for multiple values.",
     ),
     force: bool = typer.Option(
         False, "--force", help="Re-prompt for secrets even if they already exist."
@@ -726,13 +700,13 @@ def setup(
         False, "--run/--no-run", help="Start operator in the foreground after setup."
     ),
 ) -> None:
-    """Guided onboarding from a fresh install to the first Slack message."""
+    """Guided onboarding from a fresh install to the first transport-backed agent."""
     selected_provider = _resolve_setup_provider(provider)
     selected_transport = _resolve_setup_transport(transport)
 
     console.print("[bold]Operator setup[/bold]")
     console.print(
-        "This will save the minimum config for your first Slack-backed agent and admin user.\n"
+        f"This will save the minimum config for your first {selected_transport.label}-backed agent and admin user.\n"
     )
     console.print(
         f"Using transport: [bold]{selected_transport.label}[/bold] "
@@ -751,6 +725,8 @@ def setup(
         config_text=_build_starter_config(
             default_model=selected_provider.default_model,
             timezone=selected_timezone,
+            transport_name=selected_transport.name,
+            transport_options=selected_transport.config_defaults,
         ),
         emit_output=False,
     )
@@ -766,32 +742,38 @@ def setup(
     )
     secrets[provider_secret.env_var] = provider_secret.value
 
-    transport_secret_overrides: dict[str, str | None] = {
-        "SLACK_BOT_TOKEN": slack_bot_token,
-        "SLACK_APP_TOKEN": slack_app_token,
+    transport_secret_overrides = _parse_secret_overrides(secret)
+    allowed_secret_envs = {
+        transport_secret.env_var for transport_secret in selected_transport.secrets
     }
-    for secret in selected_transport.secrets:
+    unknown_secret_envs = sorted(set(transport_secret_overrides) - allowed_secret_envs)
+    if unknown_secret_envs:
+        raise typer.BadParameter(
+            f"Unknown secret override(s) for transport {selected_transport.name!r}: {', '.join(unknown_secret_envs)}",
+            param_hint="--secret",
+        )
+    for transport_secret in selected_transport.secrets:
         resolved_secret = _resolve_secret(
-            cli_value=transport_secret_overrides.get(secret.env_var),
-            secret=secret,
+            cli_value=transport_secret_overrides.get(transport_secret.env_var),
+            secret=transport_secret,
             env_file_values=env_file_values,
             env_file=result.env_file,
             force=force,
         )
         secrets[resolved_secret.env_var] = resolved_secret.value
 
-    if slack_user is not None:
+    if identity is not None:
         try:
-            external_id = _normalize_slack_user_id(slack_user)
+            external_id = selected_transport.normalize_identity(identity)
         except ValueError as e:
-            raise typer.BadParameter(str(e), param_hint="--slack-user") from None
+            raise typer.BadParameter(str(e), param_hint="--identity") from None
     else:
         external_id = ""
     while not external_id:
         console.print(f"[dim]{selected_transport.identity_help}[/dim]")
-        slack_identity = typer.prompt(selected_transport.identity_prompt).strip()
+        transport_identity = typer.prompt(selected_transport.identity_prompt).strip()
         try:
-            external_id = _normalize_slack_user_id(slack_identity)
+            external_id = selected_transport.normalize_identity(transport_identity)
         except ValueError as e:
             console.print(f"[red]{e}[/red]")
 
@@ -810,18 +792,13 @@ def setup(
     console.print(f"[green]Ready[/green] {user_status}")
 
     if run:
-        console.print(
-            "\nStarting operator now. DM the Slack bot or @mention it in a channel where it is invited."
-        )
+        console.print(f"\nStarting operator now. {selected_transport.run_hint}")
         asyncio.run(async_main())
         return
 
     console.print("\nNext:")
-    console.print(
-        "  1. Run [bold]operator[/bold] in a terminal (or [bold]operator service install[/bold])."
-    )
-    console.print("  2. DM your Slack bot or @mention it in an invited channel.")
-    console.print('  3. Send a first message like [bold]"hello"[/bold].')
+    for index, step in enumerate(selected_transport.next_steps, start=1):
+        console.print(f"  {index}. {step}")
 
 
 # ── Default: start the service ───────────────────────────────
