@@ -115,6 +115,7 @@ Everything lives under `~/.operator/`:
   shared/
     <name>/              # one per agent, created at startup
   db/                     # SQLite database state
+  logs/                   # runtime logs
 ```
 
 Individual sections below explain each part in detail.

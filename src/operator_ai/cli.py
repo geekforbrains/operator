@@ -26,7 +26,7 @@ from rich.text import Text
 
 import operator_ai.tools  # noqa: F401
 from operator_ai.agents import scan_agents
-from operator_ai.config import OPERATOR_DIR, ConfigError, load_config, parse_env_file
+from operator_ai.config import LOGS_DIR, OPERATOR_DIR, ConfigError, load_config, parse_env_file
 from operator_ai.job_specs import find_job_spec, scan_job_specs
 from operator_ai.jobs import run_job_now
 from operator_ai.log_context import setup_logging
@@ -67,8 +67,7 @@ app.add_typer(memory_app, name="memory")
 app.add_typer(skill_app, name="skills")
 app.add_typer(user_app, name="user")
 
-LOG_DIR = OPERATOR_DIR / "logs"
-LOG_FILE = LOG_DIR / "operator.log"
+LOG_FILE = LOGS_DIR / "operator.log"
 
 # ── Service constants ────────────────────────────────────────
 
@@ -105,7 +104,7 @@ def _require_launchd_plist() -> None:
 def _setup_cli_logging() -> None:
     """Set up logging for CLI commands — writes to the shared log file + stderr."""
     setup_logging(
-        log_dir=LOG_DIR,
+        log_dir=LOGS_DIR,
         stderr=True,
         noisy_loggers=("httpx", "httpcore", "litellm", "openai", *transport_logger_names()),
     )
@@ -820,9 +819,9 @@ def _generate_plist(bin_path: str) -> str:
             <key>KeepAlive</key>
             <true/>
             <key>StandardOutPath</key>
-            <string>{LOG_DIR / "operator.log"}</string>
+            <string>{LOGS_DIR / "operator.log"}</string>
             <key>StandardErrorPath</key>
-            <string>{LOG_DIR / "operator.log"}</string>
+            <string>{LOGS_DIR / "operator.log"}</string>
             <key>WorkingDirectory</key>
             <string>{Path.home()}</string>
         </dict>
@@ -840,8 +839,8 @@ def _generate_systemd_unit(bin_path: str) -> str:
         Environment=PATH={current_path}
         Restart=on-failure
         RestartSec=5
-        StandardOutput=append:{LOG_DIR / "operator.log"}
-        StandardError=append:{LOG_DIR / "operator.log"}
+        StandardOutput=append:{LOGS_DIR / "operator.log"}
+        StandardError=append:{LOGS_DIR / "operator.log"}
         WorkingDirectory={Path.home()}
 
         [Install]
@@ -852,7 +851,7 @@ def _generate_systemd_unit(bin_path: str) -> str:
 def service_install() -> None:
     """Generate and load a service definition (launchd/systemd)."""
     bin_path = _find_operator_bin()
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
     if _is_macos():
         _PLIST_PATH.parent.mkdir(parents=True, exist_ok=True)

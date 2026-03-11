@@ -15,7 +15,7 @@ from pathlib import Path
 import operator_ai.tools  # noqa: F401
 from operator_ai.agent import run_agent
 from operator_ai.commands import CommandContext, dispatch_command
-from operator_ai.config import OPERATOR_DIR, Config, ConfigError, RoleConfig, load_config
+from operator_ai.config import LOGS_DIR, OPERATOR_DIR, Config, ConfigError, RoleConfig, load_config
 from operator_ai.jobs import JobRunner
 from operator_ai.layout import ensure_layout
 from operator_ai.log_context import new_run_id, set_run_context, setup_logging
@@ -40,8 +40,6 @@ from operator_ai.transport.base import Attachment, IncomingMessage, MessageConte
 from operator_ai.transport.registry import create_transport, transport_logger_names
 
 logger = logging.getLogger("operator")
-
-LOGS_DIR = OPERATOR_DIR / "logs"
 
 
 def _format_tokens(n: int) -> str:

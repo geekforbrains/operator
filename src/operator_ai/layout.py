@@ -68,6 +68,7 @@ def ensure_layout(config: Config) -> None:
         config.skills_dir(),
         config.shared_dir,
         config.db_dir(),
+        config.logs_dir(),
     )
 
     # Global memory

@@ -20,6 +20,7 @@ class ConfigError(Exception):
 OPERATOR_DIR = Path.home() / ".operator"
 CONFIG_PATH = OPERATOR_DIR / "operator.yaml"
 SKILLS_DIR = OPERATOR_DIR / "skills"
+LOGS_DIR = OPERATOR_DIR / "logs"
 
 # Expose the resolved base directory as an environment variable so that
 # run_shell commands, skill scripts, and job hooks can reference paths
@@ -194,6 +195,9 @@ class Config(StrictConfigModel):
 
     def db_dir(self) -> Path:
         return OPERATOR_DIR / "db"
+
+    def logs_dir(self) -> Path:
+        return LOGS_DIR
 
     def default_agent(self) -> str:
         """Return the first agent name from config, or 'default'."""
