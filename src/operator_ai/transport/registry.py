@@ -112,6 +112,7 @@ def create_transport(
         raise ValueError(f"Unsupported transport type: {type_name!r}")
     return definition.create_transport(name, agent_name, env, settings, store)
 
+
 def transport_secret_env_vars(
     type_name: str,
     env: dict[str, Any],
