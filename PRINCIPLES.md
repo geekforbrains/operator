@@ -126,82 +126,53 @@ Agents are defined in markdown with YAML frontmatter at
 `description`. The body is the stable, human-authored definition of the agent's
 role, mission, capabilities, and hard constraints.
 
-All configured agents are automatically discovered and injected into the system
-prompt with their name and description so that every agent is aware of every
-other agent. This enables delegation without requiring agents to be explicitly
-told about each other.
+All configured agents are injected into the system prompt with their name and
+description, regardless of the current user's access. Agents the user cannot
+access are annotated as inaccessible. This lets the agent explain why it cannot
+delegate to a particular agent rather than being unaware of its existence.
 
 `AGENT.md` should change when the agent's charter changes. It should not be
 rewritten casually in response to routine user feedback.
+
+### Discovery
+
+Skills and agents are discovered by scanning the filesystem at the start of
+each agent run — each inbound message or job trigger. There is no hot reload
+mid-turn and no file watchers. A newly created skill or agent is available on
+the next request, not during the current one. Caching may be added later if
+the scan becomes a performance concern.
 
 ### Prompt assembly
 
 Operator has a shared global `SYSTEM.md` so common operating instructions do not
 need to be duplicated across every agent.
 
-At a high level, the intended prompt order is:
+The prompt is assembled broad to narrow — stable system context first,
+per-turn specifics last:
 
 1. `SYSTEM.md`
 2. `AGENT.md`
 3. available tools
 4. discovered skills
-5. known agents
-6. transport-specific prompt content
+5. known agents (inaccessible agents annotated, not filtered)
+6. transport-specific context (platform semantics, channel/user IDs, threading)
 7. global rules
 8. agent rules
-9. user rules, when the interaction is private and user-scoped rules apply
+9. user rules (when the interaction is user-scoped)
 
-This order is intentional.
-
-`SYSTEM.md` goes first because it defines the universal operating contract for
-all agents.
-
-`AGENT.md` comes next because it defines the specific agent's charter and role.
-
-Available tools and discovered skills follow because they define what the agent
-can do. Tools are listed so the agent knows its capabilities. Skills are
-automatically discovered and injected so the agent knows what authored
-instructions are available to it. Both are scoped by the agent's permissions.
-
-Known agents come next so the agent is aware of other agents it can delegate
-to. Each agent is listed with its name and description.
-
-Transport-specific prompt content comes after that because it explains the
-environment the agent is operating in. This includes platform semantics and
-relevant transport context such as channel identifiers, user identifiers,
-threading behavior, and any other transport-specific details the agent may need
-for efficient tool use.
-
-Rules then follow in broad-to-narrow order:
-
-- global rules
-- agent rules
-- user rules
-
-This lets the system layer broad shared behavior first, then refine it with
-agent-specific behavior, then refine it again with user-specific behavior when
-appropriate. The most specific rules appear last.
-
-Transient context such as the current conversation state, thread snapshots,
-retrieved notes, or other per-request context may be added after this base
-instruction stack. Those are request context, not standing prompt layers.
+Per-turn request context — the current user's identity (username, role,
+timezone), conversation state, thread snapshots, retrieved notes — is appended
+after this base stack. The username is resolved from transport identity mapping
+to the user record, not guessed. Agents use it for path-based lookups into
+user-scoped memory (`memory/users/<name>/`).
 
 ### Context management
 
 Operator prunes conversation context continuously rather than letting it grow
-until it must be compacted.
-
-Many systems allow conversations to fill the context window and then
-auto-compact, which is slow and loses significant detail. In practice, old
-context is rarely still relevant. By pruning progressively, Operator keeps the
-active conversation sharp, focused, and within the model's context window so
-it does not degrade into hallucination.
-
-The system prompt layers described above are stable and always present. What
-gets pruned is conversation history — older turns are dropped as newer turns
-arrive. This is a deliberate tradeoff: recent context is more valuable than
-complete history, and anything worth retaining long-term should be captured in
-memory, not preserved by keeping old messages around.
+until it must be compacted. The system prompt layers described above are stable
+and always present. What gets pruned is conversation history — older turns are
+dropped as newer turns arrive. Recent context is more valuable than complete
+history, and anything worth retaining long-term should be captured in memory.
 
 ### Workspaces
 
@@ -247,20 +218,6 @@ duplicating them across agents.
 
 `AGENT.md` may extend the workspace conventions for a specific agent, but it
 should not redefine the base top-level workspace structure.
-
-### Storage boundaries
-
-Operator draws a firm line between different kinds of stored information:
-
-- `SYSTEM.md` and `AGENT.md` hold authored standing instructions
-- memory files hold learned reusable knowledge
-- workspace files hold work products and task-local context
-- conversation history in SQLite holds episodic record
-- state files hold small operational state
-
-These boundaries matter. If something is user-facing knowledge, it should not
-be hidden inside state. If something is machine bookkeeping, it should not be
-promoted into long-term memory files.
 
 ### Runtime state
 
@@ -317,6 +274,16 @@ dedicated state tools that read and write structured state documents in the
 reserved state area. This keeps state deterministic and debuggable without
 reintroducing a generic key-value concept.
 
+### Timezone handling
+
+User timezone is a field on the user record in the database. There is no
+system-wide default timezone setting in config.
+
+When a user's timezone is null, the agent's injected context includes a note
+instructing it to ask the user for their timezone. Once set, the agent uses the
+stored timezone for interpreting and presenting times. All timezone conversion
+is handled by tools — the model never does timezone math directly.
+
 ### Jobs
 
 Jobs are scheduled tasks defined as markdown files with YAML frontmatter,
@@ -338,13 +305,13 @@ When a subagent is spawned, it receives its own identity — its own `AGENT.md`,
 memory, and skills. It does not inherit the parent agent's context or memory
 scope.
 
-Subagent access is controlled by the calling user's roles, not the parent
-agent's permissions. When an agent spawns a subagent targeting a different
-agent, the system checks whether the user whose conversation initiated the
-chain has a role that grants access to the target agent. The parent agent's
-own permissions are not a factor — what matters is whether the user is
-authorized. This prevents privilege escalation through delegation while
-keeping the access model consistent with direct user interaction.
+Effective permissions for a subagent are the intersection of the calling
+user's role and the target agent's configured permissions. The parent agent's
+permissions are not a factor. This means a user with broad access can delegate
+through a restricted agent to a more capable one, as long as their role permits
+it. The agent acts on behalf of the user, not on its own authority. This
+prevents privilege escalation through delegation while keeping the access model
+consistent with direct user interaction.
 
 ### Skills
 
@@ -370,9 +337,14 @@ available to users unless explicitly granted.
   explicitly opened.
 
 Permission groups allow clusters of related tools to be referenced by name
-using an `@group` prefix (e.g., `@memory`, `@files`). Groups are defined once
-in `operator.yaml` under `permission_groups` and expanded at runtime. This
-reduces duplication when multiple agents share similar tool sets.
+using an `@group` prefix (e.g., `@memory`, `@files`). Groups are generated
+into `operator.yaml` at init time with sensible defaults. From that point the
+user owns them and can modify, split, or extend groups as needed. Individual
+tools can still be added alongside groups for granularity.
+
+When new tools are introduced in a future version, they are not automatically
+added to any group. The user adds them manually. The CLI provides a command to
+list all available tools so the user can see what is new.
 
 Permissions are enforced at two layers. Only permitted tools and skills are
 injected into the agent's context, so the agent never sees what it cannot use.
@@ -418,9 +390,6 @@ Operator uses a single file-backed memory system with two behaviors:
 - `notes/` are searched on demand. They hold durable knowledge that should not
   automatically bloat the prompt on every turn.
 
-This replaces older ideas such as `pinned`, `candidate`, and `durable`. There
-is no separate pinned-memory concept.
-
 Rule examples:
 
 - "Prefer concise answers unless extra depth is requested."
@@ -435,36 +404,10 @@ Note examples:
 
 ### Memory file layout
 
-Memory is stored as one file per memory item.
-
-Example layout:
-
-```text
-~/.operator/
-  memory/
-    global/
-      rules/
-      notes/
-      trash/
-    users/
-      gavin/
-        rules/
-        notes/
-        trash/
-  agents/
-    operator/
-      AGENT.md
-      memory/
-        rules/
-        notes/
-        trash/
-```
-
-This design makes active always-injected memory obvious to a human:
-everything in `rules/` is active rule memory.
-
-It also makes update, delete, expiry, and debugging deterministic because every
-memory item has its own path.
+Memory is stored as one file per memory item. The directory layout is shown in
+the main directory tree above. Everything in `rules/` is active rule memory.
+Every memory item has its own path, making update, delete, and expiry
+deterministic.
 
 ### Path is identity
 
@@ -516,14 +459,6 @@ Guidelines:
 - `updated_at` is kept for freshness and deterministic sweeps
 - `expires_at` is optional and supports short-lived memory
 
-The following fields are intentionally omitted unless a future need proves they
-are necessary:
-
-- `id`
-- `scope`
-- `kind`
-- `source`
-
 ### Notes search
 
 Notes are searched by filename and content using text-based tools. There is no
@@ -534,9 +469,8 @@ This works because the write-time memory tools enforce descriptive filenames.
 Determinism comes from the point of creation, not retrieval. If the tool names
 files well, search does not need to be smart.
 
-Operator expects efficient search tools such as ripgrep to be available on the
-host, but falls back to standard system utilities when they are not. This
-improves performance under ideal conditions without creating a hard dependency.
+The system is optimized for efficient search tools like ripgrep but falls back
+to standard utilities when they are not available.
 
 ### Memory creation
 
@@ -556,17 +490,9 @@ what matters.
 Some memory is only useful for a limited time. Examples include dates, temporary
 priorities, time-bound instructions, and short-term facts.
 
-Memory tools accept a `ttl` parameter — a human-friendly duration such as
-`"3d"`, `"2w"`, or `"1h"`. The tool converts this to an absolute `expires_at`
-timestamp on disk. The `expires_at` field is never exposed as a tool parameter.
-
-This is intentional. Language models are unreliable at date math. Asking a model
-to compute "three days from now" as an ISO timestamp invites silent errors —
-wrong dates, wrong timezones, off-by-one days. By accepting only a relative
-duration, the tool keeps the model's job simple ("how long should this last?")
-and lets deterministic code handle the arithmetic. The persisted `expires_at`
-is an absolute timestamp because it is easier for humans to inspect and easier
-for code to query deterministically.
+Memory tools accept a relative `ttl` (e.g., `"3d"`, `"2w"`) and compute an
+absolute `expires_at` timestamp deterministically. The model never does date
+math directly.
 
 #### Trash instead of hard delete
 
@@ -601,84 +527,3 @@ At a high level, the memory tool layer should support:
 The tools may hide the file details from the agent, but the files remain the
 source of truth for humans.
 
-## Where Feedback Goes
-
-### Update `AGENT.md` when the charter changes
-
-If a human intentionally changes the agent's role, mission, or hard constraints,
-that belongs in `AGENT.md`.
-
-### Update `rules/` when reusable behavior changes
-
-If feedback should shape future behavior in similar situations, it belongs in
-rule memory.
-
-Examples:
-
-- "Be more concise with me."
-- "Always prioritize bug risks over style comments in reviews."
-
-### Update `notes/` when durable knowledge should be retained
-
-If something is a fact, reference point, or non-always-injected preference, it
-belongs in note memory.
-
-Examples:
-
-- "Release date moved to April 3."
-- "The user is traveling this week."
-
-### Keep one-off instructions in the conversation
-
-Not every message becomes memory. Thread-local instructions and one-off task
-constraints should stay in the conversation history unless they become clearly
-reusable.
-
-## Consequences of This Design
-
-### Benefits
-
-- users can inspect and edit memory, state, and agent definitions directly
-- agents use deterministic tools rather than inventing file structures
-- memory remains understandable without a vector database or background workers
-- behavior is easier to reason about because `rules/` means always injected and
-  `notes/` means searched
-- closed-by-default permissions prevent accidental over-exposure
-- subagent permission scoping prevents privilege escalation
-- continuous context pruning keeps conversations sharp without lossy compaction
-- the entire system is debuggable by reading files on disk
-
-### Tradeoffs
-
-- The system gives up fuzzy semantic recall from embeddings. Operator prefers
-  transparency and inspectability over flexible but harder-to-debug retrieval.
-  If retrieval needs to improve later, indexing may evolve internally, but the
-  file-backed model remains the source of truth.
-- Without a background harvester, agents must be taught to use memory tools
-  proactively. Memory quality depends on tool use, not automatic extraction.
-- Closed-by-default permissions add setup friction. This is intentional —
-  the cost of forgetting to restrict is higher than the cost of forgetting to
-  grant.
-
-## Summary
-
-Operator is a markdown-defined, team-facing agent runtime where:
-
-- agents, jobs, and skills are defined as markdown files with frontmatter
-- agents auto-discover each other for delegation
-- skills follow the Agent Skills specification and are injected automatically
-- work happens in structured workspaces with a fixed default layout
-- cross-agent file sharing goes through `shared/`, not direct workspace access
-- long-term memory is file-backed with no embeddings or background harvesting
-- memory is created explicitly by agents or humans, not extracted automatically
-- `rules/` are always injected, `notes/` are searched on demand
-- determinism comes from write-time tooling — good filenames make search simple
-- expired memory moves to `trash/` instead of being deleted
-- agent state is file-backed and separate from memory and workspace
-- database state covers high-volume runtime data in SQLite with unix timestamps
-- permission groups reduce duplication across agent permission configs
-- access is closed by default — permissions are an allowlist, not a denylist
-- subagent access is gated by the calling user's roles, not the parent agent
-- timezone is per-user, stored on the user profile, applied at display time
-- context is pruned continuously, not compacted after overflow
-- transports are generic interaction adapters, not the architecture itself
