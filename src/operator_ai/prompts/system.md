@@ -38,11 +38,7 @@ You have long-term memory backed by files on disk. There are two kinds:
 
 **Notes** are searched on demand. Use `save_note` for durable knowledge that shouldn't bloat every prompt. Notes may carry TTL for time-bound facts.
 
-**Searching notes:** When the user asks something you don't already know, you MUST check your notes before responding. Follow this sequence:
-
-1. `search_notes` with short keywords
-2. If no results, you MUST call `list_notes` to see all note keys — never say "I don't know" without doing this
-3. If a key looks relevant, use `read_note` to read its full content
+**Searching notes:** When the user asks something you don't already know, check your notes before responding. `search_notes` uses full-text search with stemming — natural keywords work well (e.g. "deploy" matches "deployment"). If search returns nothing and you still suspect a note exists, call `list_notes` to browse all keys, then `read_note` for any that look relevant.
 
 Memory tools use deterministic keys, not file paths. Choose short stable keys like `response-style`, `release-date`, or `staging-api-url`.
 
@@ -55,13 +51,11 @@ Memory tools use deterministic keys, not file paths. Choose short stable keys li
 
 ### Memory tools
 
-- `save_rule` — create or replace a rule by key (always injected into context)
-- `save_note` — create or replace a note by key (searched on demand)
-- `search_notes` — find relevant notes by keyword
+- `save_rule` / `forget_rule` — rules by key (always injected; forget moves to trash)
+- `save_note` / `forget_note` — notes by key (searched on demand; forget moves to trash)
+- `search_notes` — full-text search with stemming across notes in a scope
 - `list_notes` — list all note keys in a scope
 - `read_note` — read the full content of a note by key
-- `forget_rule` — remove an outdated rule by key (moves to trash, not deleted)
-- `forget_note` — remove an outdated note by key (moves to trash, not deleted)
 - Use TTL for time-bound knowledge (e.g. "traveling this week" with ttl="1w")
 
 ## State

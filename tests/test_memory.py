@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 
 from operator_ai.memory import MemoryStore, _slugify, _write_memory_file, parse_ttl
+from operator_ai.memory_index import MemoryIndex
+from operator_ai.memory_reindex import reindex_diff, reindex_full
 from operator_ai.tools import memory as memory_tools
 
 
@@ -417,3 +419,124 @@ def test_tool_invalid_scope(tmp_path: Path) -> None:
     _configure_memory_tools(store)
     result = asyncio.run(memory_tools.save_rule("response-style", "Something", scope="invalid"))
     assert "[error:" in result
+
+
+# ── Indexed search integration tests ────────────────────────────
+
+
+def _make_indexed_store(tmp_path: Path) -> tuple[MemoryStore, MemoryIndex]:
+    index = MemoryIndex(tmp_path / "db" / "index.db")
+    store = MemoryStore(base_dir=tmp_path, index=index)
+    return store, index
+
+
+def test_indexed_upsert_and_search(tmp_path: Path) -> None:
+    store, index = _make_indexed_store(tmp_path)
+    store.upsert_note("global", "release-date", "Release date moved to April 3")
+    results = store.search_notes("global", "release")
+    assert len(results) == 1
+    assert results[0].key == "release-date"
+    index.close()
+
+
+def test_indexed_search_porter_stemming(tmp_path: Path) -> None:
+    store, index = _make_indexed_store(tmp_path)
+    store.upsert_note("global", "deploy-process", "The deployment happens on Fridays")
+    # "deploying" should match "deployment" via Porter stemming
+    results = store.search_notes("global", "deploying")
+    assert len(results) == 1
+    assert results[0].key == "deploy-process"
+    index.close()
+
+
+def test_indexed_forget_removes_from_search(tmp_path: Path) -> None:
+    store, index = _make_indexed_store(tmp_path)
+    store.upsert_note("global", "ephemeral", "Temporary data")
+    assert store.search_notes("global", "temporary")
+    store.forget_note("global", "ephemeral")
+    assert not store.search_notes("global", "temporary")
+    index.close()
+
+
+def test_indexed_sweep_cleans_index(tmp_path: Path) -> None:
+    store, index = _make_indexed_store(tmp_path)
+    notes_dir = tmp_path / "memory" / "global" / "notes"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    _write_memory_file(
+        notes_dir / "expired.md",
+        "This has expired",
+        expires_at=datetime.now(UTC) - timedelta(hours=1),
+    )
+    # Manually index the expired file
+    index.upsert(
+        "memory/global/notes/expired.md",
+        "global",
+        "note",
+        "expired",
+        "This has expired",
+        "hash123",
+        expires_at=(datetime.now(UTC) - timedelta(hours=1)).timestamp(),
+    )
+    store.upsert_note("global", "active", "Still active")
+    assert index.count() == 2
+    store.sweep_expired()
+    assert index.count() == 1
+    index.close()
+
+
+def test_reindex_diff_picks_up_new_files(tmp_path: Path) -> None:
+    store, index = _make_indexed_store(tmp_path)
+    # Write files directly (simulating human edits)
+    notes_dir = tmp_path / "memory" / "global" / "notes"
+    notes_dir.mkdir(parents=True, exist_ok=True)
+    _write_memory_file(notes_dir / "manual-note.md", "Manually created note")
+
+    upserted, deleted = reindex_diff(store, index)
+    assert upserted == 1
+    assert deleted == 0
+
+    results = index.search("manual", scopes=["global"], kind="note")
+    assert len(results) == 1
+    index.close()
+
+
+def test_reindex_diff_removes_deleted_files(tmp_path: Path) -> None:
+    store, index = _make_indexed_store(tmp_path)
+    # Index a file that doesn't exist on disk
+    index.upsert(
+        "memory/global/notes/ghost.md",
+        "global",
+        "note",
+        "ghost",
+        "phantom data",
+        "hash000",
+    )
+    assert index.count() == 1
+
+    _upserted, deleted = reindex_diff(store, index)
+    assert deleted == 1
+    assert index.count() == 0
+    index.close()
+
+
+def test_reindex_diff_skips_unchanged(tmp_path: Path) -> None:
+    store, index = _make_indexed_store(tmp_path)
+    store.upsert_note("global", "stable-note", "Content that won't change")
+    assert index.count() == 1
+
+    # Reindex again — nothing should change
+    upserted, deleted = reindex_diff(store, index)
+    assert upserted == 0
+    assert deleted == 0
+    index.close()
+
+
+def test_reindex_full_rebuilds(tmp_path: Path) -> None:
+    store, index = _make_indexed_store(tmp_path)
+    store.upsert_note("global", "note-a", "First note")
+    store.upsert_note("global", "note-b", "Second note")
+
+    count = reindex_full(store, index)
+    assert count == 2
+    assert index.count() == 2
+    index.close()
