@@ -47,39 +47,6 @@ class MessageContext:
     roles: list[str] = field(default_factory=list)
     timezone: str | None = None
     chat_type: str = ""
-    agent_name: str = ""
-    agent_platform_id: str = ""
-
-    def to_prompt(self, workspace: str = "", operator_home: str = "") -> str:
-        lines = [
-            "# Context",
-            "",
-            f"- Platform: {self.platform}",
-        ]
-        if self.agent_name:
-            agent_line = f"- Agent (You): {self.agent_name}"
-            if self.agent_platform_id:
-                agent_line += f" (`{self.agent_platform_id}`)"
-            lines.append(agent_line)
-        if self.chat_type:
-            lines.append(f"- Chat type: {self.chat_type}")
-        lines.append(f"- Channel: {self.channel_name} (`{self.channel_id}`)")
-        if self.username:
-            lines.append(f"- Username: {self.username}")
-            lines.append(f"- Name: {self.user_name}")
-        else:
-            lines.append(f"- User: {self.user_name} (`{self.user_id}`)")
-        if self.roles:
-            lines.append(f"- Roles: {', '.join(self.roles)}")
-        if self.timezone:
-            lines.append(f"- Timezone: {self.timezone}")
-        elif self.username:
-            lines.append("- Timezone: *not set — please ask the user for their timezone*")
-        if workspace:
-            lines.append(f"- Workspace: `{workspace}`")
-        if operator_home:
-            lines.append(f"- Operator home: `{operator_home}` (also `$OPERATOR_HOME`)")
-        return "\n".join(lines)
 
 
 class Transport(ABC):

@@ -9,12 +9,14 @@ from __future__ import annotations
 import contextvars
 import logging
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from operator_ai.memory import MemoryFile, MemoryStore
 from operator_ai.tools.registry import tool
 
 logger = logging.getLogger("operator.tools.memory")
+
+MemoryScope = Literal["agent", "user", "global"]
 
 _context_var: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
     "_memory_context", default=None
@@ -78,7 +80,7 @@ def _format_memory_line(mf: MemoryFile) -> str:
 @tool(
     description="Create or replace a rule memory by deterministic key. Use for short standing instructions that should shape every interaction.",
 )
-async def save_rule(key: str, content: str, scope: str = "agent") -> str:
+async def save_rule(key: str, content: str, scope: MemoryScope = "agent") -> str:
     """Save a rule memory.
 
     Args:
@@ -106,7 +108,7 @@ async def save_rule(key: str, content: str, scope: str = "agent") -> str:
 @tool(
     description="Create or replace a note memory by deterministic key. Use for durable knowledge that should be searched on demand instead of injected every time.",
 )
-async def save_note(key: str, content: str, scope: str = "agent", ttl: str = "") -> str:
+async def save_note(key: str, content: str, scope: MemoryScope = "agent", ttl: str = "") -> str:
     """Save a note memory.
 
     Args:
@@ -136,7 +138,7 @@ async def save_note(key: str, content: str, scope: str = "agent", ttl: str = "")
 @tool(
     description="Search note memories by key and content within a scope.",
 )
-async def search_notes(query: str, scope: str = "agent") -> str:
+async def search_notes(query: str, scope: MemoryScope = "agent") -> str:
     """Search notes.
 
     Args:
@@ -165,7 +167,7 @@ async def search_notes(query: str, scope: str = "agent") -> str:
 @tool(
     description="List all active rule memories in a scope.",
 )
-async def list_rules(scope: str = "agent") -> str:
+async def list_rules(scope: MemoryScope = "agent") -> str:
     """List rules.
 
     Args:
@@ -193,7 +195,7 @@ async def list_rules(scope: str = "agent") -> str:
 @tool(
     description="List active note memories in a scope. Use limit and offset to paginate large collections.",
 )
-async def list_notes(scope: str = "agent", limit: int = 50, offset: int = 0) -> str:
+async def list_notes(scope: MemoryScope = "agent", limit: int = 50, offset: int = 0) -> str:
     """List notes.
 
     Args:
@@ -233,7 +235,7 @@ async def list_notes(scope: str = "agent", limit: int = 50, offset: int = 0) -> 
 @tool(
     description="Read the full content of a note by its key.",
 )
-async def read_note(key: str, scope: str = "agent") -> str:
+async def read_note(key: str, scope: MemoryScope = "agent") -> str:
     """Read a note.
 
     Args:
@@ -266,7 +268,7 @@ async def read_note(key: str, scope: str = "agent") -> str:
 @tool(
     description="Move a rule memory to trash by deterministic key.",
 )
-async def forget_rule(key: str, scope: str = "agent") -> str:
+async def forget_rule(key: str, scope: MemoryScope = "agent") -> str:
     """Forget a rule memory.
 
     Args:
@@ -294,7 +296,7 @@ async def forget_rule(key: str, scope: str = "agent") -> str:
 @tool(
     description="Move a note memory to trash by deterministic key.",
 )
-async def forget_note(key: str, scope: str = "agent") -> str:
+async def forget_note(key: str, scope: MemoryScope = "agent") -> str:
     """Forget a note memory.
 
     Args:

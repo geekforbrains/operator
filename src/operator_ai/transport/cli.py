@@ -39,7 +39,6 @@ class CliTransport(Transport):
             channel_name="cli",
             user_id="cli",
             user_name="cli",
-            agent_name=self.agent_name,
         )
 
     async def resolve_channel_id(self, channel: str) -> str | None:

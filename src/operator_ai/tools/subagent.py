@@ -3,25 +3,54 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any
 
 from operator_ai.agent_runtime import configure_agent_tool_context, resolve_base_dir
+from operator_ai.config import Config, ThinkingLevel
 from operator_ai.log_context import get_run_context, new_run_id, set_run_context
+from operator_ai.memory import MemoryStore
 from operator_ai.message_timestamps import attach_message_created_at
-from operator_ai.prompts import assemble_system_prompt, load_prompt
+from operator_ai.run_prompt import RunEnvelope, build_agent_system_prompt
 from operator_ai.tools.context import get_user_context
-from operator_ai.tools.registry import tool
+from operator_ai.tools.registry import ToolDef, tool
 
 logger = logging.getLogger("operator.subagent")
 
 MAX_SUBAGENT_DEPTH = 3
 
-_context_var: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+@dataclass
+class SubagentContext:
+    models: list[str]
+    max_iterations: int
+    workspace: str
+    agent_name: str = ""
+    depth: int = 0
+    context_ratio: float = 0.0
+    max_output_tokens: int | None = None
+    thinking: ThinkingLevel = "off"
+    extra_tools: list[ToolDef] | None = None
+    usage: dict[str, int] | None = None
+    tool_filter: Callable[[str], bool] | None = None
+    skill_filter: Callable[[str], bool] | None = None
+    shared_dir: Path | None = None
+    config: Config | None = None
+    memory_store: MemoryStore | None = None
+    username: str = ""
+    allow_user_scope: bool = False
+    allowed_agents: set[str] | None = None
+    base_dir: Path | None = None
+    run_envelope: RunEnvelope | None = None
+
+
+_context_var: contextvars.ContextVar[SubagentContext | None] = contextvars.ContextVar(
     "_agent_context", default=None
 )
 
 
-def configure(context: dict[str, Any]) -> None:
+def configure(context: SubagentContext) -> None:
     _context_var.set(context)
 
 
@@ -40,80 +69,37 @@ def _user_can_access_agent(agent_name: str, config: Any) -> bool:
     return False
 
 
-def _resolve_agent_context(agent_name: str | None, current: dict[str, Any]) -> dict[str, Any]:
+def _resolve_agent_context(agent_name: str | None, current: SubagentContext) -> SubagentContext:
     """Resolve context for spawn_agent, switching to a different agent if specified."""
     if not agent_name:
         return current
 
-    config = current.get("config")
+    config = current.config
     if config is None:
         return current
 
     if agent_name not in config.agents:
         raise ValueError(f"unknown agent '{agent_name}'")
 
-    ctx = dict(current)
-    ctx["models"] = config.agent_models(agent_name)
-    ctx["max_iterations"] = config.agent_max_iterations(agent_name)
-    ctx["workspace"] = str(config.agent_workspace(agent_name))
-    ctx["thinking"] = config.agent_thinking(agent_name)
-    ctx["context_ratio"] = config.agent_context_ratio(agent_name)
-    ctx["max_output_tokens"] = config.agent_max_output_tokens(agent_name)
-    ctx["tool_filter"] = config.agent_tool_filter(agent_name)
-    ctx["skill_filter"] = config.agent_skill_filter(agent_name)
-    ctx["agent_name"] = agent_name
-    return ctx
-
-
-def _build_subagent_prompt(
-    resolved: dict[str, Any],
-    *,
-    target_agent: str,
-    context: str,
-) -> str:
-    config = resolved.get("config")
-    sections = [load_prompt("subagent.md")]
-
-    user_ctx = get_user_context()
-    context_lines = ["# Context", ""]
-    if target_agent:
-        context_lines.append(f"- Agent (You): {target_agent}")
-    username = str(resolved.get("username") or "")
-    if user_ctx is not None:
-        username = user_ctx.username or username
-    if username:
-        context_lines.append(f"- Username: {username}")
-    if user_ctx is not None:
-        if user_ctx.roles:
-            context_lines.append(f"- Roles: {', '.join(user_ctx.roles)}")
-        if user_ctx.timezone:
-            context_lines.append(f"- Timezone: {user_ctx.timezone}")
-
-    workspace = resolved.get("workspace")
-    if workspace:
-        context_lines.append(f"- Workspace: `{workspace}`")
-    operator_home = resolve_base_dir(config=config, base_dir=resolved.get("base_dir"))
-    context_lines.append(f"- Operator home: `{operator_home}` (also `$OPERATOR_HOME`)")
-    sections.append("\n".join(context_lines))
-
-    if context:
-        sections.append(f"## Additional Context\n\n{context}")
-
-    extra = "\n\n".join(sections)
-
-    if config is None or not target_agent:
-        return extra
-
-    return assemble_system_prompt(
-        config=config,
-        agent_name=target_agent,
-        memory_store=resolved.get("memory_store"),
-        username=str(resolved.get("username") or ""),
-        is_private=bool(resolved.get("allow_user_scope", False)),
-        transport_extra=extra,
-        skill_filter=config.agent_skill_filter(target_agent),
-        allowed_agents=resolved.get("allowed_agents"),
+    return replace(
+        current,
+        models=config.agent_models(agent_name),
+        max_iterations=config.agent_max_iterations(agent_name),
+        workspace=str(config.agent_workspace(agent_name)),
+        thinking=config.agent_thinking(agent_name),
+        context_ratio=config.agent_context_ratio(agent_name),
+        max_output_tokens=config.agent_max_output_tokens(agent_name),
+        tool_filter=config.agent_tool_filter(agent_name),
+        skill_filter=config.agent_skill_filter(agent_name),
+        agent_name=agent_name,
     )
+
+
+def _build_user_message(task: str, context: str) -> dict[str, Any]:
+    content = task
+    if context.strip():
+        content = f"{task}\n\n<additional_context>\n{context.strip()}\n</additional_context>"
+    return attach_message_created_at({"role": "user", "content": content})
 
 
 @tool(
@@ -131,13 +117,13 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
     if current_context is None:
         return "[error: subagent context not configured]"
 
-    depth = current_context.get("depth", 0)
+    depth = current_context.depth
     if depth >= MAX_SUBAGENT_DEPTH:
         return f"[error: max subagent depth ({MAX_SUBAGENT_DEPTH}) reached]"
 
     # Check user-level access to the target agent
     if agent:
-        config = current_context.get("config")
+        config = current_context.config
         if config and not _user_can_access_agent(agent, config):
             return f"[error: you don't have access to agent '{agent}']"
 
@@ -146,18 +132,25 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
     except ValueError as e:
         return f"[error: {e}]"
 
-    target_agent = str(
-        resolved.get("agent_name") or agent or current_context.get("agent_name") or ""
-    )
-    system_prompt = _build_subagent_prompt(
-        resolved,
-        target_agent=target_agent,
-        context=context,
+    target_agent = resolved.agent_name or agent or current_context.agent_name
+    if not target_agent:
+        return "[error: target agent not configured]"
+    if resolved.config is None:
+        return "[error: config not available for subagent run]"
+
+    system_prompt = build_agent_system_prompt(
+        config=resolved.config,
+        agent_name=target_agent,
+        memory_store=resolved.memory_store,
+        username=resolved.username,
+        skill_filter=resolved.skill_filter,
+        allowed_agents=resolved.allowed_agents,
+        run_envelope=resolved.run_envelope,
     )
 
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
-        attach_message_created_at({"role": "user", "content": task}),
+        _build_user_message(task, context),
     ]
 
     # Lazy import to avoid circular dependency (agent -> subagent -> agent)
@@ -180,36 +173,37 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
             run_id=parent_ctx.run_id if parent_ctx else new_run_id(),
             depth=depth + 1,
         )
-        base_dir = resolve_base_dir(config=resolved.get("config"), base_dir=resolved.get("base_dir"))
+        base_dir = resolve_base_dir(config=resolved.config, base_dir=resolved.base_dir)
         configure_agent_tool_context(
             agent_name=run_agent_name,
             base_dir=base_dir,
-            skill_filter=resolved.get("skill_filter"),
-            memory_store=resolved.get("memory_store"),
-            username=str(resolved.get("username") or ""),
-            allow_user_scope=bool(resolved.get("allow_user_scope", False)),
+            skill_filter=resolved.skill_filter,
+            memory_store=resolved.memory_store,
+            username=resolved.username,
+            allow_user_scope=resolved.allow_user_scope,
         )
         return await run_agent(
             messages=messages,
-            models=resolved["models"],
-            max_iterations=min(resolved.get("max_iterations", 10), 10),
-            workspace=resolved.get("workspace", "."),
+            models=resolved.models,
+            max_iterations=resolved.max_iterations,
+            workspace=resolved.workspace or ".",
             agent_name=run_agent_name,
             depth=depth + 1,
-            context_ratio=resolved.get("context_ratio", 0.0),
-            max_output_tokens=resolved.get("max_output_tokens"),
-            thinking=resolved.get("thinking", "off"),
-            extra_tools=resolved.get("extra_tools"),
-            usage=resolved.get("usage"),
-            tool_filter=resolved.get("tool_filter"),
-            skill_filter=resolved.get("skill_filter"),
-            shared_dir=resolved.get("shared_dir"),
-            config=resolved.get("config"),
-            memory_store=resolved.get("memory_store"),
-            username=str(resolved.get("username") or ""),
-            allow_user_scope=bool(resolved.get("allow_user_scope", False)),
-            allowed_agents=resolved.get("allowed_agents"),
+            context_ratio=resolved.context_ratio,
+            max_output_tokens=resolved.max_output_tokens,
+            thinking=resolved.thinking,
+            extra_tools=resolved.extra_tools,
+            usage=resolved.usage,
+            tool_filter=resolved.tool_filter,
+            skill_filter=resolved.skill_filter,
+            shared_dir=resolved.shared_dir,
+            config=resolved.config,
+            memory_store=resolved.memory_store,
+            username=resolved.username,
+            allow_user_scope=resolved.allow_user_scope,
+            allowed_agents=resolved.allowed_agents,
             base_dir=base_dir,
+            run_envelope=resolved.run_envelope,
         )
 
     # Run in a copied context so the child's configure() call doesn't

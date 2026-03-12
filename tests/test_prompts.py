@@ -6,6 +6,8 @@ from operator_ai.agents import AgentInfo
 from operator_ai.config import Config
 from operator_ai.memory import MemoryStore
 from operator_ai.prompts import CACHE_BOUNDARY, assemble_system_prompt
+from operator_ai.run_prompt import ChatEnvelope, JobEnvelope, build_agent_system_prompt
+from operator_ai.transport.base import MessageContext
 
 
 def _make_config(tmp_path: Path | None) -> Config:
@@ -309,28 +311,67 @@ def test_skill_filter_passed_through(monkeypatch, tmp_path) -> None:
     assert captured["skill_filter"] is only_research
 
 
-# ── Subagent prompt compatibility ────────────────────────────────
+# ── Shared run-envelope prompt assembly ──────────────────────────
 
 
-def test_subagent_prompt_uses_shared_prompt_contract(monkeypatch) -> None:
+def test_build_agent_system_prompt_renders_chat_envelope(monkeypatch, tmp_path: Path) -> None:
     _stub_prompts(monkeypatch)
+    monkeypatch.setattr("operator_ai.prompts.load_configured_agents", lambda *_args, **_kwargs: [])
 
-    from operator_ai.tools.subagent import _build_subagent_prompt
-
-    prompt = _build_subagent_prompt(
-        {
-            "config": Config(
-                defaults={"models": ["test/model"]},
-                agents={"operator": {}},
-            )
-        },
-        target_agent="operator",
-        context="Focus on the timezone-aware interpretation.",
+    prompt = build_agent_system_prompt(
+        config=_make_config(tmp_path),
+        agent_name="operator",
+        username="gavin",
+        skill_filter=_make_config(tmp_path).agent_skill_filter("operator"),
+        run_envelope=ChatEnvelope(
+            context=MessageContext(
+                platform="slack",
+                channel_id="C123",
+                channel_name="#general",
+                user_id="slack:U123",
+                user_name="Gavin",
+                username="gavin",
+                roles=["admin", "developer"],
+                timezone="America/Vancouver",
+                chat_type="channel",
+            ),
+            transport_prompt="# Messaging\n\nUse send_message.",
+            is_private=True,
+        ),
     )
 
     stable, dynamic = prompt.split(CACHE_BOUNDARY, 1)
     assert stable.startswith("# System\n\n# Agent\n\noperator")
-    assert "You are a focused sub-agent running in an ephemeral child run." in dynamic
+    assert "# Messaging" in dynamic
     assert "# Context" in dynamic
+    assert "- Platform: slack" in dynamic
     assert "- Agent (You): operator" in dynamic
-    assert "Focus on the timezone-aware interpretation." in dynamic
+    assert "- Roles: admin, developer" in dynamic
+    assert "- Timezone: America/Vancouver" in dynamic
+
+
+def test_build_agent_system_prompt_renders_job_envelope(monkeypatch, tmp_path: Path) -> None:
+    _stub_prompts(monkeypatch)
+    monkeypatch.setattr("operator_ai.prompts.load_configured_agents", lambda *_args, **_kwargs: [])
+
+    prompt = build_agent_system_prompt(
+        config=_make_config(tmp_path),
+        agent_name="operator",
+        skill_filter=_make_config(tmp_path).agent_skill_filter("operator"),
+        run_envelope=JobEnvelope(
+            name="nightly-sync",
+            description="Sync data",
+            schedule="0 2 * * *",
+            path=tmp_path / "jobs" / "nightly-sync" / "JOB.md",
+            prerun_output="42 rows ready",
+            transport_prompt="# Messaging\n\nUse send_message.",
+        ),
+    )
+
+    stable, dynamic = prompt.split(CACHE_BOUNDARY, 1)
+    assert stable.startswith("# System\n\n# Agent\n\noperator")
+    assert "# Job" in dynamic
+    assert "- Name: nightly-sync" in dynamic
+    assert "# Messaging" in dynamic
+    assert "<prerun_output>" in dynamic
+    assert "42 rows ready" in dynamic

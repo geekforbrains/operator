@@ -16,6 +16,7 @@ from operator_ai.agent_runtime import resolve_base_dir
 from operator_ai.config import Config, ThinkingLevel, ensure_shared_symlink
 from operator_ai.context import prepare_context
 from operator_ai.memory import MemoryStore
+from operator_ai.run_prompt import RunEnvelope
 from operator_ai.tools import registry as tool_registry
 from operator_ai.tools import subagent
 from operator_ai.tools.context import get_user_context
@@ -31,6 +32,14 @@ _REASONING_EFFORT_BY_THINKING: dict[ThinkingLevel, str] = {
     "medium": "medium",
     "high": "high",
 }
+
+
+def _validate_model_response(response: Any) -> None:
+    choices = getattr(response, "choices", None)
+    if not choices:
+        raise RuntimeError("model returned no choices")
+    if getattr(choices[0], "message", None) is None:
+        raise RuntimeError("model returned choice without message")
 
 
 @lru_cache(maxsize=256)
@@ -172,6 +181,7 @@ async def run_agent(
     allow_user_scope: bool = False,
     allowed_agents: set[str] | None = None,
     base_dir: Path | None = None,
+    run_envelope: RunEnvelope | None = None,
     tool_results_keep: int = 5,
     tool_results_soft_trim: int = 10,
 ) -> str:
@@ -190,27 +200,28 @@ async def run_agent(
 
     # Configure subagent tool with current context
     subagent.configure(
-        {
-            "models": models,
-            "max_iterations": max_iterations,
-            "workspace": workspace,
-            "agent_name": agent_name,
-            "depth": depth,
-            "context_ratio": context_ratio,
-            "max_output_tokens": max_output_tokens,
-            "thinking": thinking,
-            "extra_tools": extra_tools,
-            "usage": usage,
-            "tool_filter": tool_filter,
-            "skill_filter": skill_filter,
-            "shared_dir": shared_dir,
-            "config": config,
-            "memory_store": memory_store,
-            "username": username,
-            "allow_user_scope": allow_user_scope,
-            "allowed_agents": allowed_agents,
-            "base_dir": resolve_base_dir(config=config, base_dir=base_dir),
-        }
+        subagent.SubagentContext(
+            models=models,
+            max_iterations=max_iterations,
+            workspace=workspace,
+            agent_name=agent_name or "",
+            depth=depth,
+            context_ratio=context_ratio,
+            max_output_tokens=max_output_tokens,
+            thinking=thinking,
+            extra_tools=list(extra_tools) if extra_tools else None,
+            usage=usage,
+            tool_filter=tool_filter,
+            skill_filter=skill_filter,
+            shared_dir=shared_dir,
+            config=config,
+            memory_store=memory_store,
+            username=username,
+            allow_user_scope=allow_user_scope,
+            allowed_agents=allowed_agents,
+            base_dir=resolve_base_dir(config=config, base_dir=base_dir),
+            run_envelope=run_envelope,
+        )
     )
 
     tools = tool_registry.get_tools()
@@ -293,6 +304,7 @@ async def run_agent(
 
             try:
                 response = await litellm.acompletion(**kwargs)
+                _validate_model_response(response)
                 if last_error is not None:
                     logger.info("%s recovered using fallback model %s", step, model)
                 last_error = None
@@ -319,9 +331,6 @@ async def run_agent(
                 last_error,
             )
             raise last_error
-
-        if not getattr(response, "choices", None):
-            raise RuntimeError("model returned no choices")
 
         if usage is not None and hasattr(response, "usage") and response.usage:
             u = response.usage

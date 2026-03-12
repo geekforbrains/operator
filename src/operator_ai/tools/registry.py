@@ -3,7 +3,8 @@ from __future__ import annotations
 import inspect
 import re
 from collections.abc import Callable
-from typing import Any, get_type_hints
+from types import UnionType
+from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
 _TOOLS: list[ToolDef] = []
 
@@ -74,7 +75,7 @@ def get_tools() -> list[ToolDef]:
 
 # --- schema generation from type hints + docstring ---
 
-_TYPE_MAP: dict[type, str] = {
+_JSON_TYPE_BY_PYTHON_TYPE: dict[type, str] = {
     str: "string",
     int: "integer",
     float: "number",
@@ -94,8 +95,7 @@ def _build_parameters(func: Callable[..., Any]) -> dict[str, Any]:
         if param_name in ("self", "cls"):
             continue
         hint = hints.get(param_name, str)
-        json_type = _TYPE_MAP.get(hint, "string")
-        prop: dict[str, Any] = {"type": json_type}
+        prop = _schema_for_annotation(hint)
         if param_name in doc_args:
             prop["description"] = doc_args[param_name]
         properties[param_name] = prop
@@ -110,6 +110,70 @@ def _build_parameters(func: Callable[..., Any]) -> dict[str, Any]:
     if required:
         schema["required"] = required
     return schema
+
+
+def _schema_for_annotation(annotation: Any) -> dict[str, Any]:
+    if annotation in _JSON_TYPE_BY_PYTHON_TYPE:
+        return {"type": _JSON_TYPE_BY_PYTHON_TYPE[annotation]}
+
+    origin = get_origin(annotation)
+
+    if origin is Literal:
+        return _schema_for_literal(get_args(annotation))
+
+    if origin in (list, set):
+        item_hint = get_args(annotation)[0] if get_args(annotation) else str
+        return {"type": "array", "items": _schema_for_annotation(item_hint)}
+
+    if origin is tuple:
+        item_hints = [arg for arg in get_args(annotation) if arg is not Ellipsis]
+        items = _schema_for_union(item_hints) if item_hints else {"type": "string"}
+        return {"type": "array", "items": items}
+
+    if origin in (Union, UnionType):
+        args = [arg for arg in get_args(annotation) if arg is not type(None)]
+        if not args:
+            return {"type": "string"}
+        if len(args) == 1:
+            return _schema_for_annotation(args[0])
+        return _schema_for_union(args)
+
+    return {"type": "string"}
+
+
+def _schema_for_literal(values: tuple[Any, ...]) -> dict[str, Any]:
+    if not values:
+        return {"type": "string"}
+
+    value_types = {type(value) for value in values}
+    if len(value_types) == 1:
+        value_type = next(iter(value_types))
+        json_type = _JSON_TYPE_BY_PYTHON_TYPE.get(value_type)
+        if json_type is not None:
+            return {"type": json_type, "enum": list(values)}
+
+    options = []
+    for value in values:
+        json_type = _JSON_TYPE_BY_PYTHON_TYPE.get(type(value))
+        if json_type is None:
+            continue
+        options.append({"type": json_type, "enum": [value]})
+    if len(options) == 1:
+        return options[0]
+    if options:
+        return {"anyOf": options}
+    return {"type": "string"}
+
+
+def _schema_for_union(args: list[Any]) -> dict[str, Any]:
+    options: list[dict[str, Any]] = []
+    for arg in args:
+        schema = _schema_for_annotation(arg)
+        if schema not in options:
+            options.append(schema)
+    if len(options) == 1:
+        return options[0]
+    return {"anyOf": options}
 
 
 def _parse_docstring_args(docstring: str) -> dict[str, str]:

@@ -26,7 +26,7 @@ from operator_ai.memory_index import MemoryIndex
 from operator_ai.memory_reindex import reindex_diff
 from operator_ai.message_timestamps import attach_message_created_at
 from operator_ai.messages import trim_incomplete_tool_turns
-from operator_ai.prompts import assemble_system_prompt
+from operator_ai.run_prompt import ChatEnvelope, build_agent_system_prompt
 from operator_ai.status import StatusIndicator
 from operator_ai.store import Store, get_store, reset_store
 from operator_ai.system_events import SystemEventBuffer
@@ -37,7 +37,7 @@ from operator_ai.tools.context import (
     set_user_context,
 )
 from operator_ai.tools.web import close_session
-from operator_ai.transport.base import Attachment, IncomingMessage, MessageContext, Transport
+from operator_ai.transport.base import Attachment, IncomingMessage, Transport
 from operator_ai.transport.registry import create_transport, transport_logger_names
 
 logger = logging.getLogger("operator")
@@ -377,13 +377,19 @@ class Dispatcher:
                 msg.root_message_id[:8],
             )
 
-            system_prompt = self._build_system_prompt(
-                agent_name,
-                ctx,
-                username,
-                transport,
-                msg.is_private,
+            run_envelope = ChatEnvelope(
+                context=ctx,
+                transport_prompt=transport.get_prompt_extra(),
+                is_private=msg.is_private,
+            )
+            system_prompt = build_agent_system_prompt(
+                config=self.config,
+                agent_name=agent_name,
+                memory_store=self.memory_store,
+                username=username,
+                skill_filter=self.config.agent_skill_filter(agent_name),
                 allowed_agents=allowed_agents,
+                run_envelope=run_envelope,
             )
             self.store.ensure_conversation(conversation_id)
             self.store.ensure_system_message(conversation_id, system_prompt)
@@ -396,6 +402,7 @@ class Dispatcher:
                 runtime,
                 conversation_id,
                 agent_name,
+                run_envelope,
                 allowed_agents=allowed_agents,
             )
         except asyncio.CancelledError:
@@ -415,6 +422,7 @@ class Dispatcher:
         runtime: ConversationRuntime,
         conversation_id: str,
         agent_name: str,
+        run_envelope: ChatEnvelope,
         *,
         allowed_agents: set[str] | None = None,
     ) -> None:
@@ -526,6 +534,7 @@ class Dispatcher:
                 allow_user_scope=msg.is_private,
                 allowed_agents=allowed_agents,
                 base_dir=self.config.base_dir,
+                run_envelope=run_envelope,
             )
             logger.info("conversation %s — done", conversation_id)
             if usage:
@@ -622,37 +631,6 @@ class Dispatcher:
             "Recent platform events since your last response:\n\n"
             + "\n".join(event_lines)
             + "\n</context_snapshot>"
-        )
-
-    def _build_system_prompt(
-        self,
-        agent_name: str,
-        ctx: MessageContext,
-        username: str,
-        transport: Transport,
-        is_private: bool,
-        allowed_agents: set[str] | None = None,
-    ) -> str:
-        sections: list[str] = []
-        transport_prompt = transport.get_prompt_extra()
-        if transport_prompt:
-            sections.append(transport_prompt)
-        context_prompt = ctx.to_prompt(
-            workspace=str(self.config.agent_workspace(agent_name)),
-            operator_home=str(self.config.base_dir),
-        )
-        if context_prompt:
-            sections.append(context_prompt)
-
-        return assemble_system_prompt(
-            config=self.config,
-            agent_name=agent_name,
-            memory_store=self.memory_store,
-            username=username,
-            is_private=is_private,
-            transport_extra="\n\n".join(sections),
-            skill_filter=self.config.agent_skill_filter(agent_name),
-            allowed_agents=allowed_agents,
         )
 
     async def _handle_stop_signal(

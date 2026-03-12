@@ -6,9 +6,10 @@ from textwrap import dedent
 
 from operator_ai.config import Config
 from operator_ai.job_specs import find_job_spec, scan_job_specs
-from operator_ai.jobs import Job, _build_job_prompt, _execute_job, scan_jobs
+from operator_ai.jobs import Job, _execute_job, scan_jobs
 from operator_ai.memory import MemoryStore
 from operator_ai.message_timestamps import MESSAGE_CREATED_AT_KEY
+from operator_ai.run_prompt import JobEnvelope, build_agent_system_prompt
 from operator_ai.store import JobState
 from operator_ai.tools import memory as memory_tools
 from operator_ai.tools.context import get_skill_filter
@@ -281,15 +282,17 @@ def test_build_job_prompt_includes_rules(monkeypatch, tmp_path: Path) -> None:
         path=tmp_path / "incident-digest" / "JOB.md",
     )
 
-    prompt = asyncio.run(
-        _build_job_prompt(
-            config=_config(tmp_path),
-            job=job,
-            agent_name="operator",
-            prerun_output="",
-            transport=None,
-            memory_store=store,
-        )
+    prompt = build_agent_system_prompt(
+        config=_config(tmp_path),
+        agent_name="operator",
+        memory_store=store,
+        skill_filter=_config(tmp_path).agent_skill_filter("operator"),
+        run_envelope=JobEnvelope(
+            name=job.name,
+            description=job.description,
+            schedule=job.schedule,
+            path=job.path,
+        ),
     )
 
     assert "Use terse status updates." in prompt
@@ -316,14 +319,17 @@ def test_build_job_prompt_includes_prerun_output(monkeypatch, tmp_path: Path) ->
         path=tmp_path / "scripted-job" / "JOB.md",
     )
 
-    prompt = asyncio.run(
-        _build_job_prompt(
-            config=_config(tmp_path),
-            job=job,
-            agent_name="operator",
+    prompt = build_agent_system_prompt(
+        config=_config(tmp_path),
+        agent_name="operator",
+        skill_filter=_config(tmp_path).agent_skill_filter("operator"),
+        run_envelope=JobEnvelope(
+            name=job.name,
+            description=job.description,
+            schedule=job.schedule,
+            path=job.path,
             prerun_output="fetched 42 items\nall healthy",
-            transport=None,
-        )
+        ),
     )
 
     assert "<prerun_output>" in prompt

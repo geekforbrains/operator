@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import sqlite3
+from typing import Literal
 
 from operator_ai.store import get_store
 from operator_ai.tools.context import UserContext, get_user_context, set_user_context
 from operator_ai.tools.registry import tool
+
+UserManagementAction = Literal["list", "add", "remove", "link", "unlink", "add_role", "remove_role"]
 
 
 @tool(
     description="Manage users, identities, and roles. Actions: list, add, remove, link, unlink, add_role, remove_role."
 )
 async def manage_users(
-    action: str,
+    action: UserManagementAction,
     username: str = "",
     role: str = "",
     transport: str = "",

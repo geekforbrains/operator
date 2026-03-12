@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from operator_ai.config import Config
 from operator_ai.tools.registry import ToolDef, _build_parameters, get_tools
 
@@ -129,6 +131,73 @@ def test_schema_float_param() -> None:
     assert params["properties"]["threshold"]["type"] == "number"
 
 
+def test_schema_literal_enum() -> None:
+    """Literal string parameters become enums."""
+
+    def example(scope: Literal["agent", "user", "global"] = "agent") -> str:  # noqa: ARG001
+        """Example.
+
+        Args:
+            scope: Memory scope.
+        """
+        return ""
+
+    params = _build_parameters(example)
+    assert params["properties"]["scope"]["type"] == "string"
+    assert params["properties"]["scope"]["enum"] == ["agent", "user", "global"]
+
+
+def test_schema_scalar_union_uses_any_of() -> None:
+    """Scalar unions preserve their member types."""
+
+    def example(value: str | int | float | bool) -> str:  # noqa: ARG001
+        """Example.
+
+        Args:
+            value: Scalar value.
+        """
+        return ""
+
+    params = _build_parameters(example)
+    any_of = params["properties"]["value"]["anyOf"]
+    assert {schema["type"] for schema in any_of} == {"string", "integer", "number", "boolean"}
+
+
+def test_schema_optional_param_preserves_inner_type() -> None:
+    """Optional parameters should use the inner type and remain optional by default."""
+
+    def example(label: str | None = None) -> str:  # noqa: ARG001
+        """Example.
+
+        Args:
+            label: Optional label.
+        """
+        return ""
+
+    params = _build_parameters(example)
+    assert params["properties"]["label"]["type"] == "string"
+    assert "label" not in params.get("required", [])
+
+
+def test_schema_array_param_preserves_item_type() -> None:
+    """Simple list annotations become array schemas."""
+
+    def example(names: list[str]) -> str:  # noqa: ARG001
+        """Example.
+
+        Args:
+            names: Input names.
+        """
+        return ""
+
+    params = _build_parameters(example)
+    assert params["properties"]["names"] == {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Input names.",
+    }
+
+
 def test_schema_no_self_cls() -> None:
     """self and cls parameters should be excluded from schema."""
 
@@ -179,6 +248,36 @@ def test_tooldef_to_openai_tool() -> None:
             },
         },
     }
+
+
+def test_registered_tool_schemas_preserve_real_enums_and_unions() -> None:
+    """Real tools should expose their closed sets and scalar unions."""
+
+    tools = {tool.name: tool for tool in get_tools()}
+
+    manage_users_action = tools["manage_users"].parameters["properties"]["action"]
+    assert manage_users_action["type"] == "string"
+    assert manage_users_action["enum"] == [
+        "list",
+        "add",
+        "remove",
+        "link",
+        "unlink",
+        "add_role",
+        "remove_role",
+    ]
+
+    state_value = tools["set_state"].parameters["properties"]["value"]
+    assert {schema["type"] for schema in state_value["anyOf"]} == {
+        "string",
+        "integer",
+        "number",
+        "boolean",
+    }
+
+    memory_scope = tools["save_rule"].parameters["properties"]["scope"]
+    assert memory_scope["type"] == "string"
+    assert memory_scope["enum"] == ["agent", "user", "global"]
 
 
 # ── Permission filtering (injection layer) ───────────────────────

@@ -50,7 +50,6 @@ class DummyTransport(Transport):
             channel_name="#general",
             user_id=msg.user_id,
             user_name="Alice",
-            agent_name=self.agent_name,
         )
 
     async def delete(
@@ -347,7 +346,7 @@ def test_stop_signal_cancels_active_conversation(
         def fake_system_prompt(*_args: Any, **_kwargs: Any) -> str:
             return "system"
 
-        monkeypatch.setattr(dispatcher, "_build_system_prompt", fake_system_prompt)
+        monkeypatch.setattr("operator_ai.main.build_agent_system_prompt", fake_system_prompt)
 
         started = asyncio.Event()
 
@@ -391,7 +390,7 @@ def test_stop_words_require_exact_match(
         def fake_system_prompt(*_args: Any, **_kwargs: Any) -> str:
             return "system"
 
-        monkeypatch.setattr(dispatcher, "_build_system_prompt", fake_system_prompt)
+        monkeypatch.setattr("operator_ai.main.build_agent_system_prompt", fake_system_prompt)
 
         started = asyncio.Event()
         allow_finish = asyncio.Event()

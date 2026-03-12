@@ -19,7 +19,7 @@ from operator_ai.job_specs import scan_job_specs
 from operator_ai.log_context import new_run_id, set_run_context
 from operator_ai.memory import MemoryStore
 from operator_ai.message_timestamps import attach_message_created_at
-from operator_ai.prompts import assemble_system_prompt, load_prompt
+from operator_ai.run_prompt import JobEnvelope, build_agent_system_prompt
 from operator_ai.store import Store
 from operator_ai.transport.base import Transport
 
@@ -155,43 +155,6 @@ async def _run_hook(
         return 1, f"[hook error: {e}]"
 
 
-async def _build_job_prompt(
-    config: Config,
-    job: Job,
-    agent_name: str,
-    prerun_output: str,
-    transport: Transport | None,
-    memory_store: MemoryStore | None = None,
-) -> str:
-    """Assemble the system prompt for a job execution."""
-    workspace = config.agent_workspace(agent_name)
-    job_details = (
-        f"- Name: {job.name}\n"
-        f"- Schedule: `{job.schedule}`\n"
-        f"- Description: {job.description}\n"
-        f"- Job file: `{job.path}`\n"
-        f"- Workspace: `{workspace}`\n"
-        f"- Operator home: `{config.base_dir}` (also `$OPERATOR_HOME`)"
-    )
-    job_ctx = load_prompt("job.md").replace("{job_details}", job_details)
-
-    sections: list[str] = [job_ctx]
-    if transport:
-        transport_prompt = transport.get_prompt_extra()
-        if transport_prompt:
-            sections.append(transport_prompt)
-    if prerun_output:
-        sections.append(f"<prerun_output>\n{prerun_output}\n</prerun_output>")
-
-    return assemble_system_prompt(
-        config=config,
-        agent_name=agent_name,
-        memory_store=memory_store,
-        transport_extra="\n\n".join(sections),
-        skill_filter=config.agent_skill_filter(agent_name),
-    )
-
-
 def _resolve_hook_script_path(job: Job, hook_name: str, script_path: str) -> Path | None:
     """Resolve a hook script path relative to the job directory."""
     try:
@@ -270,13 +233,20 @@ async def _execute_job(
         from operator_ai.tools import messaging
 
         transport = transports.get(agent_name)
-        system_prompt = await _build_job_prompt(
-            config,
-            job,
-            agent_name,
-            prerun_output,
-            transport,
+        run_envelope = JobEnvelope(
+            name=job.name,
+            description=job.description,
+            schedule=job.schedule,
+            path=job.path,
+            prerun_output=prerun_output,
+            transport_prompt=transport.get_prompt_extra() if transport else "",
+        )
+        system_prompt = build_agent_system_prompt(
+            config=config,
+            agent_name=agent_name,
             memory_store=memory_store,
+            skill_filter=config.agent_skill_filter(agent_name),
+            run_envelope=run_envelope,
         )
 
         messages: list[dict[str, Any]] = [
@@ -313,6 +283,7 @@ async def _execute_job(
             config=config,
             memory_store=memory_store,
             base_dir=config.base_dir,
+            run_envelope=run_envelope,
         )
 
         # Postrun hook

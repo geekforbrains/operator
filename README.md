@@ -28,7 +28,7 @@ guidelines behind Operator.
 - **Markdown-driven.** Agents, jobs, and skills are markdown files with YAML frontmatter. Version them in git, review them in PRs, edit them in your editor. No dashboards, no YAML hellscapes.
 - **Time-aware request history.** User requests, job prompts, and sub-agent task messages carry their creation time into model input, rendered like `[Monday, 2026-03-09T09:22:40-07:00]` in your configured timezone without mutating the stable system prompt.
 - **Portable thinking controls.** Set `thinking: off|low|medium|high` instead of provider-specific reasoning budgets. Operator maps it when the concrete model supports reasoning and drops it safely when it does not.
-- **Model-agnostic.** Supports 100+ LLM providers out of the box. Define fallback chains so if your primary model is down, the next one picks up automatically. Failover applies to agents, jobs, and other model-backed operations.
+- **Model-agnostic.** Supports 100+ LLM providers out of the box. Define fallback chains so if your primary model fails or returns an unusable response, the next one picks up automatically. Failover applies to agents, jobs, and other model-backed operations.
 - **Runs on your machine.** No SaaS, no cloud dependency, no data leaving your network. Install it, run it, own it.
 
 ## Quickstart
@@ -121,6 +121,24 @@ description: Deep research agent with web access.
 
 You are a research specialist. When given a topic...
 ```
+
+### Delegation
+
+Use `spawn_agent` to hand off focused work to a fresh child run. The child run
+switches to the target agent's own `AGENT.md`, workspace, memory, tools,
+skills, and permissions.
+
+Delegation preserves the current run mode instead of copying the parent
+conversation. A chat-triggered child run keeps the current session envelope
+(user, transport, current channel/thread bindings). A job-triggered child run
+stays in job mode and keeps job semantics.
+
+That preserved envelope is runtime context only. The child still runs with the
+target agent's own tools, skills, and permissions.
+
+This is an agent swap, not a conversation fork. The child starts with fresh
+conversation state, works the delegated task, and returns a final result to the
+parent.
 
 ### Jobs
 
@@ -237,7 +255,7 @@ Slack transport tools are namespaced with a `slack_` prefix: `slack_find_users`,
 
 ### Model failover
 
-`models` is a fallback chain. If the first model errors, rate limits, or goes down, the next one picks up. No downtime, no babysitting.
+`models` is a fallback chain. If the first model errors, rate limits, goes down, or returns an unusable response, the next one picks up. No downtime, no babysitting.
 
 ```yaml
 defaults:

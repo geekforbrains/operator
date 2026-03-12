@@ -575,8 +575,6 @@ class SlackTransport(Transport):
             user_id=msg.user_id,
             user_name=await self._resolve_user(raw_user_id),
             chat_type=chat_type,
-            agent_name=self.agent_name,
-            agent_platform_id=self._bot_user_id,
         )
 
     async def _resolve_user(self, user_id: str) -> str:

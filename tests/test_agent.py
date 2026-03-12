@@ -33,6 +33,12 @@ class _FakeResponse:
         self.usage = None
 
 
+class _EmptyResponse:
+    def __init__(self) -> None:
+        self.choices = []
+        self.usage = None
+
+
 async def _fake_tool(query: str) -> str:
     return query
 
@@ -335,3 +341,39 @@ def test_run_agent_fallback_omits_reasoning_effort_and_sanitizes_history(
     assert "provider_specific_fields" not in second_assistant
     assert "history for anthropic/claude-sonnet-4-6 dropped" in caplog.text
     assert "requested thinking=high but reasoning control unsupported" in caplog.text
+
+
+def test_run_agent_falls_back_on_unusable_empty_model_response(
+    monkeypatch,
+    tmp_path: Path,
+    caplog,
+) -> None:
+    calls: list[str] = []
+
+    async def fake_acompletion(**kwargs):
+        calls.append(kwargs["model"])
+        if kwargs["model"] == "anthropic/claude-sonnet-4-6":
+            return _EmptyResponse()
+        return _FakeResponse("done")
+
+    monkeypatch.setattr("operator_ai.agent.tool_registry.get_tools", lambda: [])
+    monkeypatch.setattr("operator_ai.agent.litellm.acompletion", fake_acompletion)
+
+    with caplog.at_level(logging.WARNING, logger="operator.agent"):
+        result = asyncio.run(
+            run_agent(
+                messages=[
+                    {"role": "system", "content": "# System"},
+                    {"role": "user", "content": "Try again"},
+                ],
+                models=["anthropic/claude-sonnet-4-6", "openai/gpt-4.1"],
+                max_iterations=1,
+                workspace=str(tmp_path),
+                context_ratio=0.0,
+                max_output_tokens=64,
+            )
+        )
+
+    assert result == "done"
+    assert calls == ["anthropic/claude-sonnet-4-6", "openai/gpt-4.1"]
+    assert "model returned no choices" in caplog.text

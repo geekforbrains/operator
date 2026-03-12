@@ -158,16 +158,34 @@ per-turn specifics last:
 3. available tools
 4. discovered skills
 5. known agents (inaccessible agents annotated, not filtered)
-6. transport-specific context (platform semantics, channel/user IDs, threading)
+6. run envelope for the current execution mode
 7. global rules
 8. agent rules
 9. user rules (when the interaction is user-scoped)
 
-Per-turn request context — the current user's identity (username, role,
-timezone), conversation state, thread snapshots, retrieved notes — is appended
-after this base stack. The username is resolved from transport identity mapping
-to the user record, not guessed. Agents use it for path-based lookups into
-user-scoped memory (`memory/users/<name>/`).
+The run envelope is what makes a direct chat run feel like chat and a job run
+feel like a job:
+
+- chat runs inject transport prompt content plus resolved session context
+  (platform, user, channel/thread semantics, timezone)
+- job runs inject job context plus generic transport prompt content when the
+  target agent has a transport
+
+The run envelope is execution context, not capability scope. Tools, skills,
+models, workspace, and permissions come from the active agent configuration.
+
+Turn-local input is added after this base stack through the message list rather
+than by mutating the stable system prompt. For chat runs, that includes the
+current inbound message plus any thread-history, system-event, or transport
+message-context blocks. For job runs, that is the job prompt body.
+
+When a run is user-scoped, the username is resolved from transport identity
+mapping to the user record, not guessed. That identity is used for user rules
+and path-based lookups into user-scoped memory (`memory/users/<name>/`).
+
+Delegated runs should use the same run-envelope prompt assembly path as direct
+runs. The child run changes agent identity and input task, but it should not
+fork a separate prompt-construction model.
 
 ### Context management
 
@@ -379,9 +397,30 @@ Subagent runs are ephemeral. They return a result to the parent run and are not
 treated as durable conversations that can be resumed later. Anything that needs
 to survive beyond the child run should be written to files, memory, or state.
 
+Delegation preserves the current execution mode while dropping parent
+conversation history:
+
+- chat-triggered child runs keep the current session envelope (user identity,
+  transport semantics, current channel/thread bindings) but start with a fresh
+  conversation state
+- job-triggered child runs stay in job mode, keep job semantics, and do not
+  acquire a synthetic user/chat context
+
+This is an agent swap, not a conversation fork. The child run gets a fresh
+input task, the target agent's own prompt/capability surface, and the current
+run mode's envelope.
+
+Preserving the current envelope does not preserve the parent's capability
+surface. Delegation keeps session/job context while switching to the target
+agent's own tools, skills, models, workspace, and permissions.
+
 Users may delegate only to agents they can access directly. Once an agent is
 selected, it runs with its own configured tool and skill surface. The parent
 agent's permissions are not inherited by the child run.
+
+Jobs are the exception to user-level access checks because they do not run with
+a user context. A job may delegate to another agent, but the child still runs
+with the target agent's configured tool and skill permissions.
 
 ### Skills
 
