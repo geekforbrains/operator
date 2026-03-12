@@ -18,18 +18,23 @@ class JobSpec:
     schedule: str
     enabled: bool
     description: str
-    path: str  # absolute path to the .md file
+    path: str  # absolute path to JOB.md
     agent: str = ""
     model: str = ""
 
 
 def scan_job_specs(jobs_dir: Path = JOBS_DIR) -> list[JobSpec]:
-    """Scan jobs/*.md for frontmatter."""
+    """Scan jobs/<name>/JOB.md for frontmatter."""
     if not jobs_dir.is_dir():
         return []
 
     specs: list[JobSpec] = []
-    for job_md in sorted(jobs_dir.glob("*.md")):
+    for child in sorted(jobs_dir.iterdir()):
+        if not child.is_dir():
+            continue
+        job_md = child / "JOB.md"
+        if not job_md.exists():
+            continue
         spec = _read_job_spec(job_md)
         if spec is not None:
             specs.append(spec)
@@ -38,7 +43,7 @@ def scan_job_specs(jobs_dir: Path = JOBS_DIR) -> list[JobSpec]:
 
 
 def _read_job_spec(job_md: Path) -> JobSpec | None:
-    """Parse a single job .md file into a JobSpec, or None on failure."""
+    """Parse a single JOB.md file into a JobSpec, or None on failure."""
     try:
         frontmatter = parse_frontmatter(job_md.read_text())
     except Exception:
@@ -47,7 +52,7 @@ def _read_job_spec(job_md: Path) -> JobSpec | None:
     if not frontmatter:
         return None
 
-    fallback_name = job_md.stem  # e.g. "daily-digest" from "daily-digest.md"
+    fallback_name = job_md.parent.name  # directory name
     return JobSpec(
         name=frontmatter.get("name", fallback_name),
         schedule=frontmatter.get("schedule", ""),
@@ -62,16 +67,16 @@ def _read_job_spec(job_md: Path) -> JobSpec | None:
 def find_job_spec(name: str, jobs_dir: Path = JOBS_DIR) -> JobSpec | None:
     """Find a single job spec by name.
 
-    Fast path: try reading jobs/<name>.md directly.
-    Slow path: scan all specs if the fast path misses (frontmatter name differs from filename).
+    Fast path: try reading jobs/<name>/JOB.md directly.
+    Slow path: scan all specs if the fast path misses (frontmatter name differs from dir name).
     """
-    job_md = jobs_dir / f"{name}.md"
+    job_md = jobs_dir / name / "JOB.md"
     if job_md.is_file():
         spec = _read_job_spec(job_md)
         if spec is not None and spec.name == name:
             return spec
 
-    # Frontmatter name may differ from filename -- fall back to scan
+    # Frontmatter name may differ from directory name -- fall back to scan
     for spec in scan_job_specs(jobs_dir):
         if spec.name == name:
             return spec

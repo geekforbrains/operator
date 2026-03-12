@@ -2,17 +2,21 @@
 
 Each tool has explicit typed parameters so the agent never composes raw
 YAML frontmatter.  The tools assemble the job file internally.
+
+Jobs live at ``jobs/<name>/JOB.md``.  Hook scripts default to
+``scripts/prerun.sh`` and ``scripts/postrun.sh`` inside the job directory.
 """
 
 from __future__ import annotations
 
+import shutil
 import stat
 from pathlib import Path
 
 import yaml
 from croniter import croniter
 
-from operator_ai.config import OPERATOR_DIR, ConfigError, load_config
+from operator_ai.config import ConfigError, load_config
 from operator_ai.frontmatter import rewrite_frontmatter
 from operator_ai.job_specs import JOBS_DIR
 from operator_ai.jobs import scan_jobs
@@ -24,20 +28,8 @@ from operator_ai.tools.registry import safe_name, tool
 # Helpers
 # ---------------------------------------------------------------------------
 
-
-def _safe_hook_relative_path(base_dir: Path, path: str) -> Path:
-    """Validate a hook script path is relative and stays within base_dir."""
-    if not path:
-        raise ValueError("hook script path cannot be empty")
-    p = Path(path)
-    if p.is_absolute():
-        raise ValueError(f"hook script path must be relative: {path!r}")
-    resolved = (base_dir / p).resolve()
-    try:
-        resolved.relative_to(base_dir.resolve())
-    except ValueError as e:
-        raise ValueError(f"hook script path escapes operator directory: {path!r}") from e
-    return resolved
+DEFAULT_PRERUN = "scripts/prerun.sh"
+DEFAULT_POSTRUN = "scripts/postrun.sh"
 
 
 def _validate_agent(agent: str) -> str | None:
@@ -54,25 +46,26 @@ def _validate_agent(agent: str) -> str | None:
     return None
 
 
-def _validate_hook(path: str, label: str) -> str | None:
-    """Return an error string if a hook path is invalid, else None."""
+def _validate_hook_path(job_dir: Path, path: str, label: str) -> str | None:
+    """Return an error string if a hook path escapes the job directory."""
     if not path:
         return None
+    p = Path(path)
+    if p.is_absolute():
+        return f"[error: {label} path must be relative: {path!r}]"
+    resolved = (job_dir / p).resolve()
     try:
-        _safe_hook_relative_path(OPERATOR_DIR, path)
-    except ValueError as e:
-        return f"[error: {label}: {e}]"
+        resolved.relative_to(job_dir.resolve())
+    except ValueError:
+        return f"[error: {label} path escapes job directory: {path!r}]"
     return None
 
 
-def _ensure_hook_script(path: str, hook_name: str, job_name: str) -> str | None:
+def _ensure_hook_script(job_dir: Path, path: str, hook_name: str, job_name: str) -> str | None:
     """Create a placeholder hook script if it doesn't exist. Returns error or None."""
     if not path:
         return None
-    try:
-        full_path = _safe_hook_relative_path(OPERATOR_DIR, path)
-    except ValueError as e:
-        return f"[error: {e}]"
+    full_path = job_dir / path
     full_path.parent.mkdir(parents=True, exist_ok=True)
     if not full_path.exists():
         full_path.write_text(f"#!/bin/bash\n# {hook_name} hook for {job_name}\nexit 0\n")
@@ -93,7 +86,7 @@ def _build_job_file(
     prerun: str = "",
     postrun: str = "",
 ) -> str:
-    """Assemble a job .md file from structured fields."""
+    """Assemble a JOB.md file from structured fields."""
     fm: dict = {"name": name, "schedule": schedule}
     if description:
         fm["description"] = description
@@ -115,13 +108,13 @@ def _build_job_file(
     return f"---\n{fm_text}\n---\n\n{prompt}\n"
 
 
-def _job_file(name: str) -> tuple[Path, str | None]:
-    """Resolve job file path, returning (path, error_or_none)."""
+def _job_dir(name: str) -> tuple[Path, str | None]:
+    """Resolve job directory path, returning (path, error_or_none)."""
     try:
         slug = safe_name(name, "job")
     except ValueError as e:
         return JOBS_DIR / "invalid", f"[error: {e}]"
-    return JOBS_DIR / f"{slug}.md", None
+    return JOBS_DIR / slug, None
 
 
 # ---------------------------------------------------------------------------
@@ -143,8 +136,8 @@ async def create_job(
     model: str = "",
     max_iterations: int = 0,
     enabled: bool = True,
-    prerun: str = "",
-    postrun: str = "",
+    prerun: bool = False,
+    postrun: bool = False,
 ) -> str:
     """Create a scheduled job.
 
@@ -157,8 +150,8 @@ async def create_job(
         model: Model override in litellm format (omit for agent default).
         max_iterations: Override max tool-call iterations (0 = agent default). Increase for complex multi-step jobs.
         enabled: Whether the job is active (default true).
-        prerun: Relative path to a prerun gate script. Non-zero exit skips the run. Stdout is injected into the prompt as context — use this to pre-filter data so the model works on concrete input, not raw fetching.
-        postrun: Relative path to a postrun script. Receives agent output on stdin. Non-zero exit marks the run failed.
+        prerun: Create a prerun gate script at scripts/prerun.sh. Non-zero exit skips the run. Stdout is injected into the prompt as context.
+        postrun: Create a postrun script at scripts/postrun.sh. Receives agent output on stdin. Non-zero exit marks the run failed.
     """
     if not name:
         return "[error: name is required]"
@@ -170,21 +163,18 @@ async def create_job(
     if not croniter.is_valid(schedule):
         return f"[error: invalid cron schedule: {schedule!r}]"
 
-    job_file, err = _job_file(name)
+    job_dir, err = _job_dir(name)
     if err:
         return err
-    if job_file.exists():
+    if job_dir.exists():
         return f"[error: job '{name}' already exists. Use update_job to modify.]"
 
     err = _validate_agent(agent)
     if err:
         return err
-    err = _validate_hook(prerun, "prerun")
-    if err:
-        return err
-    err = _validate_hook(postrun, "postrun")
-    if err:
-        return err
+
+    prerun_path = DEFAULT_PRERUN if prerun else ""
+    postrun_path = DEFAULT_POSTRUN if postrun else ""
 
     content = _build_job_file(
         name=name,
@@ -195,22 +185,18 @@ async def create_job(
         model=model,
         max_iterations=max_iterations,
         enabled=enabled,
-        prerun=prerun,
-        postrun=postrun,
+        prerun=prerun_path,
+        postrun=postrun_path,
     )
 
-    JOBS_DIR.mkdir(parents=True, exist_ok=True)
-    job_file.write_text(content)
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "JOB.md").write_text(content)
 
-    # Create placeholder hook scripts
-    err = _ensure_hook_script(prerun, "prerun", name)
-    if err:
-        return err
-    err = _ensure_hook_script(postrun, "postrun", name)
-    if err:
-        return err
+    # Create placeholder hook scripts inside the job directory
+    _ensure_hook_script(job_dir, prerun_path, "prerun", name)
+    _ensure_hook_script(job_dir, postrun_path, "postrun", name)
 
-    return f"Created job '{name}' at {job_file}"
+    return f"Created job '{name}' at {job_dir}"
 
 
 @tool(
@@ -228,8 +214,8 @@ async def update_job(
     model: str = "",
     max_iterations: int = 0,
     enabled: bool = True,
-    prerun: str = "",
-    postrun: str = "",
+    prerun: bool = False,
+    postrun: bool = False,
 ) -> str:
     """Update a scheduled job (full replace).
 
@@ -242,8 +228,8 @@ async def update_job(
         model: Model override in litellm format.
         max_iterations: Override max iterations (0 = agent default).
         enabled: Whether the job is active.
-        prerun: Relative path to prerun gate script.
-        postrun: Relative path to postrun script.
+        prerun: Enable a prerun gate script at scripts/prerun.sh.
+        postrun: Enable a postrun script at scripts/postrun.sh.
     """
     if not name:
         return "[error: name is required]"
@@ -255,21 +241,18 @@ async def update_job(
     if not croniter.is_valid(schedule):
         return f"[error: invalid cron schedule: {schedule!r}]"
 
-    job_file, err = _job_file(name)
+    job_dir, err = _job_dir(name)
     if err:
         return err
-    if not job_file.exists():
+    if not job_dir.exists():
         return f"[error: job '{name}' not found]"
 
     err = _validate_agent(agent)
     if err:
         return err
-    err = _validate_hook(prerun, "prerun")
-    if err:
-        return err
-    err = _validate_hook(postrun, "postrun")
-    if err:
-        return err
+
+    prerun_path = DEFAULT_PRERUN if prerun else ""
+    postrun_path = DEFAULT_POSTRUN if postrun else ""
 
     content = _build_job_file(
         name=name,
@@ -280,24 +263,20 @@ async def update_job(
         model=model,
         max_iterations=max_iterations,
         enabled=enabled,
-        prerun=prerun,
-        postrun=postrun,
+        prerun=prerun_path,
+        postrun=postrun_path,
     )
 
-    job_file.write_text(content)
+    (job_dir / "JOB.md").write_text(content)
 
-    # Create placeholder hook scripts if new hooks were added
-    err = _ensure_hook_script(prerun, "prerun", name)
-    if err:
-        return err
-    err = _ensure_hook_script(postrun, "postrun", name)
-    if err:
-        return err
+    # Create placeholder hook scripts if newly added
+    _ensure_hook_script(job_dir, prerun_path, "prerun", name)
+    _ensure_hook_script(job_dir, postrun_path, "postrun", name)
 
     return f"Updated job '{name}'"
 
 
-@tool(description="Delete a scheduled job.")
+@tool(description="Delete a scheduled job and its entire directory.")
 async def delete_job(name: str) -> str:
     """Delete a job.
 
@@ -307,13 +286,13 @@ async def delete_job(name: str) -> str:
     if not name:
         return "[error: name is required]"
 
-    job_file, err = _job_file(name)
+    job_dir, err = _job_dir(name)
     if err:
         return err
-    if not job_file.exists():
+    if not job_dir.exists():
         return f"[error: job '{name}' not found]"
 
-    job_file.unlink()
+    shutil.rmtree(job_dir)
     return f"Deleted job '{name}'"
 
 
@@ -327,13 +306,14 @@ async def enable_job(name: str) -> str:
     if not name:
         return "[error: name is required]"
 
-    job_file, err = _job_file(name)
+    job_dir, err = _job_dir(name)
     if err:
         return err
-    if not job_file.exists():
+    job_md = job_dir / "JOB.md"
+    if not job_md.exists():
         return f"[error: job '{name}' not found]"
 
-    if not rewrite_frontmatter(job_file, {"enabled": True}):
+    if not rewrite_frontmatter(job_md, {"enabled": True}):
         return f"[error: could not parse frontmatter for '{name}']"
     return f"Enabled job '{name}'"
 
@@ -348,13 +328,14 @@ async def disable_job(name: str) -> str:
     if not name:
         return "[error: name is required]"
 
-    job_file, err = _job_file(name)
+    job_dir, err = _job_dir(name)
     if err:
         return err
-    if not job_file.exists():
+    job_md = job_dir / "JOB.md"
+    if not job_md.exists():
         return f"[error: job '{name}' not found]"
 
-    if not rewrite_frontmatter(job_file, {"enabled": False}):
+    if not rewrite_frontmatter(job_md, {"enabled": False}):
         return f"[error: could not parse frontmatter for '{name}']"
     return f"Disabled job '{name}'"
 

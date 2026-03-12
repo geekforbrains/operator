@@ -1105,7 +1105,7 @@ def job_info(
     table.add_row("Schedule", job.schedule)
     table.add_row("Enabled", enabled)
     table.add_row("Description", job.description or "-")
-    table.add_row("Path", Text(job.path, style="dim"))
+    table.add_row("Path", Text(str(job.path), style="dim"))
 
     console.print(table)
     console.print()
@@ -1196,16 +1196,11 @@ def job_disable(
 
 
 def _toggle_job(name: str, *, enabled: bool) -> None:
-    jobs_dir = OPERATOR_DIR / "jobs"
-    job_md = jobs_dir / f"{name}.md"
-    if not job_md.exists():
-        # Try matching by frontmatter name
-        job = _find_job(name)
-        if job:
-            job_md = Path(job.path)
-        else:
-            print(f"Job '{name}' not found.")
-            raise typer.Exit(code=1)
+    job = _find_job(name)
+    if not job:
+        print(f"Job '{name}' not found.")
+        raise typer.Exit(code=1)
+    job_md = Path(job.path)
 
     if not rewrite_frontmatter(job_md, {"enabled": enabled}):
         print(f"Failed to update frontmatter in {job_md}")

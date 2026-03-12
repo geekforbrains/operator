@@ -41,7 +41,7 @@ class Job:
 
 
 def scan_jobs() -> list[Job]:
-    """Scan jobs/*.md via scan_job_specs, enrich with prompt/hooks/validation."""
+    """Scan jobs/<name>/JOB.md via scan_job_specs, enrich with prompt/hooks/validation."""
     jobs: list[Job] = []
 
     for spec in scan_job_specs():
@@ -87,7 +87,7 @@ async def _run_hook(
     stdin_data: str = "",
     timeout: int = 30,
 ) -> tuple[int, str]:
-    """Run a hook script, resolved relative to OPERATOR_DIR."""
+    """Run a hook script, resolved relative to the job directory."""
     script_path = job.hooks.get(hook_name, "")
     if not script_path:
         return 0, ""
@@ -102,9 +102,11 @@ async def _run_hook(
         logger.warning("Hook script is not a file: %s", full_path)
         return 1, f"[hook script is not a file: {full_path}]"
 
+    job_dir = str(job.path.parent)
     env = {
         **os.environ,
         "JOB_NAME": job.name,
+        "JOB_DIR": job_dir,
         "OPERATOR_AGENT": agent_name or job.agent,
         "OPERATOR_HOME": str(OPERATOR_DIR),
         "OPERATOR_DB": str(DB_PATH),
@@ -119,7 +121,7 @@ async def _run_hook(
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.STDOUT,
-            cwd=str(OPERATOR_DIR),
+            cwd=job_dir,
             env=env,
         )
         stdout, _ = await asyncio.wait_for(
@@ -187,7 +189,7 @@ async def _build_job_prompt(
 
 
 def _resolve_hook_script_path(job: Job, hook_name: str, script_path: str) -> Path | None:
-    """Resolve a hook script path relative to OPERATOR_DIR."""
+    """Resolve a hook script path relative to the job directory."""
     try:
         rel_path = Path(script_path)
     except Exception:
@@ -203,13 +205,14 @@ def _resolve_hook_script_path(job: Job, hook_name: str, script_path: str) -> Pat
         )
         return None
 
+    job_dir = job.path.parent
     try:
-        resolved = (OPERATOR_DIR / rel_path).resolve()
-        resolved.relative_to(OPERATOR_DIR.resolve())
+        resolved = (job_dir / rel_path).resolve()
+        resolved.relative_to(job_dir.resolve())
         return resolved
     except Exception:
         logger.warning(
-            "Hook %s path escapes OPERATOR_DIR in job '%s': %s",
+            "Hook %s path escapes job directory in job '%s': %s",
             hook_name,
             job.name,
             script_path,

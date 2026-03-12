@@ -86,9 +86,10 @@ def _config() -> Config:
     )
 
 
-def _write_job(jobs_dir: Path, filename: str, content: str) -> Path:
-    jobs_dir.mkdir(parents=True, exist_ok=True)
-    p = jobs_dir / filename
+def _write_job(jobs_dir: Path, name: str, content: str) -> Path:
+    job_dir = jobs_dir / name
+    job_dir.mkdir(parents=True, exist_ok=True)
+    p = job_dir / "JOB.md"
     p.write_text(content)
     return p
 
@@ -98,10 +99,10 @@ def _write_job(jobs_dir: Path, filename: str, content: str) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def test_scan_job_specs_finds_flat_md_files(tmp_path: Path) -> None:
+def test_scan_job_specs_finds_job_dirs(tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
-    _write_job(jobs_dir, "daily-digest.md", JOB_MD)
-    _write_job(jobs_dir, "disabled-job.md", JOB_MD_DISABLED)
+    _write_job(jobs_dir, "daily-digest", JOB_MD)
+    _write_job(jobs_dir, "disabled-job", JOB_MD_DISABLED)
 
     specs = scan_job_specs(jobs_dir)
     assert len(specs) == 2
@@ -109,29 +110,27 @@ def test_scan_job_specs_finds_flat_md_files(tmp_path: Path) -> None:
     assert names == {"daily-digest", "disabled-job"}
 
 
-def test_scan_job_specs_ignores_subdirectories(tmp_path: Path) -> None:
-    """Ensure old-style jobs/<name>/JOB.md pattern is not picked up."""
+def test_scan_job_specs_ignores_flat_files(tmp_path: Path) -> None:
+    """Flat .md files at jobs/ root are ignored."""
     jobs_dir = tmp_path / "jobs"
-    # Create old-style layout -- should be ignored
-    old_dir = jobs_dir / "old-job"
-    old_dir.mkdir(parents=True)
-    (old_dir / "JOB.md").write_text(JOB_MD)
+    jobs_dir.mkdir(parents=True)
+    (jobs_dir / "stray.md").write_text(JOB_MD)
 
-    # Create new-style flat file
-    _write_job(jobs_dir, "new-job.md", JOB_MD)
+    # Only directory-based jobs count
+    _write_job(jobs_dir, "real-job", JOB_MD)
 
     specs = scan_job_specs(jobs_dir)
     assert len(specs) == 1
     assert specs[0].name == "daily-digest"  # name from frontmatter
 
 
-def test_scan_job_specs_falls_back_to_stem_for_name(tmp_path: Path) -> None:
+def test_scan_job_specs_falls_back_to_dir_name(tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
-    _write_job(jobs_dir, "my-cron.md", JOB_MD_NO_NAME)
+    _write_job(jobs_dir, "my-cron", JOB_MD_NO_NAME)
 
     specs = scan_job_specs(jobs_dir)
     assert len(specs) == 1
-    assert specs[0].name == "my-cron"  # uses filename stem when no name in frontmatter
+    assert specs[0].name == "my-cron"  # uses directory name when no name in frontmatter
 
 
 def test_scan_job_specs_empty_dir(tmp_path: Path) -> None:
@@ -147,8 +146,11 @@ def test_scan_job_specs_nonexistent_dir(tmp_path: Path) -> None:
 
 def test_scan_job_specs_skips_bad_frontmatter(tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
-    _write_job(jobs_dir, "good.md", JOB_MD)
-    _write_job(jobs_dir, "bad.md", "no frontmatter here")
+    _write_job(jobs_dir, "good", JOB_MD)
+
+    bad_dir = jobs_dir / "bad"
+    bad_dir.mkdir(parents=True)
+    (bad_dir / "JOB.md").write_text("no frontmatter here")
 
     specs = scan_job_specs(jobs_dir)
     assert len(specs) == 1
@@ -169,7 +171,7 @@ def test_scan_job_specs_reads_all_fields(tmp_path: Path) -> None:
 
         Do the thing.
     """)
-    _write_job(jobs_dir, "full-job.md", content)
+    _write_job(jobs_dir, "full-job", content)
 
     specs = scan_job_specs(jobs_dir)
     assert len(specs) == 1
@@ -180,7 +182,7 @@ def test_scan_job_specs_reads_all_fields(tmp_path: Path) -> None:
     assert spec.agent == "cora"
     assert spec.model == "gpt-4"
     assert spec.enabled is True
-    assert spec.path.endswith("full-job.md")
+    assert spec.path.endswith("JOB.md")
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +192,7 @@ def test_scan_job_specs_reads_all_fields(tmp_path: Path) -> None:
 
 def test_find_job_spec_fast_path(tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
-    _write_job(jobs_dir, "daily-digest.md", JOB_MD)
+    _write_job(jobs_dir, "daily-digest", JOB_MD)
 
     spec = find_job_spec("daily-digest", jobs_dir)
     assert spec is not None
@@ -198,9 +200,9 @@ def test_find_job_spec_fast_path(tmp_path: Path) -> None:
 
 
 def test_find_job_spec_slow_path(tmp_path: Path) -> None:
-    """When frontmatter name differs from filename, slow path finds it."""
+    """When frontmatter name differs from dir name, slow path finds it."""
     jobs_dir = tmp_path / "jobs"
-    _write_job(jobs_dir, "something-else.md", JOB_MD)  # frontmatter name is "daily-digest"
+    _write_job(jobs_dir, "something-else", JOB_MD)  # frontmatter name is "daily-digest"
 
     spec = find_job_spec("daily-digest", jobs_dir)
     assert spec is not None
@@ -218,9 +220,9 @@ def test_find_job_spec_not_found(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_scan_jobs_flat_files(monkeypatch, tmp_path: Path) -> None:
+def test_scan_jobs_from_dirs(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
-    _write_job(jobs_dir, "daily-digest.md", JOB_MD)
+    _write_job(jobs_dir, "daily-digest", JOB_MD)
 
     monkeypatch.setattr("operator_ai.job_specs.JOBS_DIR", jobs_dir)
     monkeypatch.setattr("operator_ai.jobs.scan_job_specs", lambda: scan_job_specs(jobs_dir))
@@ -230,12 +232,12 @@ def test_scan_jobs_flat_files(monkeypatch, tmp_path: Path) -> None:
     job = jobs[0]
     assert job.name == "daily-digest"
     assert job.prompt == "Summarize the daily activity."
-    assert job.path == jobs_dir / "daily-digest.md"
+    assert job.path == jobs_dir / "daily-digest" / "JOB.md"
 
 
 def test_scan_jobs_skips_invalid_schedule(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
-    _write_job(jobs_dir, "bad-schedule.md", JOB_MD_INVALID_SCHEDULE)
+    _write_job(jobs_dir, "bad-schedule", JOB_MD_INVALID_SCHEDULE)
 
     monkeypatch.setattr("operator_ai.job_specs.JOBS_DIR", jobs_dir)
     monkeypatch.setattr("operator_ai.jobs.scan_job_specs", lambda: scan_job_specs(jobs_dir))
@@ -247,7 +249,7 @@ def test_scan_jobs_skips_invalid_schedule(monkeypatch, tmp_path: Path) -> None:
 def test_scan_jobs_includes_disabled(monkeypatch, tmp_path: Path) -> None:
     """scan_jobs includes disabled jobs (filtering is done at tick time)."""
     jobs_dir = tmp_path / "jobs"
-    _write_job(jobs_dir, "disabled-job.md", JOB_MD_DISABLED)
+    _write_job(jobs_dir, "disabled-job", JOB_MD_DISABLED)
 
     monkeypatch.setattr("operator_ai.job_specs.JOBS_DIR", jobs_dir)
     monkeypatch.setattr("operator_ai.jobs.scan_job_specs", lambda: scan_job_specs(jobs_dir))
@@ -282,7 +284,7 @@ def test_build_job_prompt_includes_rules(monkeypatch, tmp_path: Path) -> None:
         description="Summarize incidents",
         schedule="0 8 * * *",
         prompt="Summarize the latest incidents.",
-        path=tmp_path / "incident-digest.md",
+        path=tmp_path / "incident-digest" / "JOB.md",
     )
 
     prompt = asyncio.run(
@@ -317,7 +319,7 @@ def test_build_job_prompt_includes_prerun_output(monkeypatch, tmp_path: Path) ->
         description="Job with prerun",
         schedule="0 8 * * *",
         prompt="Process the data.",
-        path=tmp_path / "scripted-job.md",
+        path=tmp_path / "scripted-job" / "JOB.md",
     )
 
     prompt = asyncio.run(
@@ -356,7 +358,7 @@ def test_execute_job_configures_memory_and_skill_filter(monkeypatch, tmp_path: P
         description="Summarize incidents",
         schedule="0 8 * * *",
         prompt="Summarize the latest incidents.",
-        path=tmp_path / "incident-digest.md",
+        path=tmp_path / "incident-digest" / "JOB.md",
     )
     config = Config(
         defaults={"models": ["test/model"]},
@@ -382,10 +384,9 @@ def test_execute_job_configures_memory_and_skill_filter(monkeypatch, tmp_path: P
 # ---------------------------------------------------------------------------
 
 
-def test_create_job_writes_flat_file(monkeypatch, tmp_path: Path) -> None:
+def test_create_job_writes_directory(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
-    monkeypatch.setattr("operator_ai.tools.jobs.OPERATOR_DIR", tmp_path)
     monkeypatch.setattr(
         "operator_ai.tools.jobs.load_config",
         lambda: _config(),
@@ -404,22 +405,20 @@ def test_create_job_writes_flat_file(monkeypatch, tmp_path: Path) -> None:
     )
     assert "Created job" in result
 
-    job_file = jobs_dir / "daily-digest.md"
-    assert job_file.exists()
-    content = job_file.read_text()
+    job_dir = jobs_dir / "daily-digest"
+    assert job_dir.is_dir()
+    job_md = job_dir / "JOB.md"
+    assert job_md.exists()
+    content = job_md.read_text()
     assert "schedule:" in content
     assert "0 8 * * *" in content
     assert "Summarize the daily activity." in content
 
-    # Old-style directory should NOT be created
-    assert not (jobs_dir / "daily-digest").is_dir()
-
 
 def test_create_job_rejects_duplicate(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
-    _write_job(jobs_dir, "daily-digest.md", JOB_MD)
+    _write_job(jobs_dir, "daily-digest", JOB_MD)
     monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
-    monkeypatch.setattr("operator_ai.tools.jobs.OPERATOR_DIR", tmp_path)
     monkeypatch.setattr(
         "operator_ai.tools.jobs.load_config",
         lambda: _config(),
@@ -434,7 +433,6 @@ def test_create_job_rejects_duplicate(monkeypatch, tmp_path: Path) -> None:
 def test_create_job_rejects_missing_schedule(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
-    monkeypatch.setattr("operator_ai.tools.jobs.OPERATOR_DIR", tmp_path)
 
     from operator_ai.tools.jobs import create_job
 
@@ -445,7 +443,6 @@ def test_create_job_rejects_missing_schedule(monkeypatch, tmp_path: Path) -> Non
 def test_create_job_rejects_invalid_cron(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
-    monkeypatch.setattr("operator_ai.tools.jobs.OPERATOR_DIR", tmp_path)
 
     from operator_ai.tools.jobs import create_job
 
@@ -456,7 +453,6 @@ def test_create_job_rejects_invalid_cron(monkeypatch, tmp_path: Path) -> None:
 def test_create_job_rejects_unknown_agent(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
-    monkeypatch.setattr("operator_ai.tools.jobs.OPERATOR_DIR", tmp_path)
     monkeypatch.setattr(
         "operator_ai.tools.jobs.load_config",
         lambda: _config(),
@@ -473,7 +469,6 @@ def test_create_job_rejects_unknown_agent(monkeypatch, tmp_path: Path) -> None:
 def test_create_job_rejects_missing_prompt(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
-    monkeypatch.setattr("operator_ai.tools.jobs.OPERATOR_DIR", tmp_path)
 
     from operator_ai.tools.jobs import create_job
 
@@ -483,9 +478,8 @@ def test_create_job_rejects_missing_prompt(monkeypatch, tmp_path: Path) -> None:
 
 def test_update_job_overwrites_file(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
-    _write_job(jobs_dir, "daily-digest.md", JOB_MD)
+    _write_job(jobs_dir, "daily-digest", JOB_MD)
     monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
-    monkeypatch.setattr("operator_ai.tools.jobs.OPERATOR_DIR", tmp_path)
     monkeypatch.setattr(
         "operator_ai.tools.jobs.load_config",
         lambda: _config(),
@@ -503,7 +497,7 @@ def test_update_job_overwrites_file(monkeypatch, tmp_path: Path) -> None:
     )
     assert "Updated job" in result
 
-    content = (jobs_dir / "daily-digest.md").read_text()
+    content = (jobs_dir / "daily-digest" / "JOB.md").read_text()
     assert "0 9 * * *" in content
     assert "Updated prompt." in content
     assert "Updated description" in content
@@ -520,16 +514,16 @@ def test_update_job_not_found(monkeypatch, tmp_path: Path) -> None:
     assert "not found" in result
 
 
-def test_delete_job_removes_flat_file(monkeypatch, tmp_path: Path) -> None:
+def test_delete_job_removes_directory(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
-    _write_job(jobs_dir, "daily-digest.md", JOB_MD)
+    _write_job(jobs_dir, "daily-digest", JOB_MD)
     monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
 
     from operator_ai.tools.jobs import delete_job
 
     result = asyncio.run(delete_job(name="daily-digest"))
     assert "Deleted job" in result
-    assert not (jobs_dir / "daily-digest.md").exists()
+    assert not (jobs_dir / "daily-digest").exists()
 
 
 def test_delete_job_not_found(monkeypatch, tmp_path: Path) -> None:
@@ -545,7 +539,7 @@ def test_delete_job_not_found(monkeypatch, tmp_path: Path) -> None:
 
 def test_enable_disable_job(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
-    _write_job(jobs_dir, "daily-digest.md", JOB_MD)
+    _write_job(jobs_dir, "daily-digest", JOB_MD)
     monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
 
     from operator_ai.tools.jobs import disable_job, enable_job
@@ -574,7 +568,6 @@ def test_enable_disable_job(monkeypatch, tmp_path: Path) -> None:
 def test_create_job_with_hooks_creates_scripts(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
-    monkeypatch.setattr("operator_ai.tools.jobs.OPERATOR_DIR", tmp_path)
     monkeypatch.setattr(
         "operator_ai.tools.jobs.load_config",
         lambda: _config(),
@@ -588,27 +581,28 @@ def test_create_job_with_hooks_creates_scripts(monkeypatch, tmp_path: Path) -> N
             schedule="0 8 * * *",
             prompt="Do the hooked thing.",
             description="Job with hooks",
-            prerun="scripts/check.sh",
-            postrun="scripts/notify.sh",
+            prerun=True,
+            postrun=True,
         )
     )
     assert "Created job" in result
 
-    # Hook scripts are created relative to OPERATOR_DIR (tmp_path here)
-    prerun = tmp_path / "scripts" / "check.sh"
-    postrun = tmp_path / "scripts" / "notify.sh"
+    # Hook scripts are created inside the job directory
+    job_dir = jobs_dir / "hooked-job"
+    prerun = job_dir / "scripts" / "prerun.sh"
+    postrun = job_dir / "scripts" / "postrun.sh"
     assert prerun.exists()
     assert postrun.exists()
     assert prerun.read_text().startswith("#!/bin/bash")
     assert postrun.read_text().startswith("#!/bin/bash")
 
     # Verify job file has hooks in frontmatter
-    job_file = jobs_dir / "hooked-job.md"
-    content = job_file.read_text()
+    job_md = job_dir / "JOB.md"
+    content = job_md.read_text()
     assert "prerun" in content
-    assert "scripts/check.sh" in content
+    assert "scripts/prerun.sh" in content
     assert "postrun" in content
-    assert "scripts/notify.sh" in content
+    assert "scripts/postrun.sh" in content
 
 
 # ---------------------------------------------------------------------------
@@ -643,8 +637,8 @@ def test_build_job_file_full() -> None:
         model="gpt-4",
         max_iterations=15,
         enabled=True,
-        prerun="scripts/pre.sh",
-        postrun="scripts/post.sh",
+        prerun="scripts/prerun.sh",
+        postrun="scripts/postrun.sh",
     )
     assert "name: full-job" in content
     assert "description: Full description" in content
