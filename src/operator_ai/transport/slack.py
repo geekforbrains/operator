@@ -20,7 +20,7 @@ from typing_extensions import override
 from operator_ai.store import Store
 from operator_ai.tools.registry import ToolDef
 from operator_ai.transport.base import Attachment, IncomingMessage, MessageContext, Transport
-from operator_ai.transport.registry import SetupSecret, SetupTransport, TransportDefinition
+from operator_ai.transport.registry import TransportDefinition
 
 logger = logging.getLogger("operator.transport.slack")
 
@@ -30,9 +30,6 @@ _mrkdwn = SlackMarkdownConverter()
 
 MAX_API_ATTEMPTS = 3
 BASE_RETRY_SECONDS = 1.0
-
-_SLACK_USER_ID_RE = re.compile(r"^(?:slack:)?(?:<@)?([UW][A-Z0-9]+)(?:\|[^>]+)?>?$", re.I)
-
 
 @dataclass(frozen=True)
 class SlackUserProfile:
@@ -110,15 +107,6 @@ def _resolve_env_var(env_var: str, agent_name: str) -> str:
     if not value:
         raise ValueError(f"Agent '{agent_name}' transport: env var '{env_var}' not set")
     return value
-
-
-def _normalize_slack_identity(value: str) -> str:
-    match = _SLACK_USER_ID_RE.match(value.strip())
-    if not match:
-        raise ValueError("Use a Slack user ID like U123ABC45.")
-    return match.group(1).upper()
-
-
 class SlackTransport(Transport):
     def __init__(
         self,
@@ -1132,49 +1120,10 @@ def create_slack_transport(
     )
 
 
-SLACK_SETUP_TRANSPORT = SetupTransport(
-    name="slack",
-    label="Slack",
-    description="Slack Socket Mode bot",
-    identity_prompt="Your Slack user ID",
-    identity_help="Paste your Slack user ID, for example U123ABC45.",
-    secrets=(
-        SetupSecret(
-            env_vars=("SLACK_BOT_TOKEN",),
-            prompt="Slack bot token (xoxb-*)",
-            warning_prefix="xoxb-",
-        ),
-        SetupSecret(
-            env_vars=("SLACK_APP_TOKEN",),
-            prompt="Slack app token (xapp-*)",
-            warning_prefix="xapp-",
-        ),
-    ),
-    env_defaults={
-        "bot_token": "SLACK_BOT_TOKEN",
-        "app_token": "SLACK_APP_TOKEN",
-    },
-    settings_defaults={
-        "include_archived_channels": False,
-        "inject_channels_into_prompt": True,
-        "inject_users_into_prompt": True,
-        "expand_mentions": True,
-    },
-    run_hint="DM the Slack bot or @mention it in a channel where it is invited.",
-    next_steps=(
-        "Run [bold]operator[/bold] in a terminal (or [bold]operator service install[/bold]).",
-        "DM your Slack bot or @mention it in an invited channel.",
-        'Send a first message like [bold]"hello"[/bold].',
-    ),
-    normalize_identity=_normalize_slack_identity,
-)
-
-
 SLACK_TRANSPORT_DEFINITION = TransportDefinition(
     type_name="slack",
     create_transport=create_slack_transport,
     normalize_config=normalize_slack_transport_config,
     secret_env_vars=slack_secret_env_vars,
     logger_names=("slack_bolt", "slack_sdk"),
-    setup=SLACK_SETUP_TRANSPORT,
 )

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import getpass
 import json
 import logging
 import os
@@ -13,9 +12,7 @@ import subprocess
 import sys
 import textwrap
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import typer
 import yaml
@@ -26,10 +23,11 @@ from rich.text import Text
 
 import operator_ai.tools  # noqa: F401
 from operator_ai.agents import scan_agents
-from operator_ai.config import LOGS_DIR, OPERATOR_DIR, ConfigError, load_config, parse_env_file
+from operator_ai.config import LOGS_DIR, OPERATOR_DIR, ConfigError, load_config
 from operator_ai.frontmatter import rewrite_frontmatter
 from operator_ai.job_specs import find_job_spec, scan_job_specs
 from operator_ai.jobs import run_job_now
+from operator_ai.layout import ensure_layout
 from operator_ai.log_context import setup_logging
 from operator_ai.main import async_main
 from operator_ai.memory import MemoryStore
@@ -38,16 +36,10 @@ from operator_ai.memory_reindex import reindex_diff, reindex_full
 from operator_ai.message_timestamps import format_ts
 from operator_ai.prompts import load_prompt
 from operator_ai.skills import scan_skills
-from operator_ai.store import USERNAME_RE, get_store
+from operator_ai.store import get_store
 from operator_ai.tools.registry import get_tools
 from operator_ai.transport.cli import CliTransport
-from operator_ai.transport.registry import (
-    SetupSecret,
-    SetupTransport,
-    default_setup_transport,
-    list_setup_transports,
-    transport_logger_names,
-)
+from operator_ai.transport.registry import transport_logger_names
 
 console = Console()
 logger = logging.getLogger("operator.cli")
@@ -128,15 +120,7 @@ def _is_macos() -> bool:
 # ── Init command ──────────────────────────────────────────────
 
 _DEFAULT_AGENT_NAME = "operator"
-_DEFAULT_PROVIDER = "anthropic"
-
-
-@dataclass(frozen=True)
-class SetupProvider:
-    name: str
-    label: str
-    default_model: str
-    secret: SetupSecret
+_DEFAULT_MODEL = "anthropic/claude-sonnet-4-6"
 
 
 @dataclass(frozen=True)
@@ -148,66 +132,25 @@ class ScaffoldResult:
     wrote_env_file: bool
 
 
-@dataclass(frozen=True)
-class ResolvedSecret:
-    env_var: str
-    value: str
-
-
-_SETUP_PROVIDERS: dict[str, SetupProvider] = {
-    "anthropic": SetupProvider(
-        name="anthropic",
-        label="Anthropic",
-        default_model="anthropic/claude-sonnet-4-6",
-        secret=SetupSecret(
-            env_vars=("ANTHROPIC_API_KEY",),
-            prompt="Anthropic API key (sk-ant-*)",
-            warning_prefix="sk-ant-",
-        ),
-    ),
-    "openai": SetupProvider(
-        name="openai",
-        label="OpenAI",
-        default_model="openai/gpt-4.1",
-        secret=SetupSecret(
-            env_vars=("OPENAI_API_KEY",),
-            prompt="OpenAI API key (sk-*)",
-            warning_prefix="sk-",
-        ),
-    ),
-    "gemini": SetupProvider(
-        name="gemini",
-        label="Gemini",
-        default_model="gemini/gemini-2.5-flash",
-        secret=SetupSecret(
-            env_vars=("GEMINI_API_KEY", "GOOGLE_API_KEY"),
-            prompt="Gemini API key",
-        ),
-    ),
-}
-_DEFAULT_MODEL = _SETUP_PROVIDERS[_DEFAULT_PROVIDER].default_model
-
-
-def _build_starter_config(
-    *,
-    default_model: str = _DEFAULT_MODEL,
-    transport_name: str | None = None,
-    transport_env: dict[str, object] | None = None,
-    transport_settings: dict[str, object] | None = None,
-) -> str:
-    selected_transport = default_setup_transport()
-    resolved_transport_name = transport_name or selected_transport.name
-    resolved_transport_env = transport_env or dict(selected_transport.env_defaults)
-    resolved_transport_settings = transport_settings or dict(selected_transport.settings_defaults)
+def _build_starter_config(*, default_model: str = _DEFAULT_MODEL) -> str:
     transport_data: dict[str, object] = {
-        "type": resolved_transport_name,
-        "env": resolved_transport_env,
-        "settings": resolved_transport_settings,
+        "type": "slack",
+        "env": {
+            "bot_token": "SLACK_BOT_TOKEN",
+            "app_token": "SLACK_APP_TOKEN",
+        },
+        "settings": {
+            "include_archived_channels": False,
+            "inject_channels_into_prompt": True,
+            "inject_users_into_prompt": True,
+            "expand_mentions": True,
+        },
     }
     transport_block = yaml.safe_dump(transport_data, sort_keys=False).rstrip().splitlines()
 
     lines = [
         "# Operator configuration",
+        "# Review and edit this file before your first run.",
         "# Docs: https://operator.geekforbrains.com",
         "# Repo: https://github.com/geekforbrains/operator",
         "",
@@ -221,13 +164,15 @@ def _build_starter_config(
         "",
         "defaults:",
         "  # Model fallback chain",
-        "  # first model is preferred, rest are fallbacks.",
+        "  # First model is preferred, the rest are fallbacks.",
         "  # Uses LiteLLM format: provider/model-name",
         "  models:",
         f'    - "{default_model}"',
         '    # - "some-provider/some-other-model"',
-        "  max_iterations: 50",
+        '  thinking: "off"',
+        "  max_iterations: 25",
         "  context_ratio: 0.5",
+        "  hook_timeout: 30",
         "",
         "# Permission groups — clusters of related tools that can be referenced",
         "# as @groupname in agent permissions. Modify, split, or extend as needed.",
@@ -305,6 +250,7 @@ def _scaffold_operator_home(
     home: Path,
     *,
     config_text: str = _STARTER_CONFIG,
+    overwrite_config: bool = False,
     emit_output: bool = True,
 ) -> ScaffoldResult:
     config_file = home / "operator.yaml"
@@ -347,6 +293,7 @@ def _scaffold_operator_home(
             console.print(f"  [green]wrote[/green]  {env_file}")
 
     wrote_config = False
+    config_mode = "updated" if overwrite_config and config_file.exists() else "wrote"
     files: list[tuple[Path, str]] = [
         (config_file, config_text),
         (home / "SYSTEM.md", load_prompt("system.md")),
@@ -358,15 +305,19 @@ def _scaffold_operator_home(
         ),
     ]
     for path, content in files:
-        if path.exists():
+        should_write = not path.exists() or (path == config_file and overwrite_config)
+        if not should_write:
             if emit_output:
                 console.print(f"  [yellow]exists[/yellow] {path}")
-        else:
-            path.write_text(content)
-            if path == config_file:
-                wrote_config = True
-            if emit_output:
-                console.print(f"  [green]wrote[/green]  {path}")
+            continue
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content)
+        if path == config_file:
+            wrote_config = True
+        if emit_output:
+            verb = config_mode if path == config_file else "wrote"
+            console.print(f"  [green]{verb}[/green]  {path}")
 
     return ScaffoldResult(
         home=home,
@@ -377,426 +328,44 @@ def _scaffold_operator_home(
     )
 
 
-def _quote_env_value(value: str) -> str:
-    if re.fullmatch(r"[A-Za-z0-9._:/+\-]+", value):
-        return value
-    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-    return f'"{escaped}"'
-
-
-def _update_env_file(path: Path, updates: dict[str, str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = path.read_text().splitlines() if path.exists() else []
-    pending = dict(updates)
-    new_lines: list[str] = []
-
-    for line in lines:
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in line:
-            new_lines.append(line)
-            continue
-        key, _, _ = line.partition("=")
-        env_var = key.strip()
-        if env_var in pending:
-            new_lines.append(f"{env_var}={_quote_env_value(pending.pop(env_var))}")
-        else:
-            new_lines.append(line)
-
-    if pending and new_lines and new_lines[-1] != "":
-        new_lines.append("")
-    for env_var, value in pending.items():
-        new_lines.append(f"{env_var}={_quote_env_value(value)}")
-
-    path.write_text("\n".join(new_lines).rstrip() + "\n")
-    path.chmod(0o600)
-
-
-def _default_setup_username() -> str:
-    raw = getpass.getuser().strip().lower()
-    slug = re.sub(r"[^a-z0-9.\-]+", "-", raw).strip(".-")
-    return slug[:64] or "operator-admin"
-
-
-def _normalize_timezone_name(value: str) -> str | None:
-    candidate = value.strip()
-    if not candidate:
-        return None
-    try:
-        ZoneInfo(candidate)
-    except (ZoneInfoNotFoundError, KeyError):
-        return None
-    return candidate
-
-
-def _timezone_from_zoneinfo_path(path: Path) -> str | None:
-    try:
-        parts = path.resolve().parts
-    except OSError:
-        return None
-    matches = [i for i, part in enumerate(parts) if part == "zoneinfo"]
-    if not matches:
-        return None
-    candidate = "/".join(parts[matches[-1] + 1 :])
-    return _normalize_timezone_name(candidate)
-
-
-def _detect_local_timezone() -> str:
-    tz_env = _normalize_timezone_name(os.environ.get("TZ", ""))
-    if tz_env:
-        return tz_env
-
-    try:
-        local_tz = _normalize_timezone_name(getattr(datetime.now().astimezone().tzinfo, "key", ""))
-        if local_tz:
-            return local_tz
-    except Exception:
-        pass
-
-    for path_str in ("/etc/localtime", "/etc/timezone"):
-        path = Path(path_str)
-        if not path.exists():
-            continue
-        if path.name == "localtime":
-            timezone = _timezone_from_zoneinfo_path(path)
-            if timezone:
-                return timezone
-            continue
-        timezone = _normalize_timezone_name(path.read_text().strip())
-        if timezone:
-            return timezone
-
-    timedatectl = shutil.which("timedatectl")
-    if timedatectl:
-        result = subprocess.run(
-            [timedatectl, "show", "--property=Timezone", "--value"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        timezone = _normalize_timezone_name(result.stdout.strip())
-        if timezone:
-            return timezone
-
-    return "UTC"
-
-
-def _prompt_timezone(timezone: str | None) -> str:
-    detected = _detect_local_timezone()
-    if timezone is not None:
-        resolved = _normalize_timezone_name(timezone)
-        if resolved is None:
-            raise typer.BadParameter(
-                "Timezone must be a valid IANA zone like America/Vancouver.",
-                param_hint="--timezone",
-            )
-        return resolved
-
-    console.print(f"[dim]Detected timezone: {detected}[/dim]")
-    while True:
-        value = typer.prompt("Timezone", default=detected).strip()
-        resolved = _normalize_timezone_name(value)
-        if resolved is not None:
-            return resolved
-        console.print("[red]Use a valid IANA timezone like America/Vancouver.[/red]")
-
-
-def _prompt_username(username: str | None) -> str:
-    if username is not None:
-        value = username.strip()
-        if not USERNAME_RE.match(value):
-            raise typer.BadParameter(
-                "Username must be 1-64 chars using lowercase letters, numbers, dots, and hyphens."
-            )
-        return value
-
-    default = _default_setup_username()
-    while True:
-        value = typer.prompt("Admin username", default=default).strip()
-        if USERNAME_RE.match(value):
-            return value
-        console.print(
-            "[red]Username must be 1-64 chars using lowercase letters, numbers, dots, and hyphens.[/red]"
-        )
-
-
-def _resolve_setup_transport(name: str | None) -> SetupTransport:
-    if name is None:
-        return default_setup_transport()
-    key = name.strip().lower()
-    transports = {transport.name: transport for transport in list_setup_transports()}
-    transport = transports.get(key)
-    if transport is None:
-        available = ", ".join(sorted(transports))
-        raise typer.BadParameter(f"Unknown transport {name!r}. Available: {available}")
-    return transport
-
-
-def _parse_secret_overrides(values: list[str] | None) -> dict[str, str]:
-    overrides: dict[str, str] = {}
-    for raw in values or []:
-        key, sep, value = raw.partition("=")
-        env_var = key.strip()
-        if not sep or not env_var:
-            raise typer.BadParameter(
-                "Use --secret ENV_VAR=value.",
-                param_hint="--secret",
-            )
-        overrides[env_var] = value
-    return overrides
-
-
-def _resolve_setup_provider(name: str | None) -> SetupProvider:
-    if name is not None:
-        key = name.strip().lower()
-        provider = _SETUP_PROVIDERS.get(key)
-        if provider is None:
-            available = ", ".join(sorted(_SETUP_PROVIDERS))
-            raise typer.BadParameter(f"Unknown provider {name!r}. Available: {available}")
-        return provider
-
-    console.print("[dim]Available providers: anthropic, openai, gemini[/dim]")
-    while True:
-        key = typer.prompt("Model provider", default=_DEFAULT_PROVIDER).strip().lower()
-        provider = _SETUP_PROVIDERS.get(key)
-        if provider is not None:
-            return provider
-        console.print("[red]Choose one of: anthropic, openai, gemini.[/red]")
-
-
-def _resolve_secret(
-    *,
-    cli_value: str | None,
-    secret: SetupSecret,
-    env_file_values: dict[str, str],
-    env_file: Path,
-    force: bool = False,
-) -> ResolvedSecret:
-    value = cli_value.strip() if cli_value else ""
-    env_var = secret.env_var
-    source = "command line"
-    if not value and not force:
-        for candidate in secret.env_vars:
-            candidate_value = env_file_values.get(candidate, "")
-            if candidate_value:
-                value = candidate_value
-                env_var = candidate
-                source = str(env_file)
-                break
-    if not value and not force:
-        for candidate in secret.env_vars:
-            candidate_value = os.environ.get(candidate, "").strip()
-            if candidate_value:
-                value = candidate_value
-                env_var = secret.env_var
-                source = "shell environment"
-                break
-    while not value:
-        value = typer.prompt(secret.prompt, hide_input=secret.hidden).strip()
-        env_var = secret.env_var
-        source = "prompt"
-        if not value:
-            console.print(f"[red]{secret.prompt} is required.[/red]")
-    if secret.warning_prefix and not value.startswith(secret.warning_prefix):
-        console.print(
-            f"[yellow]Warning:[/yellow] {env_var} usually starts with [bold]{secret.warning_prefix}[/bold]."
-        )
-    if source != "prompt":
-        console.print(f"  [dim]using {env_var} from {source}[/dim]")
-    return ResolvedSecret(env_var=env_var, value=value)
-
-
-def _ensure_setup_identity(
-    *,
-    username: str,
-    transport: SetupTransport,
-    external_id: str,
-) -> str:
-    store = get_store()
-    user = store.get_user(username)
-    platform_id = f"{transport.name}:{external_id}"
-    existing_username = store.resolve_username(platform_id)
-
-    if existing_username and existing_username != username:
-        console.print(
-            f"[red]Error:[/red] identity '{platform_id}' is already linked to '{existing_username}'."
-        )
-        raise typer.Exit(code=1)
-
-    messages: list[str] = []
-    if user is None:
-        store.add_user(username)
-        messages.append(f"created user '{username}'")
-    else:
-        messages.append(f"using existing user '{username}'")
-
-    if "admin" not in store.get_user_roles(username):
-        store.add_role(username, "admin")
-        messages.append("granted admin role")
-    else:
-        messages.append("admin role already present")
-
-    if existing_username == username:
-        messages.append(f"identity '{platform_id}' already linked")
-    else:
-        store.add_identity(username, platform_id)
-        messages.append(f"linked '{platform_id}'")
-
-    return ", ".join(messages)
-
-
 @app.command("init")
-def init() -> None:
-    """Scaffold the ~/.operator directory with starter config."""
+def init(
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Overwrite operator.yaml without prompting. Existing .env and AGENT.md files are preserved.",
+    ),
+) -> None:
+    """Scaffold ~/.operator with the default Slack config and full layout."""
+    config_file = OPERATOR_DIR / "operator.yaml"
+    overwrite_config = force
+    if config_file.exists() and not force:
+        overwrite_config = typer.confirm(
+            (
+                f"{config_file} already exists.\n"
+                "Overwrite operator.yaml? Existing .env and AGENT.md files will be preserved, "
+                "and any missing directories will be created."
+            ),
+            default=False,
+        )
+        if not overwrite_config:
+            console.print(f"[yellow]Skipped[/yellow] {config_file} remains unchanged.")
+            raise typer.Exit(code=0)
+
     result = _scaffold_operator_home(
         OPERATOR_DIR,
         config_text=_build_starter_config(),
+        overwrite_config=overwrite_config,
     )
-    if not result.wrote_config:
-        console.print(f"\n[bold]{result.config_file}[/bold] already exists.")
+    config = load_config(result.config_file)
+    ensure_layout(config)
+
     console.print(f"\n[bold green]Operator initialized at {result.home}[/bold green]")
-    console.print("Next step: [bold]operator setup[/bold] for the guided onboarding flow.")
+    console.print(f"Edit [bold]{result.config_file}[/bold] to review the Slack config and model defaults.")
+    console.print(f"Add secrets to [bold]{result.env_file}[/bold].")
     console.print(
-        "Manual path: [bold]operator user add <username> --role admin <transport> <id>[/bold]"
+        "Then create an admin user: [bold]operator user add <username> --role admin slack <YOUR_SLACK_USER_ID>[/bold]"
     )
-
-
-@app.command("setup")
-def setup(
-    username: str | None = typer.Option(None, "--username", help="Admin username to create."),
-    provider: str | None = typer.Option(
-        None,
-        "--provider",
-        help="Model provider to configure: anthropic, openai, or gemini.",
-    ),
-    timezone: str | None = typer.Option(
-        None,
-        "--timezone",
-        help="IANA timezone to write into operator.yaml, for example America/Vancouver.",
-    ),
-    transport: str | None = typer.Option(None, "--transport", help="Transport to configure."),
-    identity: str | None = typer.Option(
-        None,
-        "--identity",
-        help="Transport identity for your admin user.",
-    ),
-    api_key: str | None = typer.Option(
-        None, "--api-key", help="Provider API key to persist into ~/.operator/.env."
-    ),
-    secret: list[str] | None = typer.Option(  # noqa: B008
-        None,
-        "--secret",
-        help="Transport secret override as ENV_VAR=value. Repeat for multiple values.",
-    ),
-    force: bool = typer.Option(
-        False, "--force", help="Re-prompt for secrets even if they already exist."
-    ),
-    run: bool = typer.Option(
-        False, "--run/--no-run", help="Start operator in the foreground after setup."
-    ),
-) -> None:
-    """Guided onboarding from a fresh install to the first transport-backed agent."""
-    selected_provider = _resolve_setup_provider(provider)
-    selected_transport = _resolve_setup_transport(transport)
-
-    console.print("[bold]Operator setup[/bold]")
-    console.print(
-        f"This will save the minimum config for your first {selected_transport.label}-backed agent and admin user.\n"
-    )
-    console.print(
-        f"Using transport: [bold]{selected_transport.label}[/bold] "
-        f"([dim]{selected_transport.description}[/dim])"
-    )
-    console.print(f"Provider: [bold]{selected_provider.label}[/bold]")
-    console.print(f"Default agent: [bold]{_DEFAULT_AGENT_NAME}[/bold]")
-    console.print(f"Default model: [bold]{selected_provider.default_model}[/bold]")
-
-    selected_timezone = _prompt_timezone(timezone)
-    console.print(f"Timezone: [bold]{selected_timezone}[/bold]\n")
-    resolved_username = _prompt_username(username)
-
-    result = _scaffold_operator_home(
-        OPERATOR_DIR,
-        config_text=_build_starter_config(
-            default_model=selected_provider.default_model,
-            transport_name=selected_transport.name,
-            transport_env=selected_transport.env_defaults,
-            transport_settings=selected_transport.settings_defaults,
-        ),
-        emit_output=False,
-    )
-    env_file_values = parse_env_file(result.env_file)
-
-    secrets: dict[str, str] = {}
-    provider_secret = _resolve_secret(
-        cli_value=api_key,
-        secret=selected_provider.secret,
-        env_file_values=env_file_values,
-        env_file=result.env_file,
-        force=force,
-    )
-    secrets[provider_secret.env_var] = provider_secret.value
-
-    transport_secret_overrides = _parse_secret_overrides(secret)
-    allowed_secret_envs = {
-        transport_secret.env_var for transport_secret in selected_transport.secrets
-    }
-    unknown_secret_envs = sorted(set(transport_secret_overrides) - allowed_secret_envs)
-    if unknown_secret_envs:
-        raise typer.BadParameter(
-            f"Unknown secret override(s) for transport {selected_transport.name!r}: {', '.join(unknown_secret_envs)}",
-            param_hint="--secret",
-        )
-    for transport_secret in selected_transport.secrets:
-        resolved_secret = _resolve_secret(
-            cli_value=transport_secret_overrides.get(transport_secret.env_var),
-            secret=transport_secret,
-            env_file_values=env_file_values,
-            env_file=result.env_file,
-            force=force,
-        )
-        secrets[resolved_secret.env_var] = resolved_secret.value
-
-    if identity is not None:
-        try:
-            external_id = selected_transport.normalize_identity(identity)
-        except ValueError as e:
-            raise typer.BadParameter(str(e), param_hint="--identity") from None
-    else:
-        external_id = ""
-    while not external_id:
-        console.print(f"[dim]{selected_transport.identity_help}[/dim]")
-        transport_identity = typer.prompt(selected_transport.identity_prompt).strip()
-        try:
-            external_id = selected_transport.normalize_identity(transport_identity)
-        except ValueError as e:
-            console.print(f"[red]{e}[/red]")
-
-    _update_env_file(result.env_file, secrets)
-    user_status = _ensure_setup_identity(
-        username=resolved_username,
-        transport=selected_transport,
-        external_id=external_id,
-    )
-
-    # Set timezone on the user record
-    store = get_store()
-    store.set_user_timezone(resolved_username, selected_timezone)
-
-    console.print(f"\n[green]Updated[/green] {result.env_file}")
-    if result.wrote_config:
-        console.print(f"[green]Created[/green] {result.config_file}")
-    else:
-        console.print(f"[dim]Using existing config[/dim] {result.config_file}")
-    console.print(f"[green]Ready[/green] {user_status}")
-
-    if run:
-        console.print(f"\nStarting operator now. {selected_transport.run_hint}")
-        asyncio.run(async_main())
-        return
-
-    console.print("\nNext:")
-    for index, step in enumerate(selected_transport.next_steps, start=1):
-        console.print(f"  {index}. {step}")
 
 
 # ── Default: start the service ───────────────────────────────

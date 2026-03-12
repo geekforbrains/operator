@@ -440,9 +440,10 @@ their job. High-impact capabilities such as arbitrary shell execution should be
 granted sparingly and only where they are clearly needed. The goal is to reduce
 unnecessary exposure to risky actions.
 
-The first admin user is created through the CLI during setup. From there,
-admins can manage access through the CLI or by asking an agent with user
-management tools.
+The first admin user is created through the CLI after `operator init`, using
+`operator user add <username> --role admin slack <YOUR_SLACK_USER_ID>`. From
+there, admins can manage access through the CLI or by asking an agent with
+user management tools.
 
 ## Memory Model
 

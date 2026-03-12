@@ -8,16 +8,19 @@ from operator_ai.memory import MemoryStore
 from operator_ai.prompts import CACHE_BOUNDARY, assemble_system_prompt
 
 
-def _make_config(tmp_path: Path | None) -> Config:  # noqa: ARG001
-    return Config(
+def _make_config(tmp_path: Path | None) -> Config:
+    config = Config(
         defaults={"models": ["test/model"]},
         agents={"operator": {}},
     )
+    if tmp_path is not None:
+        config.set_base_dir(tmp_path)
+    return config
 
 
 def _stub_prompts(monkeypatch: object) -> None:
     """Replace filesystem-dependent prompt loaders with stubs."""
-    monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda: "# System")
+    monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda _path=None: "# System")
     monkeypatch.setattr(
         "operator_ai.prompts.load_agent_prompt",
         lambda _config, agent_name: f"# Agent\n\n{agent_name}",
@@ -42,7 +45,7 @@ def test_prompt_ordering_system_then_agent(monkeypatch) -> None:
 
 
 def test_skills_appear_in_stable_prefix(monkeypatch) -> None:
-    monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda: "# System")
+    monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda _path=None: "# System")
     monkeypatch.setattr(
         "operator_ai.prompts.load_agent_prompt",
         lambda _config, agent_name: f"# Agent\n\n{agent_name}",
@@ -289,7 +292,7 @@ def test_skill_filter_passed_through(monkeypatch, tmp_path) -> None:
         captured["skill_filter"] = skill_filter
         return ""
 
-    monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda: "# System")
+    monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda _path=None: "# System")
     monkeypatch.setattr(
         "operator_ai.prompts.load_agent_prompt",
         lambda _config, agent_name: f"# Agent\n\n{agent_name}",

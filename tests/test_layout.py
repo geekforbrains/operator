@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
 
 from operator_ai.config import Config
 from operator_ai.layout import ensure_layout, ensure_user_memory
 
 
-def _make_config(*agent_names: str) -> Config:
+def _make_config(base_dir: Path, *agent_names: str) -> Config:
     agents = {name: {} for name in agent_names}
-    return Config(defaults={"models": ["test/m"]}, agents=agents)
+    return Config(defaults={"models": ["test/m"]}, agents=agents).set_base_dir(base_dir)
 
 
 # ── Tree creation ───────────────────────────────────────────────
@@ -17,13 +16,9 @@ def _make_config(*agent_names: str) -> Config:
 
 def test_ensure_layout_creates_full_tree(tmp_path: Path) -> None:
     op_dir = tmp_path / ".operator"
-    config = _make_config("hermy", "cora")
+    config = _make_config(op_dir, "hermy", "cora")
 
-    with (
-        patch("operator_ai.layout.OPERATOR_DIR", op_dir),
-        patch("operator_ai.config.OPERATOR_DIR", op_dir),
-    ):
-        ensure_layout(config)
+    ensure_layout(config)
 
     # Top-level dirs
     assert (op_dir / "jobs").is_dir()
@@ -61,13 +56,9 @@ def test_ensure_layout_creates_full_tree(tmp_path: Path) -> None:
 
 def test_ensure_layout_creates_per_agent_shared_dirs(tmp_path: Path) -> None:
     op_dir = tmp_path / ".operator"
-    config = _make_config("alpha", "beta")
+    config = _make_config(op_dir, "alpha", "beta")
 
-    with (
-        patch("operator_ai.layout.OPERATOR_DIR", op_dir),
-        patch("operator_ai.config.OPERATOR_DIR", op_dir),
-    ):
-        ensure_layout(config)
+    ensure_layout(config)
 
     assert (op_dir / "shared" / "alpha").is_dir()
     assert (op_dir / "shared" / "beta").is_dir()
@@ -78,13 +69,9 @@ def test_ensure_layout_creates_per_agent_shared_dirs(tmp_path: Path) -> None:
 
 def test_shared_symlink_points_to_shared_root(tmp_path: Path) -> None:
     op_dir = tmp_path / ".operator"
-    config = _make_config("hermy")
+    config = _make_config(op_dir, "hermy")
 
-    with (
-        patch("operator_ai.layout.OPERATOR_DIR", op_dir),
-        patch("operator_ai.config.OPERATOR_DIR", op_dir),
-    ):
-        ensure_layout(config)
+    ensure_layout(config)
 
     link = op_dir / "agents" / "hermy" / "workspace" / "shared"
     target = op_dir / "shared"
@@ -101,18 +88,13 @@ def test_shared_symlink_points_to_shared_root(tmp_path: Path) -> None:
 
 def test_ensure_layout_idempotent(tmp_path: Path) -> None:
     op_dir = tmp_path / ".operator"
-    config = _make_config("hermy")
+    config = _make_config(op_dir, "hermy")
 
-    with (
-        patch("operator_ai.layout.OPERATOR_DIR", op_dir),
-        patch("operator_ai.config.OPERATOR_DIR", op_dir),
-    ):
-        ensure_layout(config)
-        # Drop a marker file to prove it isn't wiped
-        marker = op_dir / "agents" / "hermy" / "workspace" / "work" / "marker.txt"
-        marker.write_text("keep me")
+    ensure_layout(config)
+    marker = op_dir / "agents" / "hermy" / "workspace" / "work" / "marker.txt"
+    marker.write_text("keep me")
 
-        ensure_layout(config)  # second run — must not raise or clobber
+    ensure_layout(config)  # second run — must not raise or clobber
 
     assert marker.read_text() == "keep me"
     assert (op_dir / "agents" / "hermy" / "workspace" / "shared").is_symlink()
@@ -123,13 +105,9 @@ def test_ensure_layout_idempotent(tmp_path: Path) -> None:
 
 def test_ensure_layout_no_agents(tmp_path: Path) -> None:
     op_dir = tmp_path / ".operator"
-    config = _make_config()  # no agents
+    config = _make_config(op_dir)  # no agents
 
-    with (
-        patch("operator_ai.layout.OPERATOR_DIR", op_dir),
-        patch("operator_ai.config.OPERATOR_DIR", op_dir),
-    ):
-        ensure_layout(config)
+    ensure_layout(config)
 
     assert (op_dir / "jobs").is_dir()
     assert (op_dir / "memory" / "global" / "rules").is_dir()
@@ -142,10 +120,9 @@ def test_ensure_layout_no_agents(tmp_path: Path) -> None:
 
 def test_ensure_user_memory(tmp_path: Path) -> None:
     op_dir = tmp_path / ".operator"
-    config = _make_config()
+    config = _make_config(op_dir)
 
-    with patch("operator_ai.config.OPERATOR_DIR", op_dir):
-        ensure_user_memory("gavin", config)
+    ensure_user_memory("gavin", config)
 
     user_dir = op_dir / "memory" / "users" / "gavin"
     for sub in ("rules", "notes", "trash"):
@@ -154,11 +131,10 @@ def test_ensure_user_memory(tmp_path: Path) -> None:
 
 def test_ensure_user_memory_idempotent(tmp_path: Path) -> None:
     op_dir = tmp_path / ".operator"
-    config = _make_config()
+    config = _make_config(op_dir)
 
-    with patch("operator_ai.config.OPERATOR_DIR", op_dir):
-        ensure_user_memory("gavin", config)
-        ensure_user_memory("gavin", config)  # no error
+    ensure_user_memory("gavin", config)
+    ensure_user_memory("gavin", config)  # no error
 
     assert (op_dir / "memory" / "users" / "gavin" / "rules").is_dir()
 
@@ -168,13 +144,9 @@ def test_ensure_user_memory_idempotent(tmp_path: Path) -> None:
 
 def test_ensure_layout_creates_agent_md(tmp_path: Path) -> None:
     op_dir = tmp_path / ".operator"
-    config = _make_config("hermy")
+    config = _make_config(op_dir, "hermy")
 
-    with (
-        patch("operator_ai.layout.OPERATOR_DIR", op_dir),
-        patch("operator_ai.config.OPERATOR_DIR", op_dir),
-    ):
-        ensure_layout(config)
+    ensure_layout(config)
 
     agent_md = op_dir / "agents" / "hermy" / "AGENT.md"
     assert agent_md.exists()
@@ -184,17 +156,13 @@ def test_ensure_layout_creates_agent_md(tmp_path: Path) -> None:
 
 def test_ensure_layout_does_not_overwrite_agent_md(tmp_path: Path) -> None:
     op_dir = tmp_path / ".operator"
-    config = _make_config("hermy")
+    config = _make_config(op_dir, "hermy")
 
     # Pre-create a custom AGENT.md
     agent_md = op_dir / "agents" / "hermy" / "AGENT.md"
     agent_md.parent.mkdir(parents=True, exist_ok=True)
     agent_md.write_text("custom content")
 
-    with (
-        patch("operator_ai.layout.OPERATOR_DIR", op_dir),
-        patch("operator_ai.config.OPERATOR_DIR", op_dir),
-    ):
-        ensure_layout(config)
+    ensure_layout(config)
 
     assert agent_md.read_text() == "custom content"

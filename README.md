@@ -35,41 +35,20 @@ guidelines behind Operator.
 
 ```sh
 pip install operator-ai
-operator setup
+operator init
 ```
 
-`operator setup` takes you from a fresh install to a working Slack-backed agent:
+`operator init` creates the default Slack-focused scaffold under `~/.operator/`:
 
-- scaffolds `~/.operator/`
-- asks which model provider you want to use: Anthropic, OpenAI, or Gemini
-- detects your local timezone and lets you confirm or change it
-- saves the API keys and Slack tokens operator needs
-- creates your first admin user
-- leaves you one command away from the first message
-
-Use `operator setup --run` if you want it to start the runtime immediately after onboarding.
+- writes `operator.yaml`, `.env`, `SYSTEM.md`, and `agents/operator/AGENT.md`
+- creates the default workspace, memory, state, shared, db, jobs, skills, and logs directories
+- gives the default `operator` agent full tool and skill access
+- prompts before overwriting an existing `operator.yaml`
 
 If the `operator` script is not on your `PATH` yet right after `pip install`, use:
 
 ```sh
-python3 -m operator_ai setup --run
-```
-
-### What setup asks for
-
-- your model provider: Anthropic, OpenAI, or Gemini
-- your timezone, defaulting to the current system timezone
-- the matching API key for that provider
-- `SLACK_BOT_TOKEN` (`xoxb-*`)
-- `SLACK_APP_TOKEN` (`xapp-*`)
-- your Slack user ID
-
-### Manual setup
-
-If you want to configure everything by hand instead, run:
-
-```sh
-operator init
+python3 -m operator_ai init
 ```
 
 Then edit `~/.operator/operator.yaml`:
@@ -83,12 +62,16 @@ runtime:
 defaults:
   models:
     - "anthropic/claude-sonnet-4-6"
-  thinking: medium
+  thinking: "off"
   max_iterations: 25
+  context_ratio: 0.5
   hook_timeout: 30
 
 agents:
   operator:
+    permissions:
+      tools: "*"
+      skills: "*"
     transport:
       type: slack
       env:
@@ -103,12 +86,12 @@ agents:
 
 Transport config has three parts: `type`, `env`, and `settings`. `env` maps logical credential names to environment variable names, while `settings` covers non-secret transport behavior. For Slack, the required fields are `type`, `env.bot_token`, and `env.app_token`. Users and channels are injected into the agent prompt by default so the agent knows who and what is available without a tool call. Override `settings.inject_users_into_prompt` or `settings.inject_channels_into_prompt` for large workspaces.
 
-Add your keys to `~/.operator/.env` or export them in your shell:
+Add your keys to `~/.operator/.env`:
 
 ```sh
-export ANTHROPIC_API_KEY="sk-..."
-export SLACK_BOT_TOKEN="xoxb-..."
-export SLACK_APP_TOKEN="xapp-..."
+ANTHROPIC_API_KEY="sk-..."
+SLACK_BOT_TOKEN="xoxb-..."
+SLACK_APP_TOKEN="xapp-..."
 ```
 
 ```sh
@@ -118,6 +101,7 @@ operator user add yourname --role admin slack YOUR_SLACK_USER_ID
 ```sh
 operator                    # run in the foreground
 operator service install    # or install as a background service
+operator service start      # start the background service when needed
 ```
 
 That's it. Message your agent in Slack. 🐒
@@ -269,23 +253,23 @@ Use `thinking` to request a simple reasoning level without exposing provider-spe
 
 ```yaml
 defaults:
-  thinking: off
+  thinking: "off"
 
 agents:
   researcher:
     models:
       - "anthropic/claude-sonnet-4-6"
-    thinking: high
+    thinking: "high"
 
   planner:
     models:
       - "openai/o3"
-    thinking: medium
+    thinking: "medium"
 
   fast-bot:
     models:
       - "gemini/gemini-2.5-flash"
-    thinking: low
+    thinking: "low"
 ```
 
 Supported values:
@@ -304,7 +288,6 @@ Operator ships with a full CLI for managing everything outside of chat.
 ```sh
 operator                          # run the service
 operator init                     # scaffold ~/.operator/
-operator setup                    # guided onboarding
 operator agents                   # list configured agents
 operator tools                    # list available tools
 operator skills                   # list discovered skills

@@ -788,7 +788,7 @@ async def async_main() -> None:
 
         if not store.list_users():
             logger.warning(
-                "No users configured. Run: operator setup (or operator user add <username> --role admin <transport> <id>)"
+                "No users configured. Run: operator user add <username> --role admin slack <YOUR_SLACK_USER_ID>"
             )
 
         runtimes = RuntimeManager()

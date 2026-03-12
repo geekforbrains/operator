@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from operator_ai.config import OPERATOR_DIR, Config, ensure_shared_symlink
+from operator_ai.config import Config, ensure_shared_symlink
 
 logger = logging.getLogger("operator.layout")
 
@@ -75,8 +75,9 @@ def _ensure_agent(name: str, config: Config) -> None:
 def ensure_layout(config: Config) -> None:
     """Create the full ``~/.operator/`` directory tree.
 
-    This is safe to call on every startup.  It only creates directories and
-    symlinks — it never writes default file content.
+    This is safe to call on every startup. It creates directories, symlinks,
+    and a default ``AGENT.md`` for any configured agent that does not already
+    have one.
 
     Parameters
     ----------
@@ -84,9 +85,11 @@ def ensure_layout(config: Config) -> None:
         A loaded :class:`Config` whose ``agents`` dict determines which
         per-agent subtrees are created.
     """
+    home = config.base_dir
+
     # Top-level directories
     _ensure_dirs(
-        OPERATOR_DIR,
+        home,
         config.jobs_dir(),
         config.skills_dir(),
         config.shared_dir,
@@ -99,13 +102,13 @@ def ensure_layout(config: Config) -> None:
     _ensure_dirs(*(gm / sub for sub in _MEMORY_SUBDIRS))
 
     # User memory root (populated per known user, but ensure the parent)
-    _ensure_dirs(OPERATOR_DIR / "memory" / "users")
+    _ensure_dirs(home / "memory" / "users")
 
     # Per-agent trees
     for name in config.agents:
         _ensure_agent(name, config)
 
-    logger.info("layout: directory tree ready under %s", OPERATOR_DIR)
+    logger.info("layout: directory tree ready under %s", home)
 
 
 def ensure_user_memory(username: str, config: Config) -> None:

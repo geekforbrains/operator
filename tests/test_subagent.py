@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextvars
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import pytest
 
@@ -36,6 +37,7 @@ class FakeRoleConfig:
 
 class FakeConfig:
     def __init__(self, roles: dict[str, FakeRoleConfig] | None = None) -> None:
+        self.base_dir = Path("/home/.operator")
         self.defaults = type(
             "D",
             (),
@@ -66,6 +68,12 @@ class FakeConfig:
 
     def agent_workspace(self, name: str) -> str:
         return f"/home/.operator/agents/{name}/workspace"
+
+    def skills_dir(self) -> Path:
+        return self.base_dir / "skills"
+
+    def system_prompt_path(self) -> Path:
+        return self.base_dir / "SYSTEM.md"
 
     def agent_context_ratio(self, name: str) -> float:
         a = self.agents.get(name)
@@ -152,7 +160,7 @@ def test_spawn_agent_without_explicit_target_uses_current_agent_prompt(monkeypat
         captured["agent_name"] = kwargs["agent_name"]
         return "done"
 
-    monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda: "# System")
+    monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda _path=None: "# System")
     monkeypatch.setattr(
         "operator_ai.prompts.load_agent_prompt",
         lambda _config, agent_name: f"# Agent\n\n{agent_name}",
@@ -277,7 +285,7 @@ class TestSpawnAgentAccessControl:
             return "done"
 
         monkeypatch.setattr("operator_ai.agent.run_agent", fake_run_agent)
-        monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda: "# System")
+        monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda _path=None: "# System")
         monkeypatch.setattr(
             "operator_ai.prompts.load_agent_prompt",
             lambda _config, agent_name: f"# Agent\n\n{agent_name}",
@@ -298,7 +306,7 @@ class TestSpawnAgentAccessControl:
             return "admin-done"
 
         monkeypatch.setattr("operator_ai.agent.run_agent", fake_run_agent)
-        monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda: "# System")
+        monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda _path=None: "# System")
         monkeypatch.setattr(
             "operator_ai.prompts.load_agent_prompt",
             lambda _config, agent_name: f"# Agent\n\n{agent_name}",
@@ -318,7 +326,7 @@ class TestSpawnAgentAccessControl:
             return "job-done"
 
         monkeypatch.setattr("operator_ai.agent.run_agent", fake_run_agent)
-        monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda: "# System")
+        monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda _path=None: "# System")
         monkeypatch.setattr(
             "operator_ai.prompts.load_agent_prompt",
             lambda _config, agent_name: f"# Agent\n\n{agent_name}",
@@ -348,7 +356,7 @@ class TestSpawnAgentAccessControl:
             return "inherited"
 
         monkeypatch.setattr("operator_ai.agent.run_agent", fake_run_agent)
-        monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda: "# System")
+        monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda _path=None: "# System")
         monkeypatch.setattr(
             "operator_ai.prompts.load_agent_prompt",
             lambda _config, agent_name: f"# Agent\n\n{agent_name}",

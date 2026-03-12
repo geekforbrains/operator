@@ -79,11 +79,14 @@ class FakeStore:
         return None
 
 
-def _config() -> Config:
-    return Config(
+def _config(base_dir: Path | None = None) -> Config:
+    config = Config(
         defaults={"models": ["test/model"]},
         agents={"operator": {}},
     )
+    if base_dir is not None:
+        config.set_base_dir(base_dir)
+    return config
 
 
 def _write_job(jobs_dir: Path, name: str, content: str) -> Path:
@@ -265,7 +268,7 @@ def test_scan_jobs_includes_disabled(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_build_job_prompt_includes_rules(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda: "# System")
+    monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda _path=None: "# System")
     monkeypatch.setattr(
         "operator_ai.prompts.load_agent_prompt",
         lambda _config, agent_name: f"# Agent\n\n{agent_name}",
@@ -274,7 +277,7 @@ def test_build_job_prompt_includes_rules(monkeypatch, tmp_path: Path) -> None:
         "operator_ai.prompts.load_skills_prompt",
         lambda _skills_dir, **_kwargs: "",
     )
-    monkeypatch.setattr("operator_ai.prompts.scan_agents", lambda: [])
+    monkeypatch.setattr("operator_ai.prompts.scan_agents", lambda *_args, **_kwargs: [])
 
     store = MemoryStore(base_dir=tmp_path)
     store.upsert_rule("agent:operator", "status-style", "Use terse status updates.")
@@ -289,7 +292,7 @@ def test_build_job_prompt_includes_rules(monkeypatch, tmp_path: Path) -> None:
 
     prompt = asyncio.run(
         _build_job_prompt(
-            config=_config(),
+            config=_config(tmp_path),
             job=job,
             agent_name="operator",
             prerun_output="",
@@ -303,7 +306,7 @@ def test_build_job_prompt_includes_rules(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_build_job_prompt_includes_prerun_output(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda: "# System")
+    monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda _path=None: "# System")
     monkeypatch.setattr(
         "operator_ai.prompts.load_agent_prompt",
         lambda _config, agent_name: f"# Agent\n\n{agent_name}",
@@ -312,7 +315,7 @@ def test_build_job_prompt_includes_prerun_output(monkeypatch, tmp_path: Path) ->
         "operator_ai.prompts.load_skills_prompt",
         lambda _skills_dir, **_kwargs: "",
     )
-    monkeypatch.setattr("operator_ai.prompts.scan_agents", lambda: [])
+    monkeypatch.setattr("operator_ai.prompts.scan_agents", lambda *_args, **_kwargs: [])
 
     job = Job(
         name="scripted-job",
@@ -324,7 +327,7 @@ def test_build_job_prompt_includes_prerun_output(monkeypatch, tmp_path: Path) ->
 
     prompt = asyncio.run(
         _build_job_prompt(
-            config=_config(),
+            config=_config(tmp_path),
             job=job,
             agent_name="operator",
             prerun_output="fetched 42 items\nall healthy",
@@ -364,6 +367,7 @@ def test_execute_job_configures_memory_and_skill_filter(monkeypatch, tmp_path: P
         defaults={"models": ["test/model"]},
         agents={"operator": {"permissions": {"skills": ["allowed-skill"]}}},
     )
+    config.set_base_dir(tmp_path)
     fake_store = FakeStore()
 
     asyncio.run(

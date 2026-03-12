@@ -9,14 +9,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from operator_ai.agents import AgentInfo, build_agents_prompt, load_agent_body, scan_agents
-from operator_ai.config import LOGS_DIR, OPERATOR_DIR, SKILLS_DIR, Config
+from operator_ai.config import Config
 from operator_ai.memory import MemoryStore
 from operator_ai.skills import SkillInfo, build_skills_prompt, scan_skills
 
 logger = logging.getLogger("operator.prompts")
 
 PROMPTS_DIR = Path(__file__).parent
-SYSTEM_PROMPT_PATH = OPERATOR_DIR / "SYSTEM.md"
 
 # Sentinel that separates the stable (cacheable) prefix from dynamic content.
 # Must survive DB round-trips (stored in JSON as part of the system message).
@@ -29,12 +28,12 @@ def load_prompt(name: str) -> str:
     return path.read_text().strip()
 
 
-def load_system_prompt() -> str:
+def load_system_prompt(path: Path) -> str:
     """Load SYSTEM.md from disk, creating it from the bundled default if missing."""
-    if not SYSTEM_PROMPT_PATH.exists():
-        SYSTEM_PROMPT_PATH.parent.mkdir(parents=True, exist_ok=True)
-        SYSTEM_PROMPT_PATH.write_text(load_prompt("system.md"))
-    return SYSTEM_PROMPT_PATH.read_text().strip()
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(load_prompt("system.md"))
+    return path.read_text().strip()
 
 
 def load_agent_prompt(config: Config, agent_name: str) -> str:
@@ -43,7 +42,7 @@ def load_agent_prompt(config: Config, agent_name: str) -> str:
 
 
 def load_skills_prompt(
-    skills_dir: Path = SKILLS_DIR,
+    skills_dir: Path,
     skill_filter: Callable[[str], bool] | None = None,
 ) -> str:
     """Load available-skill metadata as markdown for system prompt injection."""
@@ -98,9 +97,9 @@ def _build_rules_section(
     return "# Rules\n\n" + "\n\n".join(sections)
 
 
-def _dump_system_prompt(prompt: str, agent_name: str) -> None:
+def _dump_system_prompt(prompt: str, agent_name: str, *, logs_dir: Path) -> None:
     """Write the assembled system prompt to a timestamped file for debugging."""
-    prompt_dir = LOGS_DIR / "prompts"
+    prompt_dir = logs_dir / "prompts"
     prompt_dir.mkdir(parents=True, exist_ok=True)
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S_%f")
     path = prompt_dir / f"system_{agent_name}_{ts}.md"
@@ -119,7 +118,7 @@ def assemble_system_prompt(
     username: str = "",
     is_private: bool = False,
     transport_extra: str = "",
-    skills_dir: Path = SKILLS_DIR,
+    skills_dir: Path | None = None,
     skill_filter: Callable[[str], bool] | None = None,
     available_agents: list[AgentInfo] | None = None,
     allowed_agents: set[str] | None = None,
@@ -142,18 +141,20 @@ def assemble_system_prompt(
       8. Agent rules
       9. User rules (when private/scoped)
     """
+    resolved_skills_dir = skills_dir or config.skills_dir()
+
     # --- Stable prefix (rarely changes, safe to cache) ---
     stable: list[str] = [
-        load_system_prompt(),
+        load_system_prompt(config.system_prompt_path()),
         load_agent_prompt(config, agent_name),
     ]
 
-    skills_prompt = load_skills_prompt(skills_dir, skill_filter=skill_filter)
+    skills_prompt = load_skills_prompt(resolved_skills_dir, skill_filter=skill_filter)
     if skills_prompt:
         stable.append(skills_prompt)
 
     if available_agents is None:
-        available_agents = scan_agents()
+        available_agents = scan_agents(config.base_dir / "agents")
     agents_prompt = build_agents_prompt(available_agents, agent_name, allowed_agents=allowed_agents)
     if agents_prompt:
         stable.append(agents_prompt)
@@ -181,6 +182,6 @@ def assemble_system_prompt(
     prompt = stable_text + CACHE_BOUNDARY + dynamic_text if dynamic_text else stable_text
 
     if os.environ.get("OPERATOR_LOG_PROMPT", "").lower() in ("1", "true", "yes"):
-        _dump_system_prompt(prompt, agent_name)
+        _dump_system_prompt(prompt, agent_name, logs_dir=config.logs_dir())
 
     return prompt

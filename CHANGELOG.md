@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Changed
+
+- Remove the interactive `operator setup` flow in favor of a single `operator init` scaffold that creates the full `~/.operator/` layout, preserves existing `.env` and `AGENT.md` files, and prompts before overwriting `operator.yaml`
+
 ## [0.7.0] - 2026-03-09
 
 ### Added

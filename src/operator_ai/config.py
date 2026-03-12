@@ -8,7 +8,7 @@ from typing import Any, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
 
 logger = logging.getLogger("operator.config")
 
@@ -125,6 +125,8 @@ class AgentConfig(StrictConfigModel):
 
 
 class Config(StrictConfigModel):
+    _base_dir: Path | None = PrivateAttr(default=None)
+
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     agents: dict[str, AgentConfig] = Field(default_factory=dict)
@@ -135,6 +137,15 @@ class Config(StrictConfigModel):
     def validate_no_admin_role(self) -> Config:
         if "admin" in self.roles:
             raise ValueError("admin is a built-in role and cannot be redefined")
+        return self
+
+    @property
+    def base_dir(self) -> Path:
+        return self._base_dir or OPERATOR_DIR
+
+    def set_base_dir(self, base_dir: Path) -> Config:
+        self._base_dir = base_dir.expanduser().resolve()
+        os.environ["OPERATOR_HOME"] = str(self._base_dir)
         return self
 
     def agent_models(self, agent_name: str) -> list[str]:
@@ -168,7 +179,7 @@ class Config(StrictConfigModel):
         return self.defaults.max_output_tokens
 
     def agent_dir(self, agent_name: str) -> Path:
-        return OPERATOR_DIR / "agents" / agent_name
+        return self.base_dir / "agents" / agent_name
 
     def agent_workspace(self, agent_name: str) -> Path:
         return self.agent_dir(agent_name) / "workspace"
@@ -183,29 +194,29 @@ class Config(StrictConfigModel):
         return self.agent_dir(name) / "state"
 
     def global_memory_dir(self) -> Path:
-        return OPERATOR_DIR / "memory" / "global"
+        return self.base_dir / "memory" / "global"
 
     def user_memory_dir(self, username: str) -> Path:
-        return OPERATOR_DIR / "memory" / "users" / username
+        return self.base_dir / "memory" / "users" / username
 
     def system_prompt_path(self) -> Path:
-        return OPERATOR_DIR / "SYSTEM.md"
+        return self.base_dir / "SYSTEM.md"
 
     def jobs_dir(self) -> Path:
-        return OPERATOR_DIR / "jobs"
+        return self.base_dir / "jobs"
 
     def skills_dir(self) -> Path:
-        return OPERATOR_DIR / "skills"
+        return self.base_dir / "skills"
 
     @property
     def shared_dir(self) -> Path:
-        return OPERATOR_DIR / "shared"
+        return self.base_dir / "shared"
 
     def db_dir(self) -> Path:
-        return OPERATOR_DIR / "db"
+        return self.base_dir / "db"
 
     def logs_dir(self) -> Path:
-        return LOGS_DIR
+        return self.base_dir / "logs"
 
     def default_agent(self) -> str:
         """Return the first agent name from config, or 'default'."""
@@ -321,6 +332,8 @@ def load_config(path: Path | None = None) -> Config:
         raise ConfigError(f"Invalid YAML in {path}: {e}") from e
     except Exception as e:
         raise ConfigError(f"Invalid config in {path}: {e}") from e
+
+    config.set_base_dir(path.parent)
 
     if config.runtime.env_file:
         _load_env_file(config.runtime.env_file, base_dir=path.parent)
