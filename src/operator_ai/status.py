@@ -78,6 +78,8 @@ TOOL_LABELS: dict[str, Callable[[dict], str]] = {
     "list_jobs": _label_static("Listing jobs..."),
     "get_state": _label_static("Reading state..."),
     "set_state": _label_static("Saving state..."),
+    "append_state": _label_static("Appending state..."),
+    "pop_state": _label_static("Popping state..."),
     "delete_state": _label_static("Deleting state..."),
     "list_state": _label_static("Listing state..."),
 }

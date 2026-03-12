@@ -259,9 +259,8 @@ go into files and display output.
 
 #### Agent state
 
-Small, per-agent operational data lives in file-backed state documents in a
-reserved `state/` directory within each agent's directory. This replaces the
-older key-value store concept.
+Small, per-agent operational data lives in file-backed JSON documents in a
+reserved `state/` directory within each agent's directory.
 
 This covers:
 
@@ -270,15 +269,24 @@ This covers:
 - cooldowns
 - counters
 - last-processed markers
+- history lists (e.g., previously used values to avoid repetition)
 
 Agent state is human-inspectable but not user-facing knowledge. If a human
 would reasonably want to understand it as knowledge — a preference, a fact, a
 behavioral rule — it belongs in memory, not state.
 
-Agents should not manage state through arbitrary file writes. Operator exposes
-dedicated state tools that read and write structured state documents in the
-reserved state area. This keeps state deterministic and debuggable without
-reintroducing a generic key-value concept.
+State values are restricted to scalar types (string, number, boolean) and
+ordered lists of scalars. Agents interact with state through dedicated tools
+that enforce this structure:
+
+- `get_state` / `set_state` — read and write scalar values
+- `append_state` / `pop_state` — push to and consume from ordered lists
+- `list_state` / `delete_state` — enumerate and remove keys
+
+Agents never construct or parse JSON directly. The tools accept and return
+typed primitives, and the runtime handles serialization. This keeps state
+deterministic and debuggable — each key is a single inspectable file with a
+clear type, not an opaque blob the agent invented.
 
 ### Timezone handling
 
