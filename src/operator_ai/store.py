@@ -217,8 +217,12 @@ class Store:
         ).fetchone()
         if row is None:
             self._conn.execute(
-                "INSERT INTO messages (conversation_id, message_json) VALUES (?, ?)",
-                (conversation_id, json.dumps({"role": "system", "content": system_prompt})),
+                "INSERT INTO messages (conversation_id, message_json, created_at) VALUES (?, ?, ?)",
+                (
+                    conversation_id,
+                    json.dumps({"role": "system", "content": system_prompt}),
+                    time.time(),
+                ),
             )
             self._conn.commit()
             return
@@ -244,7 +248,7 @@ class Store:
         for row in rows:
             message = json.loads(row["message_json"])
             created_at = row["created_at"]
-            if created_at:
+            if created_at and message.get("role") != "system":
                 message[MESSAGE_CREATED_AT_KEY] = float(created_at)
             messages.append(message)
         safe_messages = trim_incomplete_tool_turns(messages)
@@ -276,7 +280,7 @@ class Store:
                 (
                     conversation_id,
                     json.dumps(payload),
-                    float(created_at) if isinstance(created_at, (int, float)) else None,
+                    float(created_at) if isinstance(created_at, (int, float)) else time.time(),
                 )
             )
         self._conn.executemany(

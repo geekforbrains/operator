@@ -5,7 +5,13 @@ from pathlib import Path
 
 import pytest
 
+from operator_ai.message_timestamps import MESSAGE_CREATED_AT_KEY
 from operator_ai.store import Store, User, _validate_username
+
+
+def _strip_ts(messages: list[dict]) -> list[dict]:
+    """Remove dynamic _operator_created_at for stable assertions."""
+    return [{k: v for k, v in m.items() if k != MESSAGE_CREATED_AT_KEY} for m in messages]
 
 
 @pytest.fixture
@@ -249,12 +255,12 @@ def test_load_messages_trims_incomplete_tool_turns(store: Store) -> None:
     )
 
     loaded = store.load_messages(conv)
-    assert loaded == [
+    assert _strip_ts(loaded) == [
         {"role": "system", "content": "system"},
         {"role": "user", "content": "u1"},
     ]
     # Ensure the repair is persisted
-    assert store.load_messages(conv) == loaded
+    assert _strip_ts(store.load_messages(conv)) == _strip_ts(loaded)
 
 
 def test_load_messages_preserves_created_at_metadata(store: Store) -> None:
@@ -299,7 +305,7 @@ def test_load_messages_keeps_complete_tool_turns(store: Store) -> None:
     )
 
     loaded = store.load_messages(conv)
-    assert loaded == [
+    assert _strip_ts(loaded) == [
         {"role": "system", "content": "system"},
         {"role": "user", "content": "u1"},
         {"role": "assistant", "content": "a1", "tool_calls": [{"id": "call_1"}]},
