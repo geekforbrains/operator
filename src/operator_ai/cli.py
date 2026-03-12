@@ -32,6 +32,8 @@ from operator_ai.jobs import run_job_now
 from operator_ai.log_context import setup_logging
 from operator_ai.main import async_main
 from operator_ai.memory import MemoryStore
+from operator_ai.memory_index import MemoryIndex
+from operator_ai.memory_reindex import reindex_diff, reindex_full
 from operator_ai.message_timestamps import format_ts
 from operator_ai.prompts import load_prompt
 from operator_ai.skills import (
@@ -1209,7 +1211,9 @@ def memory_list_cmd(
     scope: str = typer.Argument("global", help="Scope: global, agent:<name>, or user:<name>."),
 ) -> None:
     """List rules and notes for a scope."""
-    mem = MemoryStore(base_dir=OPERATOR_DIR)
+    index_db = OPERATOR_DIR / "db" / "memory_index.db"
+    index = MemoryIndex(index_db) if index_db.exists() else None
+    mem = MemoryStore(base_dir=OPERATOR_DIR, index=index)
     rules = mem.list_rules(scope)
     notes = mem.list_notes(scope)
 
@@ -1249,7 +1253,9 @@ def memory_search_cmd(
     scope: str = typer.Option("global", "--scope", "-s", help="Scope to search."),
 ) -> None:
     """Search notes by filename and content."""
-    mem = MemoryStore(base_dir=OPERATOR_DIR)
+    index_db = OPERATOR_DIR / "db" / "memory_index.db"
+    index = MemoryIndex(index_db) if index_db.exists() else None
+    mem = MemoryStore(base_dir=OPERATOR_DIR, index=index)
     results = mem.search_notes(scope, query)
 
     if not results:
@@ -1269,6 +1275,25 @@ def memory_search_cmd(
         table.add_row(mf.relative_path, updated, content)
 
     console.print(table)
+
+
+@memory_app.command("index")
+def memory_index_cmd(
+    force: bool = typer.Option(False, "--force", help="Full rebuild instead of hash-diff."),
+) -> None:
+    """Rebuild the FTS5 search index from memory files on disk."""
+    index_db = OPERATOR_DIR / "db" / "memory_index.db"
+    index = MemoryIndex(index_db)
+    mem = MemoryStore(base_dir=OPERATOR_DIR, index=index)
+
+    if force:
+        count = reindex_full(mem, index)
+        console.print(f"Full reindex complete: {count} files indexed.")
+    else:
+        upserted, deleted = reindex_diff(mem, index)
+        console.print(f"Reindex complete: {upserted} updated, {deleted} removed.")
+
+    index.close()
 
 
 # ── Config command ───────────────────────────────────────────

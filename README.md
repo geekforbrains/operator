@@ -160,7 +160,7 @@ Reusable capabilities at `~/.operator/skills/<name>/SKILL.md` — scripts, refer
 
 ### Memory
 
-Operator keeps long-term memory as files, not hidden vector state. Memory is scoped per-user, per-agent, and globally so agents can remember preferences and reusable knowledge without leaking them across the wrong contexts.
+Operator keeps long-term memory as markdown files — the source of truth is always human-readable and editable. Memory is scoped per-user, per-agent, and globally so agents can remember preferences and reusable knowledge without leaking them across the wrong contexts.
 
 Memory has two behaviors:
 
@@ -168,6 +168,29 @@ Memory has two behaviors:
 - `notes/`: searched on demand for durable knowledge that should not bloat every prompt
 
 Each memory item lives in its own markdown file with minimal frontmatter. Short-lived memory uses `expires_at`, and expired items move to `trash/` instead of disappearing silently. See [PRINCIPLES.md](PRINCIPLES.md) for the full memory model and reasoning behind it.
+
+#### Search
+
+Notes are searched using SQLite FTS5 with Porter stemming and BM25 relevance ranking. The index is derived from memory files and rebuilt automatically on startup. After manually editing memory files, run `operator memory index` to update the index.
+
+#### Optional: Vector Embeddings
+
+For semantic search (e.g., "deployment schedule" matching notes about "release cadence"), configure an embedding model:
+
+```yaml
+defaults:
+  embeddings:
+    model: "openai/text-embedding-3-small"
+    dimensions: 1536
+```
+
+When configured, embeddings are computed on write and used alongside FTS5 via Reciprocal Rank Fusion. Install `sqlite-vec` for vector storage:
+
+```sh
+pip install sqlite-vec
+```
+
+Without embeddings, FTS5 handles all search. No external model dependency is required for core memory functionality.
 
 ### Permissions
 
@@ -273,7 +296,9 @@ operator job run <name>           # trigger a job now
 operator user list                # show all users
 operator user add <name> ...      # add a user
 operator memory list              # browse file-backed memory
-operator memory search <query>    # search notes
+operator memory search <query>    # search notes (FTS5)
+operator memory index             # rebuild search index from files
+operator memory index --force     # full rebuild (drop + reindex)
 operator logs -f                  # tail logs
 operator service install          # install as a system service
 ```

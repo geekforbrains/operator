@@ -411,10 +411,12 @@ management tools.
 Long-term memory is a core capability. Agents work across many tasks and
 conversations over time and must retain important details.
 
-### Embeddings are not required
+### Files are the source of truth
 
-Operator's long-term memory model does not depend on embeddings or vector
-search. The memory source of truth is file-backed markdown.
+Memory content lives in file-backed markdown. The retrieval layer uses a
+SQLite FTS5 index derived from those files, but files remain authoritative
+and human-editable. The index is disposable and rebuildable at any time
+via `operator memory index`.
 
 This keeps memory:
 
@@ -423,7 +425,17 @@ This keeps memory:
 - easy to debug
 - transport-agnostic
 - version-controllable
-- free from an extra mandatory model dependency
+
+### Embeddings are optional
+
+Vector embeddings can be configured for semantic search but are not required
+for core memory functionality. When configured, embeddings are computed on
+write and stored alongside the FTS5 index. When not configured, search uses
+FTS5 with Porter stemming — no external model dependency needed.
+
+The index database lives at `~/.operator/db/memory_index.db`, separate from
+the main `operator.db`. This separation makes it safe to delete and rebuild
+the index without affecting conversations, users, or other runtime state.
 
 ### Rules and notes
 
@@ -511,16 +523,25 @@ Guidelines:
 
 ### Notes search
 
-Notes are searched by filename and content using text-based tools. There is no
-semantic layer — search is substring and pattern matching across the notes
-directory.
+Notes are searched using SQLite FTS5 with Porter stemming and BM25 relevance
+ranking. The FTS5 index is derived from the memory files on disk and is
+rebuilt automatically on startup (hash-diff — only changed files are
+reindexed). The `operator memory index` CLI command triggers a manual
+reindex after human edits to memory files.
 
-This works because the write-time memory tools enforce descriptive filenames.
-Determinism comes from the point of creation, not retrieval. If the tool names
-files well, search does not need to be smart.
+Porter stemming means "deployment" matches "deploying", "deployed", and
+"deploy" natively. BM25 provides real relevance ranking rather than simple
+hit counting. This replaces the earlier ripgrep + suffix-variant approach
+with better coverage and zero custom stemming code.
 
-The system is optimized for efficient search tools like ripgrep but falls back
-to standard utilities when they are not available.
+When vector embeddings are configured (`defaults.embeddings` in
+`operator.yaml`), search results are fused using Reciprocal Rank Fusion
+across FTS5 and vector similarity. This provides semantic search —
+"deployment schedule" can find notes about "release cadence" — without
+making embeddings a hard requirement.
+
+Determinism at write time still matters. The memory tools enforce descriptive
+filenames that make FTS5 search effective even without embeddings.
 
 ### Memory creation
 

@@ -34,6 +34,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest", "ruff"]
+vec = ["sqlite-vec"]
 
 [project.scripts]
 operator = "operator_ai.cli:cli"

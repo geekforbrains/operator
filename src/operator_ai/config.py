@@ -49,6 +49,11 @@ class StrictConfigModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class EmbeddingConfig(StrictConfigModel):
+    model: str  # e.g. "openai/text-embedding-3-small"
+    dimensions: int = Field(default=1536, gt=0)
+
+
 class DefaultsConfig(StrictConfigModel):
     models: list[str] = Field(default_factory=list)
     thinking: ThinkingLevel = "off"
@@ -56,6 +61,7 @@ class DefaultsConfig(StrictConfigModel):
     context_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
     max_output_tokens: int | None = Field(default=None, gt=0)
     hook_timeout: int = Field(default=30, gt=0)
+    embeddings: EmbeddingConfig | None = None
 
     @model_validator(mode="before")
     @classmethod

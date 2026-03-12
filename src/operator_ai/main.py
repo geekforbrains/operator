@@ -22,6 +22,8 @@ from operator_ai.jobs import JobRunner
 from operator_ai.layout import ensure_layout
 from operator_ai.log_context import new_run_id, set_run_context, setup_logging
 from operator_ai.memory import MemoryStore
+from operator_ai.memory_index import MemoryIndex
+from operator_ai.memory_reindex import reindex_diff
 from operator_ai.message_timestamps import attach_message_created_at
 from operator_ai.messages import trim_incomplete_tool_turns
 from operator_ai.prompts import assemble_system_prompt
@@ -738,6 +740,7 @@ async def async_main() -> None:
     job_runner: JobRunner | None = None
     sweep_task: asyncio.Task[None] | None = None
     transports: list[Transport] = []
+    memory_index: MemoryIndex | None = None
     loop = asyncio.get_running_loop()
 
     def _signal_handler() -> None:
@@ -759,7 +762,32 @@ async def async_main() -> None:
             sys.exit(1)
 
         store = get_store()
-        memory_store = MemoryStore(base_dir=OPERATOR_DIR)
+
+        # Build the memory index (FTS5 + optional vector)
+        embed_fn = None
+        embed_dims = 1536
+        if config.defaults.embeddings:
+            embed_dims = config.defaults.embeddings.dimensions
+            embed_model = config.defaults.embeddings.model
+
+            def embed_fn(text: str) -> list[float]:
+                import litellm
+
+                resp = litellm.embedding(model=embed_model, input=[text])
+                return resp.data[0]["embedding"]
+
+        memory_index = MemoryIndex(
+            OPERATOR_DIR / "db" / "memory_index.db",
+            embed_fn=embed_fn,
+            embedding_dimensions=embed_dims,
+        )
+        memory_store = MemoryStore(base_dir=OPERATOR_DIR, index=memory_index)
+
+        # Startup reindex — only changed files
+        try:
+            reindex_diff(memory_store, memory_index)
+        except Exception:
+            logger.exception("Startup memory reindex failed (non-fatal)")
 
         if not store.list_users():
             logger.warning(
@@ -844,6 +872,8 @@ async def async_main() -> None:
             await transport.stop()
 
         await close_session()
+        if memory_index is not None:
+            memory_index.close()
         os.close(lock_fd)
 
 
