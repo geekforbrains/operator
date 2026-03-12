@@ -94,7 +94,8 @@ class TransportConfig(StrictConfigModel):
 
 
 class PermissionsConfig(StrictConfigModel):
-    tools: list[str] | Literal["*"] | None = None  # None = no block = full access
+    # None = deny all (closed by default), "*" = allow all, list = allowlist
+    tools: list[str] | Literal["*"] | None = None
     skills: list[str] | Literal["*"] | None = None
 
 
