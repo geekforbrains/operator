@@ -1159,12 +1159,10 @@ dependencies = [
     { name = "litellm" },
     { name = "markdown-to-mrkdwn" },
     { name = "pydantic" },
-    { name = "pysqlite3" },
     { name = "pyyaml" },
     { name = "rich" },
     { name = "slack-bolt" },
     { name = "slack-sdk" },
-    { name = "sqlite-vec" },
     { name = "trafilatura" },
     { name = "typer" },
     { name = "typing-extensions" },
@@ -1183,14 +1181,12 @@ requires-dist = [
     { name = "litellm" },
     { name = "markdown-to-mrkdwn" },
     { name = "pydantic" },
-    { name = "pysqlite3" },
     { name = "pytest", marker = "extra == 'dev'" },
     { name = "pyyaml" },
     { name = "rich" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "slack-bolt" },
     { name = "slack-sdk" },
-    { name = "sqlite-vec" },
     { name = "trafilatura" },
     { name = "typer" },
     { name = "typing-extensions" },
@@ -1425,34 +1421,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b0/77/a5b8c569bf593b0140bde72ea885a803b82086995367bf2037de0159d924/pygments-2.19.2.tar.gz", hash = "sha256:636cb2477cec7f8952536970bc533bc43743542f70392ae026374600add5b887", size = 4968631 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/c7/21/705964c7812476f378728bdf590ca4b771ec72385c533964653c68e86bdc/pygments-2.19.2-py3-none-any.whl", hash = "sha256:86540386c03d588bb81d44bc3928634ff26449851e99741617ecb9037ee5ec0b", size = 1225217 },
-]
-
-[[package]]
-name = "pysqlite3"
-version = "0.6.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/fa/84/6e586bef5f6337dee60066eef752c73fa6fcb93c1e7997b550d3105ed4f9/pysqlite3-0.6.0.tar.gz", hash = "sha256:ecf5112b62a4e6c04438957e343fe9672707bd3191f789ecae6c95b226aa6bb6", size = 40838 }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f3/33/75d5279c4cd374bae4c75237bbcff0f26c9722ce8a942cd118c9bb11b7f3/pysqlite3-0.6.0-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:e3e0ff8dfd84926a06cac62905b7659be7152ced4f6c1ac8ea381a1281555cce", size = 953036 },
-    { url = "https://files.pythonhosted.org/packages/f6/6a/3e6b57ab1ff672abe537e31ecf3c3060f5968cce0410e8f15d4cd2e4f34b/pysqlite3-0.6.0-cp311-cp311-manylinux_2_28_x86_64.whl", hash = "sha256:51f24094c55039bd10c0a2d83e3c502039bf4bfa2b199ecf326815c52ec30bfb", size = 4524880 },
-    { url = "https://files.pythonhosted.org/packages/39/bb/b0960adb5ee542cb767dd15c772654c22dbcfb6d34d3ce99df88bd647dd3/pysqlite3-0.6.0-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:b4b1f27e8cfe15a4b13448a3ff48daa0a3cfd0bdb202aeb2378d768c14407b28", size = 4525452 },
-    { url = "https://files.pythonhosted.org/packages/0d/ad/ff1244626744a00a1d11a1be6ead6bcf222c9fba6ce4bb04550344e6dcfb/pysqlite3-0.6.0-cp311-cp311-win32.whl", hash = "sha256:c02894e33691c742c62e4219a03b9683e1fdd4bad7d799c3395df8aefcd5ed17", size = 727376 },
-    { url = "https://files.pythonhosted.org/packages/e5/5b/b1e39a866eb57004ef23df455413d8dbdaefb565c1c9c26c669d0a0ef7d4/pysqlite3-0.6.0-cp311-cp311-win_amd64.whl", hash = "sha256:193488f62ebafcca1b72beb3daba98e4bc3be62ca6e3adee5bff603eadb535f7", size = 877989 },
-    { url = "https://files.pythonhosted.org/packages/8e/18/bacbb8a2441b143bfccde253732e16df2c317048523b21902ccff332cee7/pysqlite3-0.6.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:a7855d3016392fa81571404fc1647a1d07d1128ff862652e1f89e59edcc3405e", size = 953475 },
-    { url = "https://files.pythonhosted.org/packages/17/6f/ffda929b007221f7f67e0a3cc767532c53d62704a286c6349e4c363ff32a/pysqlite3-0.6.0-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:60cc74e051af0bef460950ea975d2d6c80a2145203f23653673a19cc367a6bb7", size = 4531104 },
-    { url = "https://files.pythonhosted.org/packages/a4/a0/c871dfe9f7b3c7806c3990f173dc192409ae91d39d07a474882f3433c76e/pysqlite3-0.6.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:c86cd86b2833b43fb4c01b8c90e71f70e95105995f4b1e27b8d9d5c906512992", size = 4533627 },
-    { url = "https://files.pythonhosted.org/packages/2f/a1/a8ee146a706a9262fc904fa44cd45cf6f60dc776cd0222ecfd9c21afba3e/pysqlite3-0.6.0-cp312-cp312-win32.whl", hash = "sha256:ed0da0211335335900e699f93c7fe7292ab3437b015ee1310ee5199fd9d05c29", size = 727854 },
-    { url = "https://files.pythonhosted.org/packages/82/49/0cfffa2e6e4431e8a94ddd0e54a16dc25f5e799e3edec44a6173c0c4bb5e/pysqlite3-0.6.0-cp312-cp312-win_amd64.whl", hash = "sha256:f88d0f8f45bf3644ddd3e7c7de4b6b8d5b10a1bfe23db55b5a1ed95cbd4a0cb9", size = 878641 },
-    { url = "https://files.pythonhosted.org/packages/3d/74/b59766bc544bb1b915bb17d9ee93fe6dc86c77f614f028baea1a6d1fe7d7/pysqlite3-0.6.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:64d48638e2c787f1e7ca0100294740f4db7f6bce1516ba8076e082d6443925d4", size = 953052 },
-    { url = "https://files.pythonhosted.org/packages/6e/5c/f52f10a4a49d190dc8e3a56f6788580c09b673f465dbd431e2f16eabf788/pysqlite3-0.6.0-cp313-cp313-manylinux_2_28_x86_64.whl", hash = "sha256:1cc753922baa703496b6edbf92687389490b0e7ad61b7ed4925e6cf2a7def0a1", size = 4528389 },
-    { url = "https://files.pythonhosted.org/packages/af/22/cb8a672b204ae4ad03d400ffc2ac85d9152fee0c56ef7588158d9e440c9e/pysqlite3-0.6.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:4f03a69a9c64d0476bbf9c619e1024770368b08e6b572c3f5f0fa641f1b67f27", size = 4531182 },
-    { url = "https://files.pythonhosted.org/packages/96/8f/710dc106948d9196a0fd8b5f8b958471b70fb95c86287444f78e55d1068e/pysqlite3-0.6.0-cp313-cp313-win32.whl", hash = "sha256:5ae52d27b48a634f1015051d791d23a5bd3f0a992099a632bf39bca21a156420", size = 727626 },
-    { url = "https://files.pythonhosted.org/packages/40/06/e30830a19aad6c530a256712d2d91b5720bd666d95dd2a2a5991c5d357fd/pysqlite3-0.6.0-cp313-cp313-win_amd64.whl", hash = "sha256:2886b6ccf9c3c7ce678ea795a2aa9ddb4563c50c81bce399560fdb2c5662e55d", size = 878086 },
-    { url = "https://files.pythonhosted.org/packages/6a/8b/9460af84b3e0a33767615b4148bcb746a6aadf9fe2cc55b399d4e00ca22e/pysqlite3-0.6.0-cp314-cp314-macosx_11_0_arm64.whl", hash = "sha256:b6f768d6e00d4574f5cc1bff174a4703382afe221b04b009bcb8b41164af08a0", size = 952994 },
-    { url = "https://files.pythonhosted.org/packages/ea/3f/5445614ed6b60f058715923d12e7a10a6464cd1cf29ec3a166cc0be46e8e/pysqlite3-0.6.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:268fa5873143cccd79f32624c9a25714e4595715795ae09c8366c75cae8f5aed", size = 4528324 },
-    { url = "https://files.pythonhosted.org/packages/46/c8/f490d4890f1d1541efda54fea9249f9ae264c46fd5d0e12e5e2757f6abcb/pysqlite3-0.6.0-cp314-cp314-musllinux_1_2_x86_64.whl", hash = "sha256:65a9af11004d350538b6bd852b0ec22cdd62928be9ab522d85c0840d5bf92a72", size = 4531310 },
-    { url = "https://files.pythonhosted.org/packages/e0/c3/ff97773adf35afaadaa969ae9fa20f09d25732b2ceba0b986f7039a89c6b/pysqlite3-0.6.0-cp314-cp314-win32.whl", hash = "sha256:cc9787dc409f800e310c8a457b7c98d1c4d4a76e15821b7fb460c0e63554ddd8", size = 744085 },
-    { url = "https://files.pythonhosted.org/packages/bc/76/103fc35bec8934c672b5193eadc66384472fd071c269cd95bc4b16595d17/pysqlite3-0.6.0-cp314-cp314-win_amd64.whl", hash = "sha256:81226436fae52d3bec4ce578104c5bcf4c22d3fcf29d4a590fcbde56b90472ef", size = 903944 },
 ]
 
 [[package]]
@@ -1881,18 +1849,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235 },
-]
-
-[[package]]
-name = "sqlite-vec"
-version = "0.1.6"
-source = { registry = "https://pypi.org/simple" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/88/ed/aabc328f29ee6814033d008ec43e44f2c595447d9cccd5f2aabe60df2933/sqlite_vec-0.1.6-py3-none-macosx_10_6_x86_64.whl", hash = "sha256:77491bcaa6d496f2acb5cc0d0ff0b8964434f141523c121e313f9a7d8088dee3", size = 164075 },
-    { url = "https://files.pythonhosted.org/packages/a7/57/05604e509a129b22e303758bfa062c19afb020557d5e19b008c64016704e/sqlite_vec-0.1.6-py3-none-macosx_11_0_arm64.whl", hash = "sha256:fdca35f7ee3243668a055255d4dee4dea7eed5a06da8cad409f89facf4595361", size = 165242 },
-    { url = "https://files.pythonhosted.org/packages/f2/48/dbb2cc4e5bad88c89c7bb296e2d0a8df58aab9edc75853728c361eefc24f/sqlite_vec-0.1.6-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.whl", hash = "sha256:7b0519d9cd96164cd2e08e8eed225197f9cd2f0be82cb04567692a0a4be02da3", size = 103704 },
-    { url = "https://files.pythonhosted.org/packages/80/76/97f33b1a2446f6ae55e59b33869bed4eafaf59b7f4c662c8d9491b6a714a/sqlite_vec-0.1.6-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.manylinux1_x86_64.whl", hash = "sha256:823b0493add80d7fe82ab0fe25df7c0703f4752941aee1c7b2b02cec9656cb24", size = 151556 },
-    { url = "https://files.pythonhosted.org/packages/6a/98/e8bc58b178266eae2fcf4c9c7a8303a8d41164d781b32d71097924a6bebe/sqlite_vec-0.1.6-py3-none-win_amd64.whl", hash = "sha256:c65bcfd90fa2f41f9000052bcb8bb75d38240b2dae49225389eca6c3136d3f0c", size = 281540 },
 ]
 
 [[package]]
