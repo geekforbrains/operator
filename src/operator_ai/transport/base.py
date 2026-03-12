@@ -47,6 +47,8 @@ class MessageContext:
     roles: list[str] = field(default_factory=list)
     timezone: str | None = None
     chat_type: str = ""
+    agent_name: str = ""
+    agent_platform_id: str = ""
 
     def to_prompt(self, workspace: str = "", operator_home: str = "") -> str:
         lines = [
@@ -54,6 +56,11 @@ class MessageContext:
             "",
             f"- Platform: {self.platform}",
         ]
+        if self.agent_name:
+            agent_line = f"- Agent (You): {self.agent_name}"
+            if self.agent_platform_id:
+                agent_line += f" (`{self.agent_platform_id}`)"
+            lines.append(agent_line)
         if self.chat_type:
             lines.append(f"- Chat type: {self.chat_type}")
         lines.append(f"- Channel: {self.channel_name} (`{self.channel_id}`)")

@@ -147,6 +147,8 @@ class SlackTransport(Transport):
         self._handler: AsyncSocketModeHandler | None = None
         self._background_tasks: set[asyncio.Task] = set()
 
+        self._bot_user_id: str = ""
+
         # In-memory caches (bulk-loaded on startup, updated by Slack events).
         self._users: dict[str, str] = {}
         self._user_directory: dict[str, SlackUserProfile] = {}
@@ -204,6 +206,12 @@ class SlackTransport(Transport):
                 await self._fetch_and_upsert_channel(channel_id)
 
         self._handler = AsyncSocketModeHandler(self._app, self._app_token)
+        try:
+            auth_resp = await self._api_call("auth.test", self._app.client.auth_test)
+            self._bot_user_id = auth_resp.get("user_id", "")
+            logger.debug("Bot user ID: %s", self._bot_user_id)
+        except Exception:
+            logger.warning("Failed to resolve bot user ID via auth.test", exc_info=True)
         try:
             await self._fetch_all_users()
             logger.debug("Loaded %d Slack users", len(self._user_directory))
@@ -571,6 +579,8 @@ class SlackTransport(Transport):
             user_id=msg.user_id,
             user_name=await self._resolve_user(raw_user_id),
             chat_type=chat_type,
+            agent_name=self.agent_name,
+            agent_platform_id=self._bot_user_id,
         )
 
     async def _resolve_user(self, user_id: str) -> str:

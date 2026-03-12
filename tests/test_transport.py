@@ -87,6 +87,34 @@ def test_to_prompt_no_timezone_note_without_username() -> None:
     assert "Timezone" not in result
 
 
+def test_to_prompt_renders_agent_identity() -> None:
+    ctx = MessageContext(
+        platform="slack",
+        channel_id="C123",
+        channel_name="#general",
+        user_id="U04ABC123",
+        user_name="Gavin Vickery",
+        agent_name="hermy",
+        agent_platform_id="U0AF0SK8HPU",
+    )
+    result = ctx.to_prompt()
+    assert "- Agent (You): hermy (`U0AF0SK8HPU`)" in result
+
+
+def test_to_prompt_agent_without_platform_id() -> None:
+    ctx = MessageContext(
+        platform="cli",
+        channel_id="cli",
+        channel_name="cli",
+        user_id="cli",
+        user_name="cli",
+        agent_name="operator",
+    )
+    result = ctx.to_prompt()
+    assert "- Agent (You): operator" in result
+    assert "(`" not in result.split("Agent (You):")[1].split("\n")[0]
+
+
 def test_to_prompt_renders_chat_type() -> None:
     ctx = MessageContext(
         platform="slack",
