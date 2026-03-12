@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 from operator_ai.agents import AgentInfo, build_agents_prompt, load_agent_body, scan_agents
-from operator_ai.config import OPERATOR_DIR, SKILLS_DIR, Config
+from operator_ai.config import LOGS_DIR, OPERATOR_DIR, SKILLS_DIR, Config
 from operator_ai.memory import MemoryStore
 from operator_ai.skills import SkillInfo, build_skills_prompt, scan_skills
+
+logger = logging.getLogger("operator.prompts")
 
 PROMPTS_DIR = Path(__file__).parent
 SYSTEM_PROMPT_PATH = OPERATOR_DIR / "SYSTEM.md"
@@ -93,6 +98,19 @@ def _build_rules_section(
     return "# Rules\n\n" + "\n\n".join(sections)
 
 
+def _dump_system_prompt(prompt: str, agent_name: str) -> None:
+    """Write the assembled system prompt to a timestamped file for debugging."""
+    prompt_dir = LOGS_DIR / "prompts"
+    prompt_dir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%S_%f")
+    path = prompt_dir / f"system_{agent_name}_{ts}.md"
+    try:
+        path.write_text(prompt)
+        logger.info("system prompt dumped to %s (%d chars)", path, len(prompt))
+    except Exception:
+        logger.warning("failed to dump system prompt", exc_info=True)
+
+
 def assemble_system_prompt(
     config: Config,
     agent_name: str,
@@ -160,6 +178,9 @@ def assemble_system_prompt(
     stable_text = "\n\n".join(part for part in stable if part)
     dynamic_text = "\n\n".join(part for part in dynamic if part)
 
-    if dynamic_text:
-        return stable_text + CACHE_BOUNDARY + dynamic_text
-    return stable_text
+    prompt = stable_text + CACHE_BOUNDARY + dynamic_text if dynamic_text else stable_text
+
+    if os.environ.get("OPERATOR_LOG_PROMPT", "").lower() in ("1", "true", "yes"):
+        _dump_system_prompt(prompt, agent_name)
+
+    return prompt
