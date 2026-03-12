@@ -19,6 +19,35 @@ _TTL_RE = re.compile(r"^(\d+)\s*([mhdw])$", re.IGNORECASE)
 _MEMORY_DIR_BY_KIND = {"rule": "rules", "note": "notes"}
 
 
+def _word_variants(word: str) -> list[str]:
+    """Generate common English suffix variants for fuzzy matching.
+
+    Given a word, return the original plus forms with suffixes stripped or
+    added so that "dogs" matches "dog", "running" matches "run", etc.
+    """
+    forms: list[str] = [word]
+    # Strip suffixes: dogs→dog, watches→watch, traveled→travel, running→run
+    if word.endswith("ies") and len(word) > 4:
+        forms.append(word[:-3] + "y")  # families→family
+    if word.endswith("ses") and len(word) > 4:
+        forms.append(word[:-2])  # buses→bus
+    if word.endswith("es") and len(word) > 4:
+        forms.append(word[:-2])  # watches→watch
+    if word.endswith("s") and not word.endswith("ss") and len(word) > 3:
+        forms.append(word[:-1])  # dogs→dog
+    if word.endswith("ed") and len(word) > 4:
+        forms.append(word[:-2])  # traveled→travel
+        forms.append(word[:-1])  # named→name (strip d only)
+    if word.endswith("ing") and len(word) > 5:
+        forms.append(word[:-3])  # running→runn
+        forms.append(word[:-3] + "e")  # hiking→hike
+    # Add plural: dog→dogs
+    if not word.endswith("s"):
+        forms.append(word + "s")
+    # Dedupe while preserving order
+    return list(dict.fromkeys(f for f in forms if len(f) >= 2))
+
+
 def parse_ttl(ttl: str) -> timedelta:
     """Parse a human-friendly duration string into a timedelta.
 
@@ -287,63 +316,62 @@ class MemoryStore:
     # ── Search ───────────────────────────────────────────────────
 
     def search_notes(self, scope: str, query: str) -> list[MemoryFile]:
-        """Search notes by filename and content substring.
+        """Search notes by filename and content, matching any word variant.
 
-        Uses ripgrep for content search when available, falls back to
-        pathlib glob + read.
+        The query is split into words and each word is expanded with common
+        English suffix variants (dogs→dog, running→run, etc.).  A note
+        matches if any variant appears in its filename or content.
         """
         notes_dir = self._memory_dir(scope, "note")
         if not notes_dir.is_dir():
             return []
 
-        query_lower = query.lower()
+        words = [w for w in query.lower().split() if w]
+        if not words:
+            return []
 
-        # Filename matches (always via glob)
-        filename_matches: list[MemoryFile] = []
-        content_matches: list[MemoryFile] = []
+        # Expand each query word into variant forms
+        variants: list[str] = []
+        for w in words:
+            variants.extend(_word_variants(w))
+        variants = list(dict.fromkeys(variants))  # dedupe, preserve order
 
+        all_files = {mf.path: mf for mf in self._list_files(notes_dir)}
+        if not all_files:
+            return []
+
+        # Collect content matches via ripgrep or fallback
+        content_hit_paths: set[Path] = set()
         if _has_ripgrep():
-            # Use ripgrep for content search
-            rg_matches = self._rg_search(notes_dir, query)
-            all_files = {mf.path: mf for mf in self._list_files(notes_dir)}
-
-            for path in rg_matches:
-                if path in all_files:
-                    mf = all_files[path]
-                    slug_part = path.stem.lower()
-                    if query_lower in slug_part:
-                        filename_matches.append(mf)
-                    else:
-                        content_matches.append(mf)
-
-            # Also add filename matches that ripgrep may not have found
-            for path, mf in all_files.items():
-                slug_part = path.stem.lower()
-                if query_lower in slug_part and mf not in filename_matches:
-                    filename_matches.append(mf)
+            content_hit_paths = set(self._rg_search(notes_dir, "|".join(variants)))
         else:
-            # Fallback: pathlib glob + read
-            for mf in self._list_files(notes_dir):
-                slug_part = mf.path.stem.lower()
-                if query_lower in slug_part:
-                    filename_matches.append(mf)
-                elif query_lower in mf.content.lower():
-                    content_matches.append(mf)
+            for path, mf in all_files.items():
+                content_lower = mf.content.lower()
+                if any(v in content_lower for v in variants):
+                    content_hit_paths.add(path)
 
-        # Filename matches first, then content matches
-        seen: set[Path] = set()
-        results: list[MemoryFile] = []
-        for mf in filename_matches + content_matches:
-            if mf.path not in seen:
-                seen.add(mf.path)
-                results.append(mf)
-        return results
+        # Score each note: count how many variants appear in filename + content
+        scored: list[tuple[int, bool, MemoryFile]] = []
+        for path, mf in all_files.items():
+            slug = path.stem.lower()
+            content_lower = mf.content.lower()
+            filename_hits = sum(1 for v in variants if v in slug)
+            content_hits = (
+                sum(1 for v in variants if v in content_lower) if path in content_hit_paths else 0
+            )
+            total = filename_hits + content_hits
+            if total > 0:
+                scored.append((total, filename_hits > 0, mf))
 
-    def _rg_search(self, directory: Path, query: str) -> list[Path]:
-        """Run ripgrep and return matching file paths."""
+        # Sort: most hits first, filename matches break ties
+        scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+        return [mf for _, _, mf in scored]
+
+    def _rg_search(self, directory: Path, pattern: str) -> list[Path]:
+        """Run ripgrep with a regex pattern and return matching file paths."""
         try:
             result = subprocess.run(
-                ["rg", "--files-with-matches", "--ignore-case", "--no-messages", query],
+                ["rg", "--files-with-matches", "--ignore-case", "--no-messages", pattern],
                 cwd=str(directory),
                 capture_output=True,
                 text=True,
