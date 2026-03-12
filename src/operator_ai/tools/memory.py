@@ -219,6 +219,39 @@ async def list_notes(scope: str = "agent") -> str:
 
 
 @tool(
+    description="Read the full content of a note by its key.",
+)
+async def read_note(key: str, scope: str = "agent") -> str:
+    """Read a note.
+
+    Args:
+        key: The deterministic key of the note.
+        scope: One of "agent", "user", or "global".
+    """
+    memory_store, agent_name, username, allow_user_scope = _get_context()
+
+    try:
+        resolved = _resolve_scope(
+            scope,
+            agent_name=agent_name,
+            username=username,
+            allow_user_scope=allow_user_scope,
+        )
+    except ValueError as e:
+        return f"[error: {e}]"
+
+    mf = memory_store.get_note(resolved, key)
+    if mf is None:
+        return f"Note '{key}' not found in {scope} scope."
+
+    expires = _format_timestamp(mf.expires_at)
+    header = f"[{mf.key}]"
+    if expires:
+        header += f" [expires {expires}]"
+    return f"{header}\n{mf.content}"
+
+
+@tool(
     description="Move a rule memory to trash by deterministic key.",
 )
 async def forget_rule(key: str, scope: str = "agent") -> str:

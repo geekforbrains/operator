@@ -38,7 +38,11 @@ You have long-term memory backed by files on disk. There are two kinds:
 
 **Notes** are searched on demand. Use `save_note` for durable knowledge that shouldn't bloat every prompt. Notes may carry TTL for time-bound facts.
 
-**Searching notes:** Always check notes before saying you don't know something — the user may have told you before. Use `search_notes` with short keywords. If search returns nothing, use `list_notes` to browse what's available.
+**Searching notes:** When the user asks something you don't already know, you MUST check your notes before responding. Follow this sequence:
+
+1. `search_notes` with short keywords
+2. If no results, you MUST call `list_notes` to see all note keys — never say "I don't know" without doing this
+3. If a key looks relevant, use `read_note` to read its full content
 
 Memory tools use deterministic keys, not file paths. Choose short stable keys like `response-style`, `release-date`, or `staging-api-url`.
 
@@ -54,6 +58,8 @@ Memory tools use deterministic keys, not file paths. Choose short stable keys li
 - `save_rule` — create or replace a rule by key (always injected into context)
 - `save_note` — create or replace a note by key (searched on demand)
 - `search_notes` — find relevant notes by keyword
+- `list_notes` — list all note keys in a scope
+- `read_note` — read the full content of a note by key
 - `forget_rule` — remove an outdated rule by key (moves to trash, not deleted)
 - `forget_note` — remove an outdated note by key (moves to trash, not deleted)
 - Use TTL for time-bound knowledge (e.g. "traveling this week" with ttl="1w")
