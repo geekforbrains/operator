@@ -5,7 +5,6 @@ import contextlib
 import logging
 import os
 import time
-from collections.abc import Coroutine
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -339,7 +338,11 @@ async def _execute_job(
 
 
 class JobRunner:
-    """Ticks every 60s, fires jobs whose cron schedule matches."""
+    """Ticks every 60s, fires jobs whose cron schedule matches.
+
+    Jobs targeting the same agent are serialized through per-agent FIFO
+    queues — different agents run concurrently.
+    """
 
     def __init__(
         self,
@@ -353,7 +356,8 @@ class JobRunner:
         self._store = store
         self._memory_store = memory_store
         self._running: set[str] = set()
-        self._tasks: set[asyncio.Task] = set()
+        self._agent_queues: dict[str, asyncio.Queue[tuple[Job, bool]]] = {}
+        self._agent_workers: dict[str, asyncio.Task] = {}
         self._loop_task: asyncio.Task | None = None
 
     def start(self) -> None:
@@ -367,13 +371,50 @@ class JobRunner:
                 await self._loop_task
             self._loop_task = None
 
-        for task in tuple(self._tasks):
+        for task in self._agent_workers.values():
             task.cancel()
-        if self._tasks:
-            await asyncio.gather(*self._tasks, return_exceptions=True)
-            self._tasks.clear()
+        if self._agent_workers:
+            await asyncio.gather(*self._agent_workers.values(), return_exceptions=True)
+        self._agent_workers.clear()
+        self._agent_queues.clear()
         self._running.clear()
         logger.info("JobRunner stopped")
+
+    def _ensure_agent_queue(self, agent_name: str) -> asyncio.Queue[tuple[Job, bool]]:
+        """Return the queue for *agent_name*, lazily creating it and its worker."""
+        if agent_name not in self._agent_queues:
+            queue: asyncio.Queue[tuple[Job, bool]] = asyncio.Queue()
+            self._agent_queues[agent_name] = queue
+            self._agent_workers[agent_name] = asyncio.create_task(self._agent_worker(agent_name))
+        return self._agent_queues[agent_name]
+
+    async def _agent_worker(self, agent_name: str) -> None:
+        """Drain the job queue for *agent_name*, running one job at a time."""
+        queue = self._agent_queues[agent_name]
+        try:
+            while True:
+                job, was_queued = await queue.get()
+                if was_queued:
+                    logger.info(
+                        "Starting queued job '%s' on agent '%s'",
+                        job.name,
+                        agent_name,
+                    )
+                try:
+                    await _execute_job(
+                        job,
+                        self._config,
+                        self._transports,
+                        self._store,
+                        self._memory_store,
+                    )
+                except Exception:
+                    logger.exception("Unhandled error in job '%s'", job.name)
+                finally:
+                    self._running.discard(job.name)
+                    queue.task_done()
+        except asyncio.CancelledError:
+            return
 
     async def _tick_loop(self) -> None:
         try:
@@ -398,32 +439,24 @@ class JobRunner:
                 self._store.save_job_state(job.name, state)
                 continue
 
-            logger.info("Firing job '%s' (schedule: %s)", job.name, job.schedule)
-            self._spawn(
-                job.name,
-                _execute_job(
-                    job,
-                    self._config,
-                    self._transports,
-                    self._store,
-                    self._memory_store,
-                ),
-            )
+            agent_name = job.agent or self._config.default_agent()
+            queue = self._ensure_agent_queue(agent_name)
+            pending = queue.qsize()
 
-    def _spawn(self, name: str, coro: Coroutine[Any, Any, None]) -> None:
-        self._running.add(name)
+            self._running.add(job.name)
 
-        async def _wrapper():
-            try:
-                await coro
-            except Exception:
-                logger.exception("Unhandled error in job '%s'", name)
-            finally:
-                self._running.discard(name)
+            if pending > 0:
+                logger.info(
+                    "Queuing job '%s' on agent '%s' (%d ahead, schedule: %s)",
+                    job.name,
+                    agent_name,
+                    pending,
+                    job.schedule,
+                )
+            else:
+                logger.info("Firing job '%s' (schedule: %s)", job.name, job.schedule)
 
-        task = asyncio.create_task(_wrapper())
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+            queue.put_nowait((job, pending > 0))
 
 
 def _seconds_until_next_minute() -> float:
