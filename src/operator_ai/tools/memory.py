@@ -191,13 +191,15 @@ async def list_rules(scope: str = "agent") -> str:
 
 
 @tool(
-    description="List all active note memories in a scope.",
+    description="List active note memories in a scope. Use limit and offset to paginate large collections.",
 )
-async def list_notes(scope: str = "agent") -> str:
+async def list_notes(scope: str = "agent", limit: int = 50, offset: int = 0) -> str:
     """List notes.
 
     Args:
         scope: One of "agent", "user", or "global".
+        limit: Maximum number of notes to return (default 50).
+        offset: Number of notes to skip for pagination (default 0).
     """
     memory_store, agent_name, username, allow_user_scope = _get_context()
 
@@ -211,11 +213,21 @@ async def list_notes(scope: str = "agent") -> str:
     except ValueError as e:
         return f"[error: {e}]"
 
-    results = memory_store.list_notes(resolved)
-    if not results:
+    all_notes = memory_store.list_notes(resolved)
+    total = len(all_notes)
+    if total == 0:
         return "No notes found."
 
-    return "\n".join(_format_memory_line(mf) for mf in results)
+    page = all_notes[offset : offset + limit]
+    if not page:
+        return f"No notes at offset {offset} (total: {total})."
+
+    lines = [_format_memory_line(mf) for mf in page]
+    if total > offset + limit:
+        lines.append(
+            f"[... {total - offset - limit} more — use offset={offset + limit} to continue]"
+        )
+    return "\n".join(lines)
 
 
 @tool(

@@ -375,6 +375,27 @@ def test_tool_list_notes_returns_keys_not_paths(tmp_path: Path) -> None:
     assert "memory/" not in result
 
 
+def test_tool_list_notes_pagination(tmp_path: Path) -> None:
+    store = MemoryStore(base_dir=tmp_path)
+    for i in range(5):
+        store.upsert_note("global", f"note-{i}", f"Content {i}")
+    _configure_memory_tools(store)
+
+    # limit=3 should show 3 notes + continuation hint
+    result = asyncio.run(memory_tools.list_notes(scope="global", limit=3))
+    assert result.count("[note-") == 3
+    assert "2 more" in result
+
+    # offset=3 should show remaining 2
+    result = asyncio.run(memory_tools.list_notes(scope="global", limit=3, offset=3))
+    assert result.count("[note-") == 2
+    assert "more" not in result
+
+    # offset past end
+    result = asyncio.run(memory_tools.list_notes(scope="global", limit=3, offset=10))
+    assert "No notes at offset 10" in result
+
+
 def test_tool_forget_rule(tmp_path: Path) -> None:
     store = MemoryStore(base_dir=tmp_path)
     store.upsert_rule("global", "response-style", "Be concise")
