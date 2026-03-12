@@ -653,6 +653,7 @@ class SlackTransport(Transport):
         # D = DM, C = channel, G = group
         if channel_id.startswith("D"):
             name = "DM"
+            self._channels[channel_id] = name
         else:
             app = self._require_app()
             try:
@@ -664,11 +665,14 @@ class SlackTransport(Transport):
                 name = channel.get("name") or channel_id
                 if not name.startswith("#"):
                     name = f"#{name}"
+                # Only cache non-archived channels (unless configured to include them)
+                # to prevent them from leaking into the system prompt.
+                if self._include_archived_channels or not channel.get("is_archived"):
+                    self._channels[channel_id] = name
             except Exception:
                 logger.warning("Failed to resolve Slack channel %s, using raw ID", channel_id)
                 name = channel_id
 
-        self._channels[channel_id] = name
         return name
 
     @override
