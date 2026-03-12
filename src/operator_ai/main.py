@@ -4,11 +4,13 @@ import asyncio
 import base64
 import collections
 import fcntl
+import functools
 import logging
 import os
 import signal
 import sys
 from contextlib import suppress
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Import tools to trigger registration
@@ -26,6 +28,7 @@ from operator_ai.prompts import assemble_system_prompt
 from operator_ai.skills import install_bundled_skills
 from operator_ai.status import StatusIndicator
 from operator_ai.store import Store, get_store
+from operator_ai.system_events import SystemEventBuffer
 from operator_ai.tools import memory as memory_tools
 from operator_ai.tools import messaging
 from operator_ai.tools import state as state_tools
@@ -239,9 +242,26 @@ class Dispatcher:
         self.memory_store = memory_store
         self.transports: dict[str, Transport] = {}
         self._seen_messages: collections.OrderedDict[str, float] = collections.OrderedDict()
+        self._system_events = SystemEventBuffer()
 
     def register_transport(self, transport: Transport) -> None:
         self.transports[transport.name] = transport
+        transport.set_system_event_handler(
+            functools.partial(self._handle_system_event, transport.name)
+        )
+
+    async def _handle_system_event(
+        self, transport_name: str, channel_id: str, message_id: str, text: str
+    ) -> None:
+        """Route a system event to the correct conversation buffer."""
+        conversation_id = self.store.lookup_platform_message(transport_name, message_id)
+        if conversation_id:
+            logger.info("System event routed to %s: %s", conversation_id, text)
+            self._system_events.enqueue(conversation_id, text)
+        else:
+            logger.info(
+                "System event for untracked message %s in %s, skipping", message_id, channel_id
+            )
 
     def _dedup(self, msg: IncomingMessage) -> bool:
         """Return True if this message_id was already dispatched recently."""
@@ -381,24 +401,8 @@ class Dispatcher:
         user_ctx = get_user_context()
         username = user_ctx.username if user_ctx else ""
 
-        # Context snapshot injection
-        context_parts: list[str] = []
-
-        # Thread history — only on first interaction (no prior agent messages)
-        is_new_conversation = len(messages) <= 1  # only system message
-        if is_new_conversation and msg.message_id != msg.root_message_id:
-            thread_ctx = await transport.get_thread_context(msg)
-            if thread_ctx:
-                context_parts.append(
-                    '<context_snapshot source="thread_history">\n'
-                    "Snapshot of this thread before you were added. "
-                    "Provided for awareness only — these messages were "
-                    "not directed at you.\n\n"
-                    f"{thread_ctx}\n"
-                    "</context_snapshot>"
-                )
-
-        # Prepend to user message text
+        # Collect context blocks from all sources and prepend to user message
+        context_parts = await self._collect_context(msg, transport, conversation_id, messages)
         msg_text = msg.text
         if context_parts:
             msg_text = "\n\n".join(context_parts) + "\n\n" + msg.text
@@ -523,6 +527,78 @@ class Dispatcher:
                 conversation_id,
                 safe_messages,
             )
+
+    # --- Context collection ---
+
+    async def _collect_context(
+        self,
+        msg: IncomingMessage,
+        transport: Transport,
+        conversation_id: str,
+        messages: list[dict],
+    ) -> list[str]:
+        """Collect all context blocks to prepend to the user message."""
+        blocks: list[str] = []
+
+        # Thread history (first interaction only)
+        block = await self._thread_history_context(msg, transport, messages)
+        if block:
+            blocks.append(block)
+
+        # Buffered system events (reactions, pins, etc.)
+        block = self._system_events_context(conversation_id)
+        if block:
+            blocks.append(block)
+
+        # Transport-provided per-message context (message metadata, etc.)
+        transport_blocks = await transport.get_message_context(msg)
+        blocks.extend(transport_blocks)
+
+        return blocks
+
+    async def _thread_history_context(
+        self,
+        msg: IncomingMessage,
+        transport: Transport,
+        messages: list[dict],
+    ) -> str | None:
+        """Build thread history context block for new conversations."""
+        is_new_conversation = len(messages) <= 1  # only system message
+        if not is_new_conversation or msg.message_id == msg.root_message_id:
+            return None
+        thread_ctx = await transport.get_thread_context(msg)
+        if not thread_ctx:
+            return None
+        return (
+            '<context_snapshot source="thread_history">\n'
+            "Snapshot of this thread before you were added. "
+            "Provided for awareness only — these messages were "
+            "not directed at you.\n\n"
+            f"{thread_ctx}\n"
+            "</context_snapshot>"
+        )
+
+    def _system_events_context(self, conversation_id: str) -> str | None:
+        """Drain buffered system events and format as a context block."""
+        events = self._system_events.drain(conversation_id)
+        if not events:
+            return None
+        logger.info(
+            "Injecting %d system event(s) into conversation %s",
+            len(events),
+            conversation_id,
+        )
+        event_lines = []
+        for ev in events:
+            dt = datetime.fromtimestamp(ev.ts, tz=UTC)
+            t = dt.strftime("%-I:%M %p")
+            event_lines.append(f"- [{t}] {ev.text}")
+        return (
+            '<context_snapshot source="system_events">\n'
+            "Recent platform events since your last response:\n\n"
+            + "\n".join(event_lines)
+            + "\n</context_snapshot>"
+        )
 
     def _build_system_prompt(
         self,

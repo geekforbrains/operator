@@ -190,6 +190,28 @@ roles:
     agents: [operator, researcher]
 ```
 
+### System Events
+
+Transports emit lightweight system events (reactions, pins, membership changes, etc.) that are too noisy to trigger a full agent run but useful as ambient context. Events are buffered in memory per conversation and injected into the next user message when the agent runs.
+
+```
+<context_snapshot source="system_events">
+Recent platform events since your last response:
+
+- [3:18 AM] Reaction :thumbsup: added by Alice on message 1773310673.238109 in #general
+</context_snapshot>
+```
+
+The buffer is capped at 20 events per conversation, consecutive duplicates are suppressed, and events are drained on read. No persistence — if the process restarts, pending events are lost.
+
+Transports can also inject per-message context blocks via `get_message_context()`. For Slack, this includes the current message ID and channel ID so the agent can react to or reference the message it's responding to without an extra API call.
+
+### Reactions (Slack)
+
+Agents can add and remove emoji reactions via `slack_add_reaction` and `slack_remove_reaction`. When users react to messages the agent has seen, those reactions appear as system events in the next interaction.
+
+Slack transport tools are namespaced with a `slack_` prefix: `slack_find_users`, `slack_list_channels`, `slack_read_channel`, `slack_read_thread`, `slack_add_reaction`, `slack_remove_reaction`.
+
 ### Model failover
 
 `models` is a fallback chain. If the first model errors, rate limits, or goes down, the next one picks up. No downtime, no babysitting.

@@ -205,6 +205,14 @@ class SlackTransport(Transport):
             if channel_id:
                 await self._fetch_and_upsert_channel(channel_id)
 
+        @self._app.event("reaction_added")
+        async def handle_reaction_added(event: dict, say):  # noqa: ARG001
+            self._create_task(self._handle_reaction(event, added=True))
+
+        @self._app.event("reaction_removed")
+        async def handle_reaction_removed(event: dict, say):  # noqa: ARG001
+            self._create_task(self._handle_reaction(event, added=False))
+
         self._handler = AsyncSocketModeHandler(self._app, self._app_token)
         try:
             auth_resp = await self._api_call("auth.test", self._app.client.auth_test)
@@ -699,7 +707,7 @@ class SlackTransport(Transport):
 
     @override
     def get_tools(self) -> list[ToolDef]:
-        async def find_slack_users(
+        async def slack_find_users(
             query: str = "", limit: int = 20, linked_only: bool = False
         ) -> str:
             """Find Slack users by name, Slack ID, or linked Operator username.
@@ -767,7 +775,7 @@ class SlackTransport(Transport):
                 )
             return "\n".join(lines)
 
-        async def list_channels(query: str = "") -> str:
+        async def slack_list_channels(query: str = "") -> str:
             """List available Slack channels the bot can post to."""
             lines = self._format_channel_list(query=query)
             if lines:
@@ -776,7 +784,7 @@ class SlackTransport(Transport):
                 return "No matching channels found."
             return "No channels available."
 
-        async def read_channel(channel: str, count: int = 20) -> str:
+        async def slack_read_channel(channel: str, count: int = 20) -> str:
             """Read recent messages from a Slack channel.
 
             Args:
@@ -800,7 +808,7 @@ class SlackTransport(Transport):
                 return "No messages found."
             return await self._format_messages(messages)
 
-        async def read_thread(channel: str, thread_id: str, count: int = 50) -> str:
+        async def slack_read_thread(channel: str, thread_id: str, count: int = 50) -> str:
             """Read messages from a Slack thread.
 
             Args:
@@ -827,26 +835,82 @@ class SlackTransport(Transport):
                 return "No messages found in thread."
             return await self._format_messages(messages)
 
+        async def slack_add_reaction(channel: str, message_id: str, emoji: str) -> str:
+            """Add an emoji reaction to a Slack message.
+
+            Args:
+                channel: Channel name (e.g. #general) or channel ID.
+                message_id: The message timestamp (ts) to react to.
+                emoji: Emoji name without colons (e.g. thumbsup, eyes, white_check_mark).
+            """
+            channel_id = await self.resolve_channel_id(channel)
+            if channel_id is None:
+                return f"[error: could not resolve channel '{channel}']"
+            app = self._require_app()
+            try:
+                await self._api_call(
+                    "reactions.add",
+                    lambda: app.client.reactions_add(
+                        channel=channel_id, timestamp=message_id, name=emoji
+                    ),
+                )
+                return f"Added :{emoji}: to message {message_id}"
+            except Exception as e:
+                return f"[error: failed to add reaction: {e}]"
+
+        async def slack_remove_reaction(channel: str, message_id: str, emoji: str) -> str:
+            """Remove an emoji reaction from a Slack message.
+
+            Args:
+                channel: Channel name (e.g. #general) or channel ID.
+                message_id: The message timestamp (ts) to remove reaction from.
+                emoji: Emoji name without colons (e.g. thumbsup, eyes, white_check_mark).
+            """
+            channel_id = await self.resolve_channel_id(channel)
+            if channel_id is None:
+                return f"[error: could not resolve channel '{channel}']"
+            app = self._require_app()
+            try:
+                await self._api_call(
+                    "reactions.remove",
+                    lambda: app.client.reactions_remove(
+                        channel=channel_id, timestamp=message_id, name=emoji
+                    ),
+                )
+                return f"Removed :{emoji}: from message {message_id}"
+            except Exception as e:
+                return f"[error: failed to remove reaction: {e}]"
+
         return [
             ToolDef(
-                find_slack_users,
+                slack_find_users,
                 "Find Slack users by display name, Slack ID, or linked Operator username.",
                 status_label="Finding Slack users...",
             ),
             ToolDef(
-                list_channels,
+                slack_list_channels,
                 "List available Slack channels the bot can post to, optionally filtering by name, ID, topic, or purpose.",
                 status_label="Listing channels...",
             ),
             ToolDef(
-                read_channel,
+                slack_read_channel,
                 "Read recent messages from a Slack channel. Use this to see what's been discussed.",
                 status_label="Reading channel...",
             ),
             ToolDef(
-                read_thread,
+                slack_read_thread,
                 "Read messages from a specific Slack thread. Use this to get full context on a conversation.",
                 status_label="Reading thread...",
+            ),
+            ToolDef(
+                slack_add_reaction,
+                "Add an emoji reaction to a Slack message. Use emoji name without colons.",
+                status_label="Adding reaction...",
+            ),
+            ToolDef(
+                slack_remove_reaction,
+                "Remove an emoji reaction from a Slack message.",
+                status_label="Removing reaction...",
             ),
         ]
 
@@ -857,10 +921,16 @@ class SlackTransport(Transport):
             "",
             "Use `send_message` with a channel name (e.g. `#general`) or channel ID.",
             "It returns a Slack message timestamp you can pass as `thread_id` to reply in a thread.",
-            "Use `list_channels` if you need to inspect Slack destinations first.",
-            "Use `find_slack_users` to resolve people by name, Slack ID, or linked Operator username.",
+            "Use `slack_list_channels` if you need to inspect Slack destinations first.",
+            "Use `slack_find_users` to resolve people by name, Slack ID, or linked Operator username.",
             "When mentioning users or channels in messages, use `@Name` or `#channel`.",
             "Explicit `<@UID>` and `<#CID>` syntax also works.",
+            "",
+            "## Reactions",
+            "",
+            "Use `slack_add_reaction` and `slack_remove_reaction` to add/remove emoji reactions.",
+            "Emoji names are without colons (e.g. `thumbsup`, `eyes`, `white_check_mark`).",
+            "When others react to messages, you'll see those as context in your next interaction.",
         ]
         if self._inject_users_into_prompt:
             if self._user_directory:
@@ -882,6 +952,23 @@ class SlackTransport(Transport):
             else:
                 lines += ["", "Channel names are not cached yet. Call `list_channels` if needed."]
         return "\n".join(lines)
+
+    # --- Per-message context ---
+
+    @override
+    async def get_message_context(self, msg: IncomingMessage) -> list[str]:
+        lines = [
+            f"- message_id: `{msg.message_id}`",
+            f"- channel_id: `{msg.channel_id}`",
+        ]
+        if msg.root_message_id != msg.message_id:
+            lines.append(f"- thread_id: `{msg.root_message_id}`")
+        return [
+            '<context_snapshot source="message_meta">\n'
+            "Current message metadata (use these IDs with Slack tools):\n\n"
+            + "\n".join(lines)
+            + "\n</context_snapshot>"
+        ]
 
     # --- Message formatting ---
 
@@ -938,6 +1025,40 @@ class SlackTransport(Transport):
 
         prefix = f"(showing last 50 of {total} messages)\n" if total > 50 else ""
         return prefix + await self._format_messages(replies)
+
+    # --- Reaction handling ---
+
+    async def _handle_reaction(self, event: dict, *, added: bool) -> None:
+        """Handle a reaction_added or reaction_removed event as a system event."""
+        emoji = event.get("reaction", "")
+        user_id = event.get("user", "")
+        item = event.get("item", {})
+        channel_id = item.get("channel", "")
+        message_ts = item.get("ts", "")
+
+        if not all([emoji, user_id, channel_id, message_ts]):
+            return
+
+        # Ignore our own reactions
+        if user_id == self._bot_user_id:
+            return
+
+        user_name = await self._resolve_user(user_id)
+        channel_name = await self._resolve_channel(channel_id)
+        action = "added" if added else "removed"
+        text = (
+            f"Reaction :{emoji}: {action} by {user_name} on message {message_ts} in {channel_name}"
+        )
+        logger.info(
+            "Reaction event: :%s: %s by %s (%s) in %s",
+            emoji,
+            action,
+            user_name,
+            user_id,
+            channel_name,
+        )
+
+        await self._emit_system_event(channel_id, message_ts, text)
 
     # --- Dispatch ---
 

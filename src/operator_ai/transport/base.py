@@ -87,6 +87,23 @@ class Transport(ABC):
     agent_name: str
     platform: str
 
+    _system_event_handler: Callable[[str, str, str], Awaitable[None]] | None = None
+
+    def set_system_event_handler(
+        self,
+        handler: Callable[[str, str, str], Awaitable[None]],
+    ) -> None:
+        """Register a handler for system events.
+
+        Handler signature: (channel_id, message_id, text) -> None
+        """
+        self._system_event_handler = handler
+
+    async def _emit_system_event(self, channel_id: str, message_id: str, text: str) -> None:
+        """Emit a system event if a handler is registered."""
+        if self._system_event_handler is not None:
+            await self._system_event_handler(channel_id, message_id, text)
+
     @abstractmethod
     async def start(self, on_message: Callable[[IncomingMessage], Awaitable[None]]) -> None: ...
 
@@ -116,6 +133,15 @@ class Transport(ABC):
     async def get_thread_context(self, msg: IncomingMessage) -> str | None:
         """Return formatted thread history for context injection. None if not applicable."""
         return None
+
+    async def get_message_context(self, msg: IncomingMessage) -> list[str]:
+        """Return context blocks to prepend to the user message.
+
+        Each string is a self-contained block (e.g. wrapped in
+        ``<context_snapshot>`` tags).  The dispatcher collects blocks from
+        all sources and joins them before the user text.  Empty by default.
+        """
+        return []
 
     async def download_file(self, attachment: Attachment) -> bytes:
         """Download file bytes for an attachment. Override in transports that support files."""
