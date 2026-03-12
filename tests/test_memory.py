@@ -207,7 +207,8 @@ def test_expired_rule_hidden_from_list_and_get(tmp_path: Path) -> None:
 
 
 def test_search_notes_by_key(tmp_path: Path) -> None:
-    store = MemoryStore(base_dir=tmp_path)
+    index = MemoryIndex(tmp_path / "db" / "index.db")
+    store = MemoryStore(base_dir=tmp_path, index=index)
     store.upsert_note("global", "release-date", "Release date moved to April 3")
     store.upsert_note(
         "global", "staging-api", "Staging API base URL is https://staging.example.com"
@@ -216,26 +217,30 @@ def test_search_notes_by_key(tmp_path: Path) -> None:
     results = store.search_notes("global", "release")
     assert len(results) == 1
     assert results[0].key == "release-date"
+    index.close()
 
 
 def test_search_notes_by_content(tmp_path: Path) -> None:
-    store = MemoryStore(base_dir=tmp_path)
+    index = MemoryIndex(tmp_path / "db" / "index.db")
+    store = MemoryStore(base_dir=tmp_path, index=index)
     store.upsert_note("global", "tooling", "The project uses Python 3.12 with uv for packages")
     store.upsert_note("global", "deploy-day", "Deployment happens on Fridays")
 
     results = store.search_notes("global", "python")
     assert len(results) == 1
     assert results[0].key == "tooling"
+    index.close()
 
 
-def test_search_notes_key_matches_first(tmp_path: Path) -> None:
-    store = MemoryStore(base_dir=tmp_path)
-    store.upsert_note("global", "release-process", "Deployment happens every Friday")
-    store.upsert_note("global", "deploy-guidelines", "General documentation")
+def test_search_notes_matches_across_notes(tmp_path: Path) -> None:
+    index = MemoryIndex(tmp_path / "db" / "index.db")
+    store = MemoryStore(base_dir=tmp_path, index=index)
+    store.upsert_note("global", "release-process", "Release process runs every Friday")
+    store.upsert_note("global", "deploy-guidelines", "General documentation about releases")
 
-    results = store.search_notes("global", "deploy")
+    results = store.search_notes("global", "release")
     assert len(results) == 2
-    assert results[0].key == "deploy-guidelines"
+    index.close()
 
 
 def test_forget_note_moves_to_trash(tmp_path: Path) -> None:
@@ -342,12 +347,14 @@ def test_tool_save_note_with_ttl(tmp_path: Path) -> None:
 
 
 def test_tool_search_notes_returns_keys_not_paths(tmp_path: Path) -> None:
-    store = MemoryStore(base_dir=tmp_path)
+    index = MemoryIndex(tmp_path / "db" / "index.db")
+    store = MemoryStore(base_dir=tmp_path, index=index)
     store.upsert_note("agent:operator", "release-date", "Release date is April 3")
     _configure_memory_tools(store)
     result = asyncio.run(memory_tools.search_notes("release", scope="agent"))
     assert "[release-date]" in result
     assert "memory/" not in result
+    index.close()
 
 
 def test_tool_list_rules_returns_keys_not_paths(tmp_path: Path) -> None:

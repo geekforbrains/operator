@@ -2,50 +2,22 @@ from __future__ import annotations
 
 import logging
 import re
-import shutil
-import subprocess
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
 from operator_ai.config import OPERATOR_DIR
 
+if TYPE_CHECKING:
+    from operator_ai.memory_index import MemoryIndex
+
 logger = logging.getLogger("operator.memory")
 
 _TTL_RE = re.compile(r"^(\d+)\s*([mhdw])$", re.IGNORECASE)
 _MEMORY_DIR_BY_KIND = {"rule": "rules", "note": "notes"}
-
-
-def _word_variants(word: str) -> list[str]:
-    """Generate common English suffix variants for fuzzy matching.
-
-    Given a word, return the original plus forms with suffixes stripped or
-    added so that "dogs" matches "dog", "running" matches "run", etc.
-    """
-    forms: list[str] = [word]
-    # Strip suffixes: dogs→dog, watches→watch, traveled→travel, running→run
-    if word.endswith("ies") and len(word) > 4:
-        forms.append(word[:-3] + "y")  # families→family
-    if word.endswith("ses") and len(word) > 4:
-        forms.append(word[:-2])  # buses→bus
-    if word.endswith("es") and len(word) > 4:
-        forms.append(word[:-2])  # watches→watch
-    if word.endswith("s") and not word.endswith("ss") and len(word) > 3:
-        forms.append(word[:-1])  # dogs→dog
-    if word.endswith("ed") and len(word) > 4:
-        forms.append(word[:-2])  # traveled→travel
-        forms.append(word[:-1])  # named→name (strip d only)
-    if word.endswith("ing") and len(word) > 5:
-        forms.append(word[:-3])  # running→runn
-        forms.append(word[:-3] + "e")  # hiking→hike
-    # Add plural: dog→dogs
-    if not word.endswith("s"):
-        forms.append(word + "s")
-    # Dedupe while preserving order
-    return list(dict.fromkeys(f for f in forms if len(f) >= 2))
 
 
 def parse_ttl(ttl: str) -> timedelta:
@@ -197,11 +169,6 @@ def _resolve_scope(scope: str, base_dir: Path) -> Path:
     raise ValueError(f"Invalid scope: {scope!r}")
 
 
-def _has_ripgrep() -> bool:
-    """Check if ripgrep (rg) is available on PATH."""
-    return shutil.which("rg") is not None
-
-
 def _normalize_key(key: str, max_len: int = 80) -> str:
     """Normalize a memory key into a stable filename-safe slug."""
     if not re.search(r"[a-z0-9]", key, re.IGNORECASE):
@@ -228,10 +195,16 @@ class MemoryFile:
 
 
 class MemoryStore:
-    """File-backed memory store. No embeddings, no SQLite, no vectors."""
+    """File-backed memory store with optional FTS5 index.
 
-    def __init__(self, base_dir: Path = OPERATOR_DIR):
+    Files remain the source of truth. When an index is provided, writes
+    and deletes are mirrored into the FTS5/vector index synchronously.
+    Search uses the index when available, falling back to text matching.
+    """
+
+    def __init__(self, base_dir: Path = OPERATOR_DIR, *, index: MemoryIndex | None = None):
         self._base_dir = base_dir
+        self._index = index
 
     def _scope_dir(self, scope: str) -> Path:
         return _resolve_scope(scope, self._base_dir)
@@ -273,16 +246,35 @@ class MemoryStore:
         path.parent.mkdir(parents=True, exist_ok=True)
 
         existing = self._read_path(path, include_expired=True)
-        expires_at = _now_utc() + parse_ttl(ttl) if ttl else None
+        now = _now_utc()
+        expires_at = now + parse_ttl(ttl) if ttl else None
+        created_at = existing.created_at if existing else now
         _write_memory_file(
             path,
             content,
-            created_at=existing.created_at if existing else None,
-            updated_at=_now_utc(),
+            created_at=created_at,
+            updated_at=now,
             expires_at=expires_at,
         )
         relative = str(path.relative_to(self._relative_to()))
         logger.info("saved %s: %s", kind, relative)
+
+        # Mirror to FTS5 index
+        if self._index:
+            from operator_ai.memory_index import _content_hash
+
+            self._index.upsert(
+                relative,
+                scope,
+                kind.rstrip("s"),  # "rule" not "rules"
+                _normalize_key(key),
+                content,
+                _content_hash(content),
+                created_at=created_at.timestamp() if created_at else None,
+                updated_at=now.timestamp(),
+                expires_at=expires_at.timestamp() if expires_at else None,
+            )
+
         return relative
 
     def upsert_rule(self, scope: str, key: str, content: str) -> str:
@@ -316,74 +308,23 @@ class MemoryStore:
     # ── Search ───────────────────────────────────────────────────
 
     def search_notes(self, scope: str, query: str) -> list[MemoryFile]:
-        """Search notes by filename and content, matching any word variant.
+        """Search notes using the FTS5 index."""
+        if self._index:
+            return self._search_notes_indexed(scope, query)
+        logger.warning("search_notes called without index; returning empty")
+        return []
 
-        The query is split into words and each word is expanded with common
-        English suffix variants (dogs→dog, running→run, etc.).  A note
-        matches if any variant appears in its filename or content.
-        """
-        notes_dir = self._memory_dir(scope, "note")
-        if not notes_dir.is_dir():
-            return []
-
-        words = [w for w in query.lower().split() if w]
-        if not words:
-            return []
-
-        # Expand each query word into variant forms
-        variants: list[str] = []
-        for w in words:
-            variants.extend(_word_variants(w))
-        variants = list(dict.fromkeys(variants))  # dedupe, preserve order
-
-        all_files = {mf.path: mf for mf in self._list_files(notes_dir)}
-        if not all_files:
-            return []
-
-        # Collect content matches via ripgrep or fallback
-        content_hit_paths: set[Path] = set()
-        if _has_ripgrep():
-            content_hit_paths = set(self._rg_search(notes_dir, "|".join(variants)))
-        else:
-            for path, mf in all_files.items():
-                content_lower = mf.content.lower()
-                if any(v in content_lower for v in variants):
-                    content_hit_paths.add(path)
-
-        # Score each note: count how many variants appear in filename + content
-        scored: list[tuple[int, bool, MemoryFile]] = []
-        for path, mf in all_files.items():
-            slug = path.stem.lower()
-            content_lower = mf.content.lower()
-            filename_hits = sum(1 for v in variants if v in slug)
-            content_hits = (
-                sum(1 for v in variants if v in content_lower) if path in content_hit_paths else 0
-            )
-            total = filename_hits + content_hits
-            if total > 0:
-                scored.append((total, filename_hits > 0, mf))
-
-        # Sort: most hits first, filename matches break ties
-        scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
-        return [mf for _, _, mf in scored]
-
-    def _rg_search(self, directory: Path, pattern: str) -> list[Path]:
-        """Run ripgrep with a regex pattern and return matching file paths."""
-        try:
-            result = subprocess.run(
-                ["rg", "--files-with-matches", "--ignore-case", "--no-messages", pattern],
-                cwd=str(directory),
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            paths: list[Path] = []
-            for line in result.stdout.strip().splitlines():
-                if line:
-                    paths.append(directory / line)
-            return paths
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-            return []
+    def _search_notes_indexed(self, scope: str, query: str) -> list[MemoryFile]:
+        """Search notes via the FTS5 index, returning MemoryFile objects."""
+        assert self._index is not None
+        results = self._index.search(query, scopes=[scope], kind="note")
+        memory_files: list[MemoryFile] = []
+        for r in results:
+            path = self._base_dir / r.relative_path
+            mf = self._read_path(path)
+            if mf is not None:
+                memory_files.append(mf)
+        return memory_files
 
     def get_rule(self, scope: str, key: str) -> MemoryFile | None:
         """Read a specific active rule by deterministic key."""
@@ -398,6 +339,9 @@ class MemoryStore:
         if not path.is_file():
             return False
 
+        # Capture relative path before moving
+        relative = str(path.relative_to(self._relative_to()))
+
         parent = path.parent
         trash_dir = parent.parent / "trash"
         trash_dir.mkdir(parents=True, exist_ok=True)
@@ -405,6 +349,11 @@ class MemoryStore:
         dest = _unique_path(trash_dir, path.stem)
         path.rename(dest)
         logger.info("moved to trash: %s → %s", path, dest)
+
+        # Remove from index
+        if self._index:
+            self._index.delete(relative)
+
         return True
 
     def forget_rule(self, scope: str, key: str) -> bool:
@@ -415,6 +364,16 @@ class MemoryStore:
         """Move a note file to trash by deterministic key."""
         return self._forget_path(self._memory_path(scope, "note", key))
 
+    # ── Helpers ────────────────────────────────────────────────────
+
+    def memory_roots(self) -> list[Path]:
+        """Return the root directories that contain memory files."""
+        return [
+            self._base_dir / "memory" / "global",
+            self._base_dir / "memory" / "users",
+            self._base_dir / "agents",
+        ]
+
     # ── Sweep expired ────────────────────────────────────────────
 
     def sweep_expired(self) -> int:
@@ -422,14 +381,7 @@ class MemoryStore:
         now = _now_utc()
         count = 0
 
-        # Walk all memory directories looking for .md files with expires_at
-        memory_roots = [
-            self._base_dir / "memory" / "global",
-            self._base_dir / "memory" / "users",
-            self._base_dir / "agents",
-        ]
-
-        for root in memory_roots:
+        for root in self.memory_roots():
             if not root.is_dir():
                 continue
             for md_path in root.rglob("*.md"):
@@ -442,6 +394,10 @@ class MemoryStore:
                     continue
                 if _is_expired(mf.expires_at, now=now) and self._forget_path(md_path):
                     count += 1
+
+        # Belt-and-suspenders: also clean stale index entries
+        if self._index:
+            self._index.delete_expired()
 
         if count:
             logger.info("swept %d expired memory files", count)
