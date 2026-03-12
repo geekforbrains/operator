@@ -24,7 +24,6 @@ from operator_ai.transport.registry import SetupSecret, SetupTransport, Transpor
 
 logger = logging.getLogger("operator.transport.slack")
 
-LEADING_BOT_MENTION_RE = re.compile(r"^<@[A-Z0-9]+>\s*")
 USER_MENTION_RE = re.compile(r"<@([A-Z0-9]+)>")
 CHANNEL_MENTION_RE = re.compile(r"<#([A-Z0-9]+)\|([^>]+)>")
 _mrkdwn = SlackMarkdownConverter()
@@ -166,7 +165,7 @@ class SlackTransport(Transport):
             # can cause duplicate processing.
             if event.get("channel_type") == "im":
                 return
-            self._create_task(self._dispatch(event, on_message, strip_leading_mention=True))
+            self._create_task(self._dispatch(event, on_message, was_mentioned=True))
 
         @self._app.event("message")
         async def handle_message(event: dict, say):  # noqa: ARG001
@@ -617,10 +616,7 @@ class SlackTransport(Transport):
             return f"<#{channel_id}> ({name})"
         return f"<#{channel_id}>"
 
-    async def _render_slack_text(self, text: str, *, strip_leading_mention: bool = False) -> str:
-        if strip_leading_mention:
-            text = LEADING_BOT_MENTION_RE.sub("", text, count=1)
-
+    async def _render_slack_text(self, text: str) -> str:
         text = CHANNEL_MENTION_RE.sub(
             lambda match: self._format_channel_reference(match.group(1), match.group(2)),
             text,
@@ -936,17 +932,14 @@ class SlackTransport(Transport):
         event: dict,
         on_message: Callable[[IncomingMessage], Awaitable[None]],
         *,
-        strip_leading_mention: bool = False,
+        was_mentioned: bool = False,
     ) -> None:
         subtype = event.get("subtype")
         if subtype and subtype != "file_share":
             # Ignore edited/deleted/system message variants,
             # but allow file_share (message with uploaded files).
             return
-        text = await self._render_slack_text(
-            event.get("text", ""),
-            strip_leading_mention=strip_leading_mention,
-        )
+        text = await self._render_slack_text(event.get("text", ""))
 
         # Extract file attachments
         attachments = _extract_attachments(event)
@@ -975,7 +968,7 @@ class SlackTransport(Transport):
             root_message_id=root_message_id,
             transport_name=self.name,
             is_private=(event.get("channel_type") == "im"),
-            was_mentioned=strip_leading_mention,
+            was_mentioned=was_mentioned,
             attachments=attachments,
             created_at=_slack_ts_to_float(message_id),
         )

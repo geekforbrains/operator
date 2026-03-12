@@ -29,6 +29,7 @@ class IncomingMessage:
     root_message_id: str
     transport_name: str
     is_private: bool = False
+    was_mentioned: bool = False
     attachments: list[Attachment] = field(default_factory=list)
     created_at: float | None = None
 
