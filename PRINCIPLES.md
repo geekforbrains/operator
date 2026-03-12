@@ -169,11 +169,11 @@ user-scoped memory (`memory/users/<name>/`).
 
 ### Context management
 
-Operator prunes conversation context continuously rather than letting it grow
-until it must be compacted. The system prompt layers described above are stable
-and always present. What gets pruned is conversation history — older turns are
-dropped as newer turns arrive. Recent context is more valuable than complete
-history, and anything worth retaining long-term should be captured in memory.
+Operator enforces a context budget on every turn. The system prompt layers
+described above are stable and always present. Conversation history is what gets
+pruned — when the total context exceeds the budget, the oldest exchange groups
+are dropped until it fits. Recent context is more valuable than complete history,
+and anything worth retaining long-term should be captured in memory.
 
 ### Workspaces
 
@@ -301,6 +301,42 @@ The body is the prompt the agent receives when the job runs.
 
 Jobs run within the target agent's context — they use the agent's permissions,
 memory, and workspace.
+
+Job runs are ephemeral. Each run creates a fresh context, executes, and
+terminates. There is no persistent conversation to resume between runs.
+Anything worth retaining should be written to memory, state, or workspace
+files during the run.
+
+#### Hooks
+
+Hooks are the mechanism for deterministic, scriptable control over job
+execution. They let operators gate whether a job runs and post-process
+its output using ordinary shell scripts, keeping that logic out of the
+model and in version-controllable code.
+
+Hooks are defined in the job frontmatter under `hooks.prerun` and
+`hooks.postrun`, as paths relative to `~/.operator/`. Both are optional.
+
+**Prerun hooks** run before the agent. A non-zero exit code gates the job —
+the run is skipped and recorded as gated. A zero exit code allows the job
+to proceed. Critically, the hook's stdout on success is injected into the
+job prompt as additional context. This serves two purposes: the script
+decides whether the job should run, and when it does run, it passes in
+only the data the job needs. This keeps the model focused on a
+pre-filtered input rather than doing its own data gathering.
+
+**Postrun hooks** run after the agent completes. The agent's final text
+output is piped to the hook's stdin. A non-zero exit code marks the run
+as failed. Postrun hooks are useful for forwarding results, triggering
+downstream systems, or validating output.
+
+Hook scripts receive environment variables for context: `JOB_NAME`,
+`OPERATOR_AGENT`, `OPERATOR_HOME`, and `OPERATOR_DB`.
+
+Hooks have a configurable timeout. The default is 30 seconds. This can be
+overridden in `operator.yaml` under `defaults.hook_timeout` (in seconds).
+If a hook exceeds its timeout, the process is killed and the job is
+treated as gated (prerun) or failed (postrun).
 
 ### Subagents
 

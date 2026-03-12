@@ -55,6 +55,7 @@ class DefaultsConfig(StrictConfigModel):
     max_iterations: int = Field(default=25, gt=0)
     context_ratio: float = Field(default=0.5, gt=0.0, le=1.0)
     max_output_tokens: int | None = Field(default=None, gt=0)
+    hook_timeout: int = Field(default=30, gt=0)
 
     @model_validator(mode="before")
     @classmethod

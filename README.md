@@ -85,6 +85,7 @@ defaults:
     - "anthropic/claude-sonnet-4-6"
   thinking: medium
   max_iterations: 25
+  hook_timeout: 30
 
 agents:
   operator:
@@ -140,7 +141,7 @@ You are a research specialist. When given a topic...
 
 ### Jobs
 
-Scheduled tasks with cron expressions, prerun gates, and postrun hooks. Agents run jobs autonomously and post results to your channels.
+Scheduled tasks with cron expressions, prerun gates, and postrun hooks. Agents run jobs autonomously and post results to your channels. Hook scripts have a configurable timeout (`defaults.hook_timeout`, default 30s) — if a hook exceeds it, the job is gated or failed.
 
 ```yaml
 ---

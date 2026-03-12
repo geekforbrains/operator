@@ -229,15 +229,15 @@ async def _execute_job(
     agent_name = job.agent or config.default_agent()
     set_run_context(agent=agent_name, run_id=new_run_id())
     state = store.load_job_state(job.name)
-    conversation_id = f"job:{job.name}:{int(start_time)}"
-    messages: list[dict[str, Any]] = []
-    persisted_count = 0
 
     try:
         # Prerun gate
         prerun_output = ""
+        hook_timeout = config.defaults.hook_timeout
         if job.hooks.get("prerun"):
-            exit_code, prerun_output = await _run_hook(job, "prerun", agent_name=agent_name)
+            exit_code, prerun_output = await _run_hook(
+                job, "prerun", agent_name=agent_name, timeout=hook_timeout
+            )
             if exit_code != 0:
                 logger.info(
                     "Job '%s' gated by prerun hook (exit %d)%s",
@@ -269,20 +269,11 @@ async def _execute_job(
             transport,
             memory_store=memory_store,
         )
-        store.ensure_conversation(
-            conversation_id=conversation_id,
-            transport_name="job",
-            channel_id="",
-            root_thread_id=job.name,
-            metadata={"job_name": job.name, "agent": agent_name},
-        )
 
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt},
             attach_message_created_at({"role": "user", "content": job.prompt}),
         ]
-        store.append_messages(conversation_id, messages)
-        persisted_count = len(messages)
 
         # Configure tools with execution context
         messaging.configure({"transport": transport})
@@ -319,7 +310,7 @@ async def _execute_job(
         # Postrun hook
         if job.hooks.get("postrun"):
             exit_code, postrun_output = await _run_hook(
-                job, "postrun", agent_name=agent_name, stdin_data=output
+                job, "postrun", agent_name=agent_name, stdin_data=output, timeout=hook_timeout
             )
             if exit_code != 0:
                 details = f": {postrun_output.strip()}" if postrun_output.strip() else ""
@@ -342,9 +333,6 @@ async def _execute_job(
         state.run_count += 1
         state.error_count += 1
         store.save_job_state(job.name, state)
-    finally:
-        if len(messages) > persisted_count:
-            store.append_messages(conversation_id, messages[persisted_count:])
 
 
 class JobRunner:
