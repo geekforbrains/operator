@@ -17,8 +17,7 @@ from pathlib import Path
 import operator_ai.tools  # noqa: F401
 from operator_ai.agent import run_agent
 from operator_ai.agent_runtime import configure_agent_tool_context
-from operator_ai.commands import CommandContext, dispatch_command
-from operator_ai.config import LOGS_DIR, OPERATOR_DIR, Config, ConfigError, RoleConfig, load_config
+from operator_ai.config import Config, ConfigError, RoleConfig, load_config
 from operator_ai.jobs import JobRunner
 from operator_ai.layout import ensure_layout
 from operator_ai.log_context import new_run_id, set_run_context, setup_logging
@@ -29,7 +28,7 @@ from operator_ai.message_timestamps import attach_message_created_at
 from operator_ai.messages import trim_incomplete_tool_turns
 from operator_ai.prompts import assemble_system_prompt
 from operator_ai.status import StatusIndicator
-from operator_ai.store import Store, get_store
+from operator_ai.store import Store, get_store, reset_store
 from operator_ai.system_events import SystemEventBuffer
 from operator_ai.tools import messaging
 from operator_ai.tools.context import (
@@ -70,6 +69,14 @@ class AgentCancelledError(Exception):
     pass
 
 
+class ConversationBusyError(Exception):
+    pass
+
+
+class RuntimeCapacityError(Exception):
+    pass
+
+
 def resolve_allowed_agents(
     roles: list[str], config_roles: dict[str, RoleConfig]
 ) -> set[str] | None:
@@ -87,6 +94,11 @@ def resolve_allowed_agents(
 _IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
 MAX_INLINE_SIZE = 5 * 1024 * 1024  # 5 MB — larger images saved to disk instead
 MAX_DOWNLOAD_SIZE = 50 * 1024 * 1024  # 50 MB — skip oversized files
+STOP_WORDS = frozenset({"stop", "cancel"})
+
+
+def _is_stop_signal(text: str) -> bool:
+    return text.strip().lower() in STOP_WORDS
 
 
 async def process_attachments(
@@ -195,34 +207,32 @@ class ConversationRuntime:
 
 
 class RuntimeManager:
-    _MAX_RUNTIMES = 256
+    _MAX_ACTIVE_RUNTIMES = 256
 
     def __init__(self) -> None:
-        self._runtimes: collections.OrderedDict[str, ConversationRuntime] = (
-            collections.OrderedDict()
-        )
+        self._runtimes: dict[str, ConversationRuntime] = {}
 
-    def get_or_create(self, conversation_id: str) -> ConversationRuntime:
+    def get(self, conversation_id: str) -> ConversationRuntime | None:
+        return self._runtimes.get(conversation_id)
+
+    def claim(self, conversation_id: str) -> ConversationRuntime:
         runtime = self._runtimes.get(conversation_id)
         if runtime is not None:
-            self._runtimes.move_to_end(conversation_id)
-            return runtime
+            raise ConversationBusyError()
+        if len(self._runtimes) >= self._MAX_ACTIVE_RUNTIMES:
+            raise RuntimeCapacityError()
         runtime = ConversationRuntime()
+        runtime.try_claim()
         self._runtimes[conversation_id] = runtime
-        while len(self._runtimes) > self._MAX_RUNTIMES:
-            self._evict_one()
         return runtime
 
-    def _evict_one(self) -> None:
-        """Evict the oldest non-busy runtime, falling back to oldest if all are busy."""
-        # Try to find the oldest idle runtime
-        for cid, rt in self._runtimes.items():
-            if not rt.busy:
-                del self._runtimes[cid]
-                return
-        # All runtimes are busy — evict the oldest anyway to stay bounded
-        evicted_id, _ = self._runtimes.popitem(last=False)
-        logger.warning("All %d runtimes busy; evicted oldest %s", self._MAX_RUNTIMES, evicted_id)
+    def release(self, conversation_id: str, runtime: ConversationRuntime) -> None:
+        tracked = self._runtimes.get(conversation_id)
+        runtime.release()
+        if tracked is runtime:
+            del self._runtimes[conversation_id]
+        elif tracked is not None:
+            logger.warning("Conversation %s runtime mismatch on release", conversation_id)
 
 
 class Dispatcher:
@@ -319,7 +329,30 @@ class Dispatcher:
         )
         if not conversation_id:
             conversation_id = transport.build_conversation_id(msg)
-        runtime = self.runtimes.get_or_create(conversation_id)
+
+        if _is_stop_signal(msg.text):
+            await self._handle_stop_signal(msg, transport, conversation_id)
+            return
+
+        try:
+            runtime = self.runtimes.claim(conversation_id)
+        except ConversationBusyError:
+            logger.info("conversation %s busy, rejecting", conversation_id)
+            await transport.send(
+                msg.channel_id,
+                "Still processing a request. Say `stop` to stop it.",
+                thread_id=msg.root_message_id,
+            )
+            return
+        except RuntimeCapacityError:
+            logger.warning("Active conversation cap reached; rejecting %s", conversation_id)
+            await transport.send(
+                msg.channel_id,
+                "Operator is busy handling other conversations. Try again shortly.",
+                thread_id=msg.root_message_id,
+            )
+            return
+
         logger.debug(
             "handle_message msg_id=%s conv=%s runtime=%s",
             msg.message_id[:8] if msg.message_id else "?",
@@ -327,62 +360,36 @@ class Dispatcher:
             id(runtime),
         )
 
-        # Resolve platform context (cached)
-        ctx = await transport.resolve_context(msg)
-        ctx.username = username
-        ctx.roles = roles
-        ctx.timezone = user_tz
-        logger.info(
-            "message from %s in %s thread=%s",
-            ctx.user_name,
-            ctx.channel_name,
-            msg.root_message_id[:8],
-        )
-
-        system_prompt = self._build_system_prompt(
-            agent_name,
-            ctx,
-            username,
-            transport,
-            msg.is_private,
-            allowed_agents=allowed_agents,
-        )
-        self.store.ensure_conversation(
-            conversation_id=conversation_id,
-            transport_name=msg.transport_name,
-            channel_id=msg.channel_id,
-            root_thread_id=msg.root_message_id,
-            metadata={
-                "agent": agent_name,
-                "user_id": msg.user_id if msg.is_private else "",
-                "is_private": msg.is_private,
-            },
-        )
-        self.store.ensure_system_message(conversation_id, system_prompt)
-        self.store.index_platform_message(msg.transport_name, msg.root_message_id, conversation_id)
-        if msg.message_id and msg.message_id != msg.root_message_id:
-            self.store.index_platform_message(msg.transport_name, msg.message_id, conversation_id)
-
-        # Handle !commands before touching the LLM
-        if msg.text.startswith("!"):
-            await self._handle_command(msg, transport, runtime, conversation_id)
-            return
-
-        # Claim the conversation — atomic check-and-set (no yield between
-        # read and write, so no other task can interleave in asyncio).
-        if not runtime.try_claim():
-            logger.info("conversation %s busy, rejecting", conversation_id)
-            await transport.send(
-                msg.channel_id,
-                "Still processing a request. Send `!stop` to cancel it.",
-                thread_id=msg.root_message_id,
-            )
-            return
+        current = asyncio.current_task()
+        if current is not None:
+            runtime.attach_task(current)
 
         try:
-            current = asyncio.current_task()
-            if current is not None:
-                runtime.attach_task(current)
+            # Resolve platform context (cached)
+            ctx = await transport.resolve_context(msg)
+            ctx.username = username
+            ctx.roles = roles
+            ctx.timezone = user_tz
+            logger.info(
+                "message from %s in %s thread=%s",
+                ctx.user_name,
+                ctx.channel_name,
+                msg.root_message_id[:8],
+            )
+
+            system_prompt = self._build_system_prompt(
+                agent_name,
+                ctx,
+                username,
+                transport,
+                msg.is_private,
+                allowed_agents=allowed_agents,
+            )
+            self.store.ensure_conversation(conversation_id)
+            self.store.ensure_system_message(conversation_id, system_prompt)
+            self.store.index_platform_message(msg.transport_name, msg.root_message_id, conversation_id)
+            if msg.message_id and msg.message_id != msg.root_message_id:
+                self.store.index_platform_message(msg.transport_name, msg.message_id, conversation_id)
             await self._run_conversation(
                 msg,
                 transport,
@@ -391,8 +398,15 @@ class Dispatcher:
                 agent_name,
                 allowed_agents=allowed_agents,
             )
+        except asyncio.CancelledError:
+            logger.info("conversation %s — stopped by user", conversation_id)
+            await transport.send(
+                msg.channel_id,
+                "Request stopped.",
+                thread_id=msg.root_message_id,
+            )
         finally:
-            runtime.release()
+            self.runtimes.release(conversation_id, runtime)
 
     async def _run_conversation(
         self,
@@ -641,30 +655,23 @@ class Dispatcher:
             allowed_agents=allowed_agents,
         )
 
-    async def _handle_command(
+    async def _handle_stop_signal(
         self,
         msg: IncomingMessage,
         transport: Transport,
-        runtime: ConversationRuntime,
         conversation_id: str,
     ) -> None:
-        parts = msg.text.strip().split()
-        cmd_name = parts[0][1:].lower()  # strip "!" prefix
-        args = parts[1:]
-
-        ctx = CommandContext(
-            args=args,
-            agent_name=transport.agent_name,
-            store=self.store,
-            config=self.config,
-            memory_store=self.memory_store,
-            runtime=runtime,
-            transport=transport,
+        runtime = self.runtimes.get(conversation_id)
+        if runtime and runtime.busy:
+            logger.info("conversation %s stop requested", conversation_id)
+            runtime.cancel()
+            await transport.send(msg.channel_id, "Cancelling…", thread_id=msg.root_message_id)
+            return
+        await transport.send(
+            msg.channel_id,
+            "No active request to stop.",
+            thread_id=msg.root_message_id,
         )
-
-        response = await dispatch_command(cmd_name, ctx)
-        if response:
-            await transport.send(msg.channel_id, response, thread_id=msg.root_message_id)
 
     async def _handle_rejection(self, msg: IncomingMessage, transport: Transport) -> None:
         if self.config.runtime.reject_response == "announce":
@@ -697,20 +704,20 @@ def create_transports(config: Config, store: Store) -> list[Transport]:
     return transports
 
 
-def _setup_logging() -> None:
+def _setup_logging(log_dir: Path) -> None:
     setup_logging(
-        log_dir=LOGS_DIR,
+        log_dir=log_dir,
         stderr=os.isatty(2),
         noisy_loggers=("httpx", "httpcore", "litellm", "openai", *transport_logger_names()),
     )
 
 
-def _acquire_lock() -> int:
+def _acquire_lock(base_dir: Path) -> int:
     """Acquire an exclusive process lock. Returns the fd (keep open for lifetime).
 
     Raises SystemExit if another instance is already running.
     """
-    lock_path = OPERATOR_DIR / "operator.lock"
+    lock_path = base_dir / "operator.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR)
     try:
@@ -739,9 +746,14 @@ async def _sweep_loop(memory_store: MemoryStore) -> None:
 
 
 async def async_main() -> None:
-    _setup_logging()
+    try:
+        config = load_config()
+    except ConfigError as e:
+        raise SystemExit(str(e)) from None
 
-    lock_fd = _acquire_lock()  # held for process lifetime
+    _setup_logging(config.logs_dir())
+
+    lock_fd = _acquire_lock(config.base_dir)  # held for process lifetime
     transport_tasks: list[asyncio.Task[None]] = []
     stop = asyncio.Event()
     handlers_installed = False
@@ -755,19 +767,14 @@ async def async_main() -> None:
         stop.set()
 
     try:
-        try:
-            config = load_config()
-        except ConfigError as e:
-            raise SystemExit(str(e)) from None
-
         # Bootstrap directory layout
         ensure_layout(config)
 
         if not any(a.transport for a in config.agents.values()):
-            logger.error("No transports configured in %s", OPERATOR_DIR / "operator.yaml")
+            logger.error("No transports configured in %s", config.base_dir / "operator.yaml")
             sys.exit(1)
 
-        store = get_store()
+        store = get_store(config.db_dir() / "operator.db")
 
         # Build the memory index (FTS5 + optional vector)
         embed_fn = None
@@ -783,11 +790,11 @@ async def async_main() -> None:
                 return resp.data[0]["embedding"]
 
         memory_index = MemoryIndex(
-            OPERATOR_DIR / "db" / "memory_index.db",
+            config.db_dir() / "memory_index.db",
             embed_fn=embed_fn,
             embedding_dimensions=embed_dims,
         )
-        memory_store = MemoryStore(base_dir=OPERATOR_DIR, index=memory_index)
+        memory_store = MemoryStore(base_dir=config.base_dir, index=memory_index)
 
         # Startup reindex — only changed files
         try:
@@ -880,6 +887,7 @@ async def async_main() -> None:
         await close_session()
         if memory_index is not None:
             memory_index.close()
+        reset_store()
         os.close(lock_fd)
 
 

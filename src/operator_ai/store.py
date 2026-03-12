@@ -52,10 +52,11 @@ class JobState:
 
 class Store:
     def __init__(self, path: Path = DB_PATH):
-        self._path = path
+        self._path = path.expanduser().resolve()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self._path, timeout=30.0)
         self._conn.row_factory = sqlite3.Row
+        self._legacy_conversations_schema = False
         self._init_db()
 
     def _init_db(self) -> None:
@@ -67,12 +68,7 @@ class Store:
         self._conn.execute(
             """
             CREATE TABLE IF NOT EXISTS conversations (
-                conversation_id TEXT PRIMARY KEY,
-                transport_name TEXT NOT NULL,
-                channel_id TEXT NOT NULL,
-                root_thread_id TEXT NOT NULL,
-                updated_at REAL NOT NULL,
-                metadata_json TEXT NOT NULL
+                conversation_id TEXT PRIMARY KEY
             )
             """
         )
@@ -91,12 +87,6 @@ class Store:
             """
             CREATE INDEX IF NOT EXISTS idx_messages_conversation
             ON messages(conversation_id, id)
-            """
-        )
-        self._conn.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_conversations_updated_at
-            ON conversations(updated_at)
             """
         )
         self._conn.execute(
@@ -156,6 +146,7 @@ class Store:
         )
 
         self._ensure_users_timezone_column()
+        self._legacy_conversations_schema = self._has_legacy_conversations_schema()
 
         self._conn.commit()
 
@@ -171,6 +162,16 @@ class Store:
         if "created_at" not in columns:
             self._conn.execute("ALTER TABLE messages ADD COLUMN created_at REAL")
 
+    def _has_legacy_conversations_schema(self) -> bool:
+        columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(conversations)").fetchall()
+        }
+        return columns != {"conversation_id"}
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
     def close(self) -> None:
         self._conn.close()
 
@@ -182,32 +183,25 @@ class Store:
 
     # ── Conversations ────────────────────────────────────────────
 
-    def ensure_conversation(
-        self,
-        conversation_id: str,
-        transport_name: str,
-        channel_id: str,
-        root_thread_id: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        now = time.time()
-        meta = json.dumps(metadata if metadata is not None else {})
-        self._conn.execute(
-            """
-            INSERT INTO conversations (
-                conversation_id, transport_name, channel_id, root_thread_id,
-                updated_at, metadata_json
+    def ensure_conversation(self, conversation_id: str) -> None:
+        if self._legacy_conversations_schema:
+            self._conn.execute(
+                """
+                INSERT INTO conversations (
+                    conversation_id, transport_name, channel_id, root_thread_id,
+                    updated_at, metadata_json
+                )
+                VALUES (?, '', '', '', ?, '{}')
+                ON CONFLICT(conversation_id) DO NOTHING
+                """,
+                (conversation_id, time.time()),
             )
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(conversation_id) DO UPDATE SET
-                transport_name=excluded.transport_name,
-                channel_id=excluded.channel_id,
-                root_thread_id=excluded.root_thread_id,
-                updated_at=excluded.updated_at,
-                metadata_json=excluded.metadata_json
-            """,
-            (conversation_id, transport_name, channel_id, root_thread_id, now, meta),
-        )
+        else:
+            self._conn.execute(
+                "INSERT INTO conversations (conversation_id) VALUES (?) "
+                "ON CONFLICT(conversation_id) DO NOTHING",
+                (conversation_id,),
+            )
         self._conn.commit()
 
     def ensure_system_message(self, conversation_id: str, system_prompt: str) -> None:
@@ -514,17 +508,23 @@ class Store:
 
 
 _instance: Store | None = None
+_instance_path: Path | None = None
 
 
-def get_store() -> Store:
-    global _instance
-    if _instance is None:
-        _instance = Store()
+def get_store(path: Path | None = None) -> Store:
+    global _instance, _instance_path
+    resolved = (path or DB_PATH).expanduser().resolve()
+    if _instance is None or _instance_path != resolved:
+        if _instance is not None:
+            _instance.close()
+        _instance = Store(path=resolved)
+        _instance_path = resolved
     return _instance
 
 
 def reset_store() -> None:
-    global _instance
+    global _instance, _instance_path
     if _instance is not None:
         _instance.close()
         _instance = None
+        _instance_path = None

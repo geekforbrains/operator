@@ -29,7 +29,7 @@ async def run_shell(command: str, timeout: int = 120) -> str:
         )
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except asyncio.CancelledError:
-        # !stop should terminate in-flight shell commands immediately.
+        # User-triggered cancellation should terminate in-flight shell commands immediately.
         if proc is not None:
             proc.kill()
             await proc.wait()

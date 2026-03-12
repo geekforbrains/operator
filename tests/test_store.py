@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from operator_ai.message_timestamps import MESSAGE_CREATED_AT_KEY
-from operator_ai.store import Store, User, _validate_username
+from operator_ai.store import Store, User, _validate_username, get_store, reset_store
 
 
 def _strip_ts(messages: list[dict]) -> list[dict]:
@@ -195,13 +195,19 @@ def test_user_dataclass() -> None:
 
 
 def test_ensure_conversation_creates_and_updates(store: Store) -> None:
-    store.ensure_conversation("conv-1", "slack", "C1", "T1")
-    store.ensure_conversation("conv-1", "slack", "C1", "T1", metadata={"agent": "test"})
-    # No error means upsert worked
+    store.ensure_conversation("conv-1")
+    store.ensure_conversation("conv-1")
+
+
+def test_new_store_uses_lean_conversations_schema(store: Store) -> None:
+    columns = {
+        row["name"] for row in store._conn.execute("PRAGMA table_info(conversations)").fetchall()
+    }
+    assert columns == {"conversation_id"}
 
 
 def test_ensure_system_message_creates(store: Store) -> None:
-    store.ensure_conversation("conv-1", "slack", "C1", "T1")
+    store.ensure_conversation("conv-1")
     store.ensure_system_message("conv-1", "Hello system")
     msgs = store.load_messages("conv-1")
     assert len(msgs) == 1
@@ -210,7 +216,7 @@ def test_ensure_system_message_creates(store: Store) -> None:
 
 
 def test_ensure_system_message_updates(store: Store) -> None:
-    store.ensure_conversation("conv-1", "slack", "C1", "T1")
+    store.ensure_conversation("conv-1")
     store.ensure_system_message("conv-1", "Hello system")
     store.ensure_system_message("conv-1", "Updated system")
     msgs = store.load_messages("conv-1")
@@ -221,7 +227,7 @@ def test_ensure_system_message_updates(store: Store) -> None:
 
 
 def test_append_and_load_messages(store: Store) -> None:
-    store.ensure_conversation("conv-1", "slack", "C1", "T1")
+    store.ensure_conversation("conv-1")
     store.ensure_system_message("conv-1", "system")
     store.append_messages(
         "conv-1",
@@ -237,13 +243,13 @@ def test_append_and_load_messages(store: Store) -> None:
 
 
 def test_append_empty_messages(store: Store) -> None:
-    store.ensure_conversation("conv-1", "slack", "C1", "T1")
+    store.ensure_conversation("conv-1")
     store.append_messages("conv-1", [])  # Should not error
 
 
 def test_load_messages_trims_incomplete_tool_turns(store: Store) -> None:
     conv = "conv-1"
-    store.ensure_conversation(conv, "slack", "C1", "T1")
+    store.ensure_conversation(conv)
     store.ensure_system_message(conv, "system")
     store.append_messages(
         conv,
@@ -265,7 +271,7 @@ def test_load_messages_trims_incomplete_tool_turns(store: Store) -> None:
 
 def test_load_messages_preserves_created_at_metadata(store: Store) -> None:
     conv = "conv-ts"
-    store.ensure_conversation(conv, "slack", "C1", "T1")
+    store.ensure_conversation(conv)
     store.ensure_system_message(conv, "system")
     ts = 1773341381.0  # 2026-03-09T15:29:41Z
     store.append_messages(
@@ -292,7 +298,7 @@ def test_load_messages_preserves_created_at_metadata(store: Store) -> None:
 
 def test_load_messages_keeps_complete_tool_turns(store: Store) -> None:
     conv = "conv-2"
-    store.ensure_conversation(conv, "slack", "C1", "T1")
+    store.ensure_conversation(conv)
     store.ensure_system_message(conv, "system")
     store.append_messages(
         conv,
@@ -318,7 +324,7 @@ def test_load_messages_keeps_complete_tool_turns(store: Store) -> None:
 
 
 def test_index_and_lookup_platform_message(store: Store) -> None:
-    store.ensure_conversation("conv-1", "slack", "C1", "T1")
+    store.ensure_conversation("conv-1")
     store.index_platform_message("slack", "msg-123", "conv-1")
     assert store.lookup_platform_message("slack", "msg-123") == "conv-1"
 
@@ -328,8 +334,8 @@ def test_lookup_unknown_platform_message(store: Store) -> None:
 
 
 def test_index_platform_message_upsert(store: Store) -> None:
-    store.ensure_conversation("conv-1", "slack", "C1", "T1")
-    store.ensure_conversation("conv-2", "slack", "C2", "T2")
+    store.ensure_conversation("conv-1")
+    store.ensure_conversation("conv-2")
     store.index_platform_message("slack", "msg-123", "conv-1")
     store.index_platform_message("slack", "msg-123", "conv-2")
     assert store.lookup_platform_message("slack", "msg-123") == "conv-2"
@@ -403,6 +409,7 @@ def test_store_migrates_legacy_messages_table(tmp_path: Path) -> None:
     conn.close()
 
     migrated = Store(path=db_path)
+    migrated.ensure_conversation("conv-1")
 
     columns = {
         row["name"] for row in migrated._conn.execute("PRAGMA table_info(messages)").fetchall()
@@ -443,6 +450,19 @@ def test_store_context_manager(tmp_path: Path) -> None:
     with Store(path=tmp_path / "ctx.db") as s:
         s.add_user("alice")
         assert s.get_user("alice") is not None
+
+
+def test_get_store_reopens_when_path_changes(tmp_path: Path) -> None:
+    reset_store()
+    first = get_store(tmp_path / "one.db")
+    second = get_store(tmp_path / "one.db")
+    third = get_store(tmp_path / "two.db")
+
+    assert first is second
+    assert third is not first
+    assert third.path == (tmp_path / "two.db").resolve()
+
+    reset_store()
 
 
 # ── Timezone ─────────────────────────────────────────────────

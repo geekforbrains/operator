@@ -13,14 +13,14 @@ from typing import Any
 from croniter import croniter
 
 from operator_ai.agent_runtime import configure_agent_tool_context
-from operator_ai.config import OPERATOR_DIR, Config
+from operator_ai.config import Config
 from operator_ai.frontmatter import extract_body, parse_frontmatter
 from operator_ai.job_specs import scan_job_specs
 from operator_ai.log_context import new_run_id, set_run_context
 from operator_ai.memory import MemoryStore
 from operator_ai.message_timestamps import attach_message_created_at
 from operator_ai.prompts import assemble_system_prompt, load_prompt
-from operator_ai.store import DB_PATH, Store
+from operator_ai.store import Store
 from operator_ai.transport.base import Transport
 
 logger = logging.getLogger("operator.jobs")
@@ -40,11 +40,12 @@ class Job:
     enabled: bool = True
 
 
-def scan_jobs() -> list[Job]:
+def scan_jobs(jobs_dir: Path | None = None) -> list[Job]:
     """Scan jobs/<name>/JOB.md via scan_job_specs, enrich with prompt/hooks/validation."""
     jobs: list[Job] = []
 
-    for spec in scan_job_specs():
+    specs = scan_job_specs(jobs_dir) if jobs_dir is not None else scan_job_specs()
+    for spec in specs:
         if not spec.schedule or not croniter.is_valid(spec.schedule):
             logger.warning("Invalid schedule '%s' in %s, skipping", spec.schedule, spec.path)
             continue
@@ -87,6 +88,7 @@ async def _run_hook(
     stdin_data: str = "",
     timeout: int = 30,
     operator_home: Path | None = None,
+    operator_db: Path | None = None,
 ) -> tuple[int, str]:
     """Run a hook script, resolved relative to the job directory."""
     script_path = job.hooks.get(hook_name, "")
@@ -104,13 +106,14 @@ async def _run_hook(
         return 1, f"[hook script is not a file: {full_path}]"
 
     job_dir = str(job.path.parent)
+    operator_root = operator_home or job.path.parents[2]
     env = {
         **os.environ,
         "JOB_NAME": job.name,
         "JOB_DIR": job_dir,
         "OPERATOR_AGENT": agent_name or job.agent,
-        "OPERATOR_HOME": str(operator_home or OPERATOR_DIR),
-        "OPERATOR_DB": str(DB_PATH),
+        "OPERATOR_HOME": str(operator_root),
+        "OPERATOR_DB": str(operator_db or operator_root / "db" / "operator.db"),
     }
 
     logger.debug("Running %s hook for job '%s': %s", hook_name, job.name, full_path)
@@ -245,6 +248,7 @@ async def _execute_job(
                 agent_name=agent_name,
                 timeout=hook_timeout,
                 operator_home=config.base_dir,
+                operator_db=store.path,
             )
             if exit_code != 0:
                 logger.info(
@@ -320,6 +324,7 @@ async def _execute_job(
                 stdin_data=output,
                 timeout=hook_timeout,
                 operator_home=config.base_dir,
+                operator_db=store.path,
             )
             if exit_code != 0:
                 details = f": {postrun_output.strip()}" if postrun_output.strip() else ""
@@ -433,7 +438,7 @@ class JobRunner:
 
     async def _tick(self) -> None:
         now = datetime.now(UTC)
-        jobs = scan_jobs()
+        jobs = scan_jobs(self._config.jobs_dir())
 
         for job in jobs:
             if not job.enabled or not croniter.match(job.schedule, now):
@@ -484,7 +489,7 @@ async def run_job_now(
     Raises:
         ValueError: If the named job does not exist.
     """
-    job = next((candidate for candidate in scan_jobs() if candidate.name == name), None)
+    job = next((candidate for candidate in scan_jobs(config.jobs_dir()) if candidate.name == name), None)
     if job is None:
         raise ValueError(f"job '{name}' not found")
 

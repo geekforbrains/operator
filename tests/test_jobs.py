@@ -223,14 +223,11 @@ def test_find_job_spec_not_found(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_scan_jobs_from_dirs(monkeypatch, tmp_path: Path) -> None:
+def test_scan_jobs_from_dirs(tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     _write_job(jobs_dir, "daily-digest", JOB_MD)
 
-    monkeypatch.setattr("operator_ai.job_specs.JOBS_DIR", jobs_dir)
-    monkeypatch.setattr("operator_ai.jobs.scan_job_specs", lambda: scan_job_specs(jobs_dir))
-
-    jobs = scan_jobs()
+    jobs = scan_jobs(jobs_dir)
     assert len(jobs) == 1
     job = jobs[0]
     assert job.name == "daily-digest"
@@ -238,26 +235,20 @@ def test_scan_jobs_from_dirs(monkeypatch, tmp_path: Path) -> None:
     assert job.path == jobs_dir / "daily-digest" / "JOB.md"
 
 
-def test_scan_jobs_skips_invalid_schedule(monkeypatch, tmp_path: Path) -> None:
+def test_scan_jobs_skips_invalid_schedule(tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     _write_job(jobs_dir, "bad-schedule", JOB_MD_INVALID_SCHEDULE)
 
-    monkeypatch.setattr("operator_ai.job_specs.JOBS_DIR", jobs_dir)
-    monkeypatch.setattr("operator_ai.jobs.scan_job_specs", lambda: scan_job_specs(jobs_dir))
-
-    jobs = scan_jobs()
+    jobs = scan_jobs(jobs_dir)
     assert len(jobs) == 0
 
 
-def test_scan_jobs_includes_disabled(monkeypatch, tmp_path: Path) -> None:
+def test_scan_jobs_includes_disabled(tmp_path: Path) -> None:
     """scan_jobs includes disabled jobs (filtering is done at tick time)."""
     jobs_dir = tmp_path / "jobs"
     _write_job(jobs_dir, "disabled-job", JOB_MD_DISABLED)
 
-    monkeypatch.setattr("operator_ai.job_specs.JOBS_DIR", jobs_dir)
-    monkeypatch.setattr("operator_ai.jobs.scan_job_specs", lambda: scan_job_specs(jobs_dir))
-
-    jobs = scan_jobs()
+    jobs = scan_jobs(jobs_dir)
     assert len(jobs) == 1
     assert jobs[0].enabled is False
 

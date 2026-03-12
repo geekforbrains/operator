@@ -59,11 +59,3 @@ class SystemEventBuffer:
         if events:
             logger.info("Drained %d system event(s) for %s", len(events), conversation_id)
         return events
-
-    def has_events(self, conversation_id: str) -> bool:
-        return bool(self._queues.get(conversation_id))
-
-    def discard(self, conversation_id: str) -> None:
-        """Discard all events for a conversation (e.g. on eviction)."""
-        self._queues.pop(conversation_id, None)
-        self._last_text.pop(conversation_id, None)
