@@ -17,7 +17,8 @@ def test_to_prompt_with_username() -> None:
         username="gavin",
     )
     result = ctx.to_prompt()
-    assert "- User: gavin (Gavin Vickery via slack)" in result
+    assert "- Username: gavin" in result
+    assert "- Name: Gavin Vickery" in result
 
 
 def test_to_prompt_without_username() -> None:

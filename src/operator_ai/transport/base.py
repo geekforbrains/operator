@@ -49,10 +49,6 @@ class MessageContext:
     chat_type: str = ""
 
     def to_prompt(self, workspace: str = "", operator_home: str = "") -> str:
-        if self.username:
-            user_line = f"- User: {self.username} ({self.user_name} via {self.platform})"
-        else:
-            user_line = f"- User: {self.user_name} (`{self.user_id}`)"
         lines = [
             "# Context",
             "",
@@ -60,10 +56,12 @@ class MessageContext:
         ]
         if self.chat_type:
             lines.append(f"- Chat type: {self.chat_type}")
-        lines += [
-            f"- Channel: {self.channel_name} (`{self.channel_id}`)",
-            user_line,
-        ]
+        lines.append(f"- Channel: {self.channel_name} (`{self.channel_id}`)")
+        if self.username:
+            lines.append(f"- Username: {self.username}")
+            lines.append(f"- Name: {self.user_name}")
+        else:
+            lines.append(f"- User: {self.user_name} (`{self.user_id}`)")
         if self.roles:
             lines.append(f"- Roles: {', '.join(self.roles)}")
         if self.timezone:

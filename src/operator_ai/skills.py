@@ -155,7 +155,6 @@ def build_skills_prompt(skills: list[SkillInfo]) -> str:
     for s in skills:
         status = f" (missing env: {', '.join(s.env_missing)})" if s.env_missing else ""
         lines.append(f"\n- **{s.name}**: {s.description}{status}")
-        lines.append(f"  - Location: `{s.location}`")
     return "\n".join(lines)
 
 

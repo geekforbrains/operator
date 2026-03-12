@@ -855,7 +855,7 @@ class SlackTransport(Transport):
                 visible.sort(key=lambda p: p.display_name.casefold())
                 for profile in visible:
                     suffix = " (bot)" if profile.is_bot else ""
-                    lines.append(f"- {profile.display_name} <@{profile.user_id}>{suffix}")
+                    lines.append(f"- <@{profile.user_id}> {profile.display_name}{suffix}")
             else:
                 lines += [
                     "",
