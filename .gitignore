@@ -34,4 +34,5 @@ htmlcov/
 
 # Working specs
 *SPEC*.md
-TASKS.md
+*AUDIT*.md
+*TASK*.md
