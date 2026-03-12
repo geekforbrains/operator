@@ -324,7 +324,12 @@ def _scaffold_operator_home(
     files: list[tuple[Path, str]] = [
         (config_file, config_text),
         (home / "SYSTEM.md", load_prompt("system.md")),
-        (home / "agents" / _DEFAULT_AGENT_NAME / "AGENT.md", load_prompt("agent.md")),
+        (
+            home / "agents" / _DEFAULT_AGENT_NAME / "AGENT.md",
+            load_prompt("agent.md")
+            .replace("{name}", _DEFAULT_AGENT_NAME)
+            .replace("{name_title}", _DEFAULT_AGENT_NAME.capitalize()),
+        ),
     ]
     for path, content in files:
         if path.exists():

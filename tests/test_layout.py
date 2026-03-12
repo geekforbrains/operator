@@ -161,3 +161,40 @@ def test_ensure_user_memory_idempotent(tmp_path: Path) -> None:
         ensure_user_memory("gavin", config)  # no error
 
     assert (op_dir / "memory" / "users" / "gavin" / "rules").is_dir()
+
+
+# ── AGENT.md creation ──────────────────────────────────────────
+
+
+def test_ensure_layout_creates_agent_md(tmp_path: Path) -> None:
+    op_dir = tmp_path / ".operator"
+    config = _make_config("hermy")
+
+    with (
+        patch("operator_ai.layout.OPERATOR_DIR", op_dir),
+        patch("operator_ai.config.OPERATOR_DIR", op_dir),
+    ):
+        ensure_layout(config)
+
+    agent_md = op_dir / "agents" / "hermy" / "AGENT.md"
+    assert agent_md.exists()
+    content = agent_md.read_text()
+    assert "name: hermy" in content
+
+
+def test_ensure_layout_does_not_overwrite_agent_md(tmp_path: Path) -> None:
+    op_dir = tmp_path / ".operator"
+    config = _make_config("hermy")
+
+    # Pre-create a custom AGENT.md
+    agent_md = op_dir / "agents" / "hermy" / "AGENT.md"
+    agent_md.parent.mkdir(parents=True, exist_ok=True)
+    agent_md.write_text("custom content")
+
+    with (
+        patch("operator_ai.layout.OPERATOR_DIR", op_dir),
+        patch("operator_ai.config.OPERATOR_DIR", op_dir),
+    ):
+        ensure_layout(config)
+
+    assert agent_md.read_text() == "custom content"
