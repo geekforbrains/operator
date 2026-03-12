@@ -6,6 +6,12 @@ from typing import Any
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_prompt_dump(monkeypatch):
+    """Prevent tests from writing prompt dump files to ~/.operator/logs/prompts/."""
+    monkeypatch.delenv("OPERATOR_LOG_PROMPT", raising=False)
+
+
 @dataclass
 class FakeMemoryStore:
     search_results: list[dict[str, Any]] = field(default_factory=list)
