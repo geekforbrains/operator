@@ -141,18 +141,22 @@ You are a research specialist. When given a topic...
 
 ### Jobs
 
-Scheduled tasks with cron expressions, prerun gates, and postrun hooks. Agents run jobs autonomously and post results to your channels. Hook scripts have a configurable timeout (`defaults.hook_timeout`, default 30s) — if a hook exceeds it, the job is gated or failed.
+Scheduled tasks with cron expressions, prerun gates, and postrun hooks. Agents create and manage jobs using deterministic tools with explicit typed parameters — no raw YAML authoring required.
 
-```yaml
----
-name: daily-summary
-schedule: "0 9 * * *"
-agent: operator
----
-
-Summarize the key events from the last 24 hours.
-Post to #general with a thread for the full breakdown.
+```python
+create_job(
+    name="daily-summary",
+    schedule="0 9 * * *",
+    prompt="Summarize the key events from the last 24 hours.\nPost to #general with a thread for the full breakdown.",
+    agent="operator",
+)
 ```
+
+Six tools cover the full lifecycle: `create_job`, `update_job`, `delete_job`, `enable_job`, `disable_job`, `list_jobs`. Each tool has explicit parameters for every field — the tool assembles the job file internally.
+
+**Prerun scripts** gate execution and inject data. A prerun script's stdout is passed into the job prompt as `<prerun_output>`, so the model works on pre-filtered data instead of making redundant API calls. Use scripts for anything deterministic (data fetching, date logic, filtering) and reserve the model for interpretation and formatting.
+
+Hook scripts have a configurable timeout (`defaults.hook_timeout`, default 30s) — if a hook exceeds it, the job is gated or failed.
 
 ### Skills
 

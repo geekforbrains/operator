@@ -300,6 +300,41 @@ def test_build_job_prompt_includes_rules(monkeypatch, tmp_path: Path) -> None:
     assert "Agent Rules" in prompt
 
 
+def test_build_job_prompt_includes_prerun_output(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda: "# System")
+    monkeypatch.setattr(
+        "operator_ai.prompts.load_agent_prompt",
+        lambda _config, agent_name: f"# Agent\n\n{agent_name}",
+    )
+    monkeypatch.setattr(
+        "operator_ai.prompts.load_skills_prompt",
+        lambda _skills_dir, **_kwargs: "",
+    )
+    monkeypatch.setattr("operator_ai.prompts.scan_agents", lambda: [])
+
+    job = Job(
+        name="scripted-job",
+        description="Job with prerun",
+        schedule="0 8 * * *",
+        prompt="Process the data.",
+        path=tmp_path / "scripted-job.md",
+    )
+
+    prompt = asyncio.run(
+        _build_job_prompt(
+            config=_config(),
+            job=job,
+            agent_name="operator",
+            prerun_output="fetched 42 items\nall healthy",
+            transport=None,
+        )
+    )
+
+    assert "<prerun_output>" in prompt
+    assert "fetched 42 items" in prompt
+    assert "all healthy" in prompt
+
+
 def test_execute_job_configures_memory_and_skill_filter(monkeypatch, tmp_path: Path) -> None:
     async def fake_run_agent(**_kwargs) -> str:
         skill_filter = get_skill_filter()
@@ -343,7 +378,7 @@ def test_execute_job_configures_memory_and_skill_filter(monkeypatch, tmp_path: P
 
 
 # ---------------------------------------------------------------------------
-# 5.3 Job tools (create / update / delete)
+# 5.3 Job tools (create / update / delete / enable / disable / list)
 # ---------------------------------------------------------------------------
 
 
@@ -353,20 +388,28 @@ def test_create_job_writes_flat_file(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("operator_ai.tools.jobs.OPERATOR_DIR", tmp_path)
     monkeypatch.setattr(
         "operator_ai.tools.jobs.load_config",
-        lambda: Config(
-            defaults={"models": ["test/model"]},
-            agents={"operator": {}},
-        ),
+        lambda: _config(),
     )
 
-    from operator_ai.tools.jobs import _create_job
+    from operator_ai.tools.jobs import create_job
 
-    result = _create_job("daily-digest", JOB_MD)
+    result = asyncio.run(
+        create_job(
+            name="daily-digest",
+            schedule="0 8 * * *",
+            prompt="Summarize the daily activity.",
+            description="Summarize daily activity",
+            agent="operator",
+        )
+    )
     assert "Created job" in result
 
     job_file = jobs_dir / "daily-digest.md"
     assert job_file.exists()
-    assert job_file.read_text() == JOB_MD
+    content = job_file.read_text()
+    assert "schedule:" in content
+    assert "0 8 * * *" in content
+    assert "Summarize the daily activity." in content
 
     # Old-style directory should NOT be created
     assert not (jobs_dir / "daily-digest").is_dir()
@@ -382,13 +425,63 @@ def test_create_job_rejects_duplicate(monkeypatch, tmp_path: Path) -> None:
         lambda: _config(),
     )
 
-    from operator_ai.tools.jobs import _create_job
+    from operator_ai.tools.jobs import create_job
 
-    result = _create_job("daily-digest", JOB_MD)
+    result = asyncio.run(create_job(name="daily-digest", schedule="0 8 * * *", prompt="test"))
     assert "already exists" in result
 
 
-def test_update_job_overwrites_flat_file(monkeypatch, tmp_path: Path) -> None:
+def test_create_job_rejects_missing_schedule(monkeypatch, tmp_path: Path) -> None:
+    jobs_dir = tmp_path / "jobs"
+    monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
+    monkeypatch.setattr("operator_ai.tools.jobs.OPERATOR_DIR", tmp_path)
+
+    from operator_ai.tools.jobs import create_job
+
+    result = asyncio.run(create_job(name="test", schedule="", prompt="test"))
+    assert "schedule is required" in result
+
+
+def test_create_job_rejects_invalid_cron(monkeypatch, tmp_path: Path) -> None:
+    jobs_dir = tmp_path / "jobs"
+    monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
+    monkeypatch.setattr("operator_ai.tools.jobs.OPERATOR_DIR", tmp_path)
+
+    from operator_ai.tools.jobs import create_job
+
+    result = asyncio.run(create_job(name="test", schedule="bad cron", prompt="test"))
+    assert "invalid cron" in result
+
+
+def test_create_job_rejects_unknown_agent(monkeypatch, tmp_path: Path) -> None:
+    jobs_dir = tmp_path / "jobs"
+    monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
+    monkeypatch.setattr("operator_ai.tools.jobs.OPERATOR_DIR", tmp_path)
+    monkeypatch.setattr(
+        "operator_ai.tools.jobs.load_config",
+        lambda: _config(),
+    )
+
+    from operator_ai.tools.jobs import create_job
+
+    result = asyncio.run(
+        create_job(name="test", schedule="0 8 * * *", prompt="test", agent="nonexistent")
+    )
+    assert "unknown agent" in result
+
+
+def test_create_job_rejects_missing_prompt(monkeypatch, tmp_path: Path) -> None:
+    jobs_dir = tmp_path / "jobs"
+    monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
+    monkeypatch.setattr("operator_ai.tools.jobs.OPERATOR_DIR", tmp_path)
+
+    from operator_ai.tools.jobs import create_job
+
+    result = asyncio.run(create_job(name="test", schedule="0 8 * * *", prompt=""))
+    assert "prompt is required" in result
+
+
+def test_update_job_overwrites_file(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     _write_job(jobs_dir, "daily-digest.md", JOB_MD)
     monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
@@ -398,13 +491,22 @@ def test_update_job_overwrites_flat_file(monkeypatch, tmp_path: Path) -> None:
         lambda: _config(),
     )
 
-    updated = JOB_MD.replace("Summarize daily activity", "Updated description")
+    from operator_ai.tools.jobs import update_job
 
-    from operator_ai.tools.jobs import _update_job
-
-    result = _update_job("daily-digest", updated)
+    result = asyncio.run(
+        update_job(
+            name="daily-digest",
+            schedule="0 9 * * *",
+            prompt="Updated prompt.",
+            description="Updated description",
+        )
+    )
     assert "Updated job" in result
-    assert "Updated description" in (jobs_dir / "daily-digest.md").read_text()
+
+    content = (jobs_dir / "daily-digest.md").read_text()
+    assert "0 9 * * *" in content
+    assert "Updated prompt." in content
+    assert "Updated description" in content
 
 
 def test_update_job_not_found(monkeypatch, tmp_path: Path) -> None:
@@ -412,9 +514,9 @@ def test_update_job_not_found(monkeypatch, tmp_path: Path) -> None:
     jobs_dir.mkdir()
     monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
 
-    from operator_ai.tools.jobs import _update_job
+    from operator_ai.tools.jobs import update_job
 
-    result = _update_job("nonexistent", JOB_MD)
+    result = asyncio.run(update_job(name="nonexistent", schedule="0 8 * * *", prompt="test"))
     assert "not found" in result
 
 
@@ -423,9 +525,9 @@ def test_delete_job_removes_flat_file(monkeypatch, tmp_path: Path) -> None:
     _write_job(jobs_dir, "daily-digest.md", JOB_MD)
     monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
 
-    from operator_ai.tools.jobs import _delete_job
+    from operator_ai.tools.jobs import delete_job
 
-    result = _delete_job("daily-digest")
+    result = asyncio.run(delete_job(name="daily-digest"))
     assert "Deleted job" in result
     assert not (jobs_dir / "daily-digest.md").exists()
 
@@ -435,20 +537,20 @@ def test_delete_job_not_found(monkeypatch, tmp_path: Path) -> None:
     jobs_dir.mkdir()
     monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
 
-    from operator_ai.tools.jobs import _delete_job
+    from operator_ai.tools.jobs import delete_job
 
-    result = _delete_job("nonexistent")
+    result = asyncio.run(delete_job(name="nonexistent"))
     assert "not found" in result
 
 
-def test_toggle_job_enable_disable(monkeypatch, tmp_path: Path) -> None:
+def test_enable_disable_job(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     _write_job(jobs_dir, "daily-digest.md", JOB_MD)
     monkeypatch.setattr("operator_ai.tools.jobs.JOBS_DIR", jobs_dir)
 
-    from operator_ai.tools.jobs import _toggle_job
+    from operator_ai.tools.jobs import disable_job, enable_job
 
-    result = _toggle_job("daily-digest", enabled=False)
+    result = asyncio.run(disable_job(name="daily-digest"))
     assert "Disabled" in result
 
     # Verify the file was updated
@@ -456,7 +558,7 @@ def test_toggle_job_enable_disable(monkeypatch, tmp_path: Path) -> None:
     spec = next(s for s in specs if s.name == "daily-digest")
     assert spec.enabled is False
 
-    result = _toggle_job("daily-digest", enabled=True)
+    result = asyncio.run(enable_job(name="daily-digest"))
     assert "Enabled" in result
 
     specs = scan_job_specs(jobs_dir)
@@ -478,22 +580,18 @@ def test_create_job_with_hooks_creates_scripts(monkeypatch, tmp_path: Path) -> N
         lambda: _config(),
     )
 
-    job_with_hooks = dedent("""\
-        ---
-        name: hooked-job
-        description: Job with hooks
-        schedule: "0 8 * * *"
-        hooks:
-          prerun: scripts/check.sh
-          postrun: scripts/notify.sh
-        ---
+    from operator_ai.tools.jobs import create_job
 
-        Do the hooked thing.
-    """)
-
-    from operator_ai.tools.jobs import _create_job
-
-    result = _create_job("hooked-job", job_with_hooks)
+    result = asyncio.run(
+        create_job(
+            name="hooked-job",
+            schedule="0 8 * * *",
+            prompt="Do the hooked thing.",
+            description="Job with hooks",
+            prerun="scripts/check.sh",
+            postrun="scripts/notify.sh",
+        )
+    )
     assert "Created job" in result
 
     # Hook scripts are created relative to OPERATOR_DIR (tmp_path here)
@@ -504,58 +602,71 @@ def test_create_job_with_hooks_creates_scripts(monkeypatch, tmp_path: Path) -> N
     assert prerun.read_text().startswith("#!/bin/bash")
     assert postrun.read_text().startswith("#!/bin/bash")
 
+    # Verify job file has hooks in frontmatter
+    job_file = jobs_dir / "hooked-job.md"
+    content = job_file.read_text()
+    assert "prerun" in content
+    assert "scripts/check.sh" in content
+    assert "postrun" in content
+    assert "scripts/notify.sh" in content
+
 
 # ---------------------------------------------------------------------------
-# Frontmatter validation
+# 5.3 File assembly
 # ---------------------------------------------------------------------------
 
 
-def test_validate_frontmatter_rejects_missing_schedule(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "operator_ai.tools.jobs.load_config",
-        lambda: _config(),
+def test_build_job_file_minimal() -> None:
+    from operator_ai.tools.jobs import _build_job_file
+
+    content = _build_job_file(
+        name="test-job",
+        schedule="0 8 * * *",
+        prompt="Do the thing.",
     )
+    assert "---" in content
+    assert "name: test-job" in content
+    assert "schedule: 0 8 * * *" in content or "schedule: '0 8 * * *'" in content
+    assert "Do the thing." in content
+    assert "enabled: true" in content
 
-    from operator_ai.tools.jobs import _validate_frontmatter
 
-    result = _validate_frontmatter({"description": "no schedule"})
-    assert result is not None
-    assert "schedule" in result
+def test_build_job_file_full() -> None:
+    from operator_ai.tools.jobs import _build_job_file
 
-
-def test_validate_frontmatter_rejects_invalid_cron(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "operator_ai.tools.jobs.load_config",
-        lambda: _config(),
+    content = _build_job_file(
+        name="full-job",
+        schedule="0 8 * * *",
+        prompt="Full prompt.",
+        description="Full description",
+        agent="operator",
+        model="gpt-4",
+        max_iterations=15,
+        enabled=True,
+        prerun="scripts/pre.sh",
+        postrun="scripts/post.sh",
     )
+    assert "name: full-job" in content
+    assert "description: Full description" in content
+    assert "agent: operator" in content
+    assert "model: gpt-4" in content
+    assert "max_iterations: 15" in content
+    assert "prerun:" in content
+    assert "postrun:" in content
+    assert "Full prompt." in content
 
-    from operator_ai.tools.jobs import _validate_frontmatter
 
-    result = _validate_frontmatter({"schedule": "bad cron"})
-    assert result is not None
-    assert "invalid cron" in result
+def test_build_job_file_omits_empty_optional_fields() -> None:
+    from operator_ai.tools.jobs import _build_job_file
 
-
-def test_validate_frontmatter_rejects_unknown_agent(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "operator_ai.tools.jobs.load_config",
-        lambda: _config(),
+    content = _build_job_file(
+        name="minimal-job",
+        schedule="0 8 * * *",
+        prompt="Minimal.",
     )
-
-    from operator_ai.tools.jobs import _validate_frontmatter
-
-    result = _validate_frontmatter({"schedule": "0 8 * * *", "agent": "nonexistent"})
-    assert result is not None
-    assert "unknown agent" in result
-
-
-def test_validate_frontmatter_accepts_valid(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "operator_ai.tools.jobs.load_config",
-        lambda: _config(),
-    )
-
-    from operator_ai.tools.jobs import _validate_frontmatter
-
-    result = _validate_frontmatter({"schedule": "0 8 * * *", "agent": "operator"})
-    assert result is None
+    assert "agent:" not in content
+    assert "model:" not in content
+    assert "max_iterations:" not in content
+    assert "hooks:" not in content
+    assert "prerun:" not in content
+    assert "postrun:" not in content

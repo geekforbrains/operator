@@ -293,11 +293,10 @@ freehand model date math.
 
 ### Jobs
 
-Jobs are scheduled tasks defined as markdown files with YAML frontmatter,
-following the same pattern as agents and skills. They live at
-`~/.operator/jobs/<name>.md`. The frontmatter includes the schedule (cron
-expression), the target agent, and optional prerun gates and postrun hooks.
-The body is the prompt the agent receives when the job runs.
+Jobs are scheduled tasks defined as markdown files with YAML frontmatter.
+They live at `~/.operator/jobs/<name>.md`. The frontmatter includes the
+schedule (cron expression), the target agent, and optional prerun gates and
+postrun hooks. The body is the prompt the agent receives when the job runs.
 
 Jobs run within the target agent's context — they use the agent's permissions,
 memory, and workspace.
@@ -307,6 +306,22 @@ terminates. There is no persistent conversation to resume between runs.
 Anything worth retaining should be written to memory, state, or workspace
 files during the run.
 
+#### Deterministic job tools
+
+Agents should not compose raw YAML frontmatter to create jobs. Like memory
+tools, job management uses dedicated tools with explicit typed parameters.
+The tools assemble the job file internally, enforcing consistent structure:
+
+- `create_job` — explicit fields: name, schedule, prompt, description,
+  agent, model, max_iterations, enabled, prerun, postrun
+- `update_job` — full replace with the same explicit fields
+- `delete_job` / `enable_job` / `disable_job` / `list_jobs`
+
+This eliminates format errors, ensures required fields are always present,
+and keeps the tool signatures self-documenting. The agent provides structured
+data; the tool produces the file. No bundled skill is needed to teach the
+agent how to write job YAML.
+
 #### Hooks
 
 Hooks are the mechanism for deterministic, scriptable control over job
@@ -314,16 +329,21 @@ execution. They let operators gate whether a job runs and post-process
 its output using ordinary shell scripts, keeping that logic out of the
 model and in version-controllable code.
 
-Hooks are defined in the job frontmatter under `hooks.prerun` and
-`hooks.postrun`, as paths relative to `~/.operator/`. Both are optional.
+Hooks are specified as `prerun` and `postrun` parameters on the job tools,
+as paths relative to `~/.operator/`. Both are optional.
 
 **Prerun hooks** run before the agent. A non-zero exit code gates the job —
 the run is skipped and recorded as gated. A zero exit code allows the job
 to proceed. Critically, the hook's stdout on success is injected into the
-job prompt as additional context. This serves two purposes: the script
+job prompt as `<prerun_output>`. This serves two purposes: the script
 decides whether the job should run, and when it does run, it passes in
 only the data the job needs. This keeps the model focused on a
 pre-filtered input rather than doing its own data gathering.
+
+Prefer prerun scripts for anything deterministic — API calls, data fetching,
+date logic, filtering, rate limiting. Reserve the model for interpretation
+and formatting. A well-written prerun script reduces LLM token usage and
+makes job behavior more predictable.
 
 **Postrun hooks** run after the agent completes. The agent's final text
 output is piped to the hook's stdin. A non-zero exit code marks the run
