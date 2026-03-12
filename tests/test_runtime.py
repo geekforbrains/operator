@@ -419,3 +419,32 @@ def test_stop_words_require_exact_match(
         assert "Cancelling…" in _texts(transport)
 
     asyncio.run(_run())
+
+
+def test_dispatch_replies_in_the_inbound_thread(
+    monkeypatch,
+    configured_store: Store,
+    tmp_path: Path,
+) -> None:
+    async def _run() -> None:
+        config = _config(tmp_path)
+        dispatcher = Dispatcher(config, configured_store, RuntimeManager())
+        transport = DummyTransport()
+        dispatcher.register_transport(transport)
+
+        def fake_system_prompt(*_args: Any, **_kwargs: Any) -> str:
+            return "system"
+
+        monkeypatch.setattr("operator_ai.main.build_agent_system_prompt", fake_system_prompt)
+
+        async def fake_run_agent(**kwargs: Any) -> str:
+            await kwargs["on_message"]("Threaded reply")
+            return ""
+
+        monkeypatch.setattr("operator_ai.main.run_agent", fake_run_agent)
+
+        await dispatcher.handle_message(_message("hello", message_id="1", root_message_id="1"))
+
+        assert transport.sent[-1] == ("C1", "Threaded reply", "1")
+
+    asyncio.run(_run())

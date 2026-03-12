@@ -84,7 +84,9 @@ agents:
         expand_mentions: true
 ```
 
-Transport config has three parts: `type`, `env`, and `settings`. `env` maps logical credential names to environment variable names, while `settings` covers non-secret transport behavior. For Slack, the required fields are `type`, `env.bot_token`, and `env.app_token`. Users and channels are injected into the agent prompt by default so the agent knows who and what is available without a tool call. Override `settings.inject_users_into_prompt` or `settings.inject_channels_into_prompt` for large workspaces.
+Transport config has three parts: `type`, `env`, and `settings`. `env` maps logical credential names to environment variable names, while `settings` covers non-secret transport behavior. For Slack, the required fields are `type`, `env.bot_token`, and `env.app_token`. Users and channels are injected into the agent prompt by default so the agent knows who and what is available without a tool call. The Slack channel list is a current snapshot refreshed on startup and channel lifecycle events, so renamed channels do not linger under old names. Override `settings.inject_users_into_prompt` or `settings.inject_channels_into_prompt` for large workspaces.
+
+Slack is intentionally thread-scoped. Every message addressed to an agent is handled in a Slack thread session: a top-level DM or top-level channel mention starts a new thread, and later messages continue that session only when they are also addressed to the agent. Ambient channel chatter is ignored unless the agent is mentioned. If the agent needs context outside that session, it can use Slack tools like `slack_read_channel` or `slack_read_thread`.
 
 Add your keys to `~/.operator/.env`:
 
@@ -233,7 +235,7 @@ roles:
 
 ### System Events
 
-Transports emit lightweight system events (reactions, pins, membership changes, etc.) that are too noisy to trigger a full agent run but useful as ambient context. Events are buffered in memory per conversation and injected into the next user message when the agent runs.
+Transports may emit lightweight system events that are too noisy to trigger a full agent run but useful as ambient context. In the current Slack transport, this surface is reaction events. Events are buffered in memory per conversation and injected into the next user message when the agent runs.
 
 ```
 <context_snapshot source="system_events">
@@ -247,11 +249,18 @@ The buffer is capped at 20 events per conversation, consecutive duplicates are s
 
 Transports can also inject per-message context blocks via `get_message_context()`. For Slack, this includes the current message ID and channel ID so the agent can react to or reference the message it's responding to without an extra API call.
 
+### Slack Threading
+
+Slack conversations are intentionally thread-scoped. A top-level channel mention or top-level DM message starts a fresh session rooted at that message. Later messages continue the same Operator conversation only when they are directed at the agent in that Slack thread. In channels, that means mentioning the agent again; unmentioned human replies are treated as ambient conversation and ignored. This keeps each conversation focused and prevents the agent from jumping into every thread reply.
+
+When the agent needs context outside the addressed messages in the current session, it should reach for Slack tools like `slack_read_channel` or `slack_read_thread` rather than assuming the rest of the workspace conversation is in scope.
+
 ### Reactions (Slack)
 
 Agents can add and remove emoji reactions via `slack_add_reaction` and `slack_remove_reaction`. When users react to messages the agent has seen, those reactions appear as system events in the next interaction.
 
 Slack transport tools are namespaced with a `slack_` prefix: `slack_find_users`, `slack_list_channels`, `slack_read_channel`, `slack_read_thread`, `slack_add_reaction`, `slack_remove_reaction`.
+When multiple Slack users share a display name, use `slack_find_users` and the returned `<@UID>` mention instead of relying on raw `@Name`.
 
 ### Model failover
 

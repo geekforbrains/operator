@@ -31,6 +31,7 @@ _mrkdwn = SlackMarkdownConverter()
 MAX_API_ATTEMPTS = 3
 BASE_RETRY_SECONDS = 1.0
 
+
 @dataclass(frozen=True)
 class SlackUserProfile:
     user_id: str
@@ -107,6 +108,8 @@ def _resolve_env_var(env_var: str, agent_name: str) -> str:
     if not value:
         raise ValueError(f"Agent '{agent_name}' transport: env var '{env_var}' not set")
     return value
+
+
 class SlackTransport(Transport):
     def __init__(
         self,
@@ -137,12 +140,25 @@ class SlackTransport(Transport):
 
         self._bot_user_id: str = ""
 
-        # In-memory caches (bulk-loaded on startup, updated by Slack events).
+        # In-memory caches. Users are patched incrementally; channels are
+        # replaced from a fresh full snapshot on startup and channel lifecycle
+        # events so the prompt-facing list stays aligned with Slack truth.
         self._users: dict[str, str] = {}
         self._user_directory: dict[str, SlackUserProfile] = {}
         self._channels: dict[str, str] = {}
         self._channel_ids: dict[str, str] = {}
         self._channel_info: dict[str, str] = {}
+
+    @override
+    def build_conversation_id(self, msg: IncomingMessage) -> str:
+        """Slack conversations are thread-scoped sessions.
+
+        A top-level DM or channel mention starts a fresh Slack thread rooted at
+        that message. Replies in the same Slack thread reuse the root ts and
+        therefore stay in the same Operator conversation.
+        """
+        root_message_id = msg.root_message_id or msg.message_id
+        return f"{self.platform}:{self.name}:{msg.channel_id}:{root_message_id}"
 
     @override
     async def start(self, on_message: Callable[[IncomingMessage], Awaitable[None]]) -> None:
@@ -173,25 +189,19 @@ class SlackTransport(Transport):
 
         @self._app.event("channel_created")
         async def handle_channel_created(event: dict, say):  # noqa: ARG001
-            ch = event.get("channel", {})
-            self._upsert_channel(ch.get("id", ""), ch.get("name", ""))
+            self._create_task(self._fetch_all_channels())
 
         @self._app.event("channel_rename")
         async def handle_channel_rename(event: dict, say):  # noqa: ARG001
-            ch = event.get("channel", {})
-            self._upsert_channel(ch.get("id", ""), ch.get("name", ""))
+            self._create_task(self._fetch_all_channels())
 
         @self._app.event("channel_archive")
         async def handle_channel_archive(event: dict, say):  # noqa: ARG001
-            channel_id = event.get("channel", "")
-            if channel_id and not self._include_archived_channels:
-                self._remove_channel(channel_id)
+            self._create_task(self._fetch_all_channels())
 
         @self._app.event("channel_unarchive")
         async def handle_channel_unarchive(event: dict, say):  # noqa: ARG001
-            channel_id = event.get("channel", "")
-            if channel_id:
-                await self._fetch_and_upsert_channel(channel_id)
+            self._create_task(self._fetch_all_channels())
 
         @self._app.event("reaction_added")
         async def handle_reaction_added(event: dict, say):  # noqa: ARG001
@@ -319,43 +329,8 @@ class SlackTransport(Transport):
             is_deleted=bool(raw_user.get("deleted")),
         )
 
-    def _upsert_channel(
-        self, channel_id: str, name: str, topic: str = "", purpose: str = ""
-    ) -> None:
-        if not channel_id or not name:
-            return
-        ch_name = f"#{name}" if not name.startswith("#") else name
-        self._channels[channel_id] = ch_name
-        self._channel_ids[name.lstrip("#")] = channel_id
-        snippet = topic or purpose
-        if snippet:
-            self._channel_info[channel_id] = snippet
-        elif channel_id in self._channel_info:
-            del self._channel_info[channel_id]
-
-    def _remove_channel(self, channel_id: str) -> None:
-        name = self._channels.pop(channel_id, "")
-        if name:
-            self._channel_ids.pop(name.lstrip("#"), None)
-        self._channel_info.pop(channel_id, None)
-
-    async def _fetch_and_upsert_channel(self, channel_id: str) -> None:
-        app = self._require_app()
-        try:
-            resp = await self._api_call(
-                "conversations.info",
-                lambda: app.client.conversations_info(channel=channel_id),
-            )
-            ch = resp.get("channel", {})
-            name = ch.get("name", "")
-            topic = ch.get("topic", {}).get("value", "")
-            purpose = ch.get("purpose", {}).get("value", "")
-            if name:
-                self._upsert_channel(channel_id, name, topic, purpose)
-        except Exception:
-            logger.warning("Failed to fetch channel info for %s", channel_id)
-
     async def _fetch_all_channels(self) -> None:
+        """Replace the channel snapshot with the current Slack channel list."""
         app = self._require_app()
         channels: dict[str, str] = {}
         channel_ids: dict[str, str] = {}
@@ -443,13 +418,16 @@ class SlackTransport(Transport):
 
     def _expand_mentions_in(self, text: str) -> str:
         if self._user_directory:
-            by_name: dict[str, str] = {}
+            by_name: dict[str, list[str]] = {}
             for profile in self._user_directory.values():
                 if profile.is_deleted:
                     continue
-                by_name[profile.display_name.lower()] = profile.user_id
+                by_name.setdefault(profile.display_name.lower(), []).append(profile.user_id)
             for name in sorted(by_name, key=len, reverse=True):
-                uid = by_name[name]
+                user_ids = by_name[name]
+                if len(user_ids) != 1:
+                    continue
+                uid = user_ids[0]
                 pattern = re.compile(r"(?<![<\w])@" + re.escape(name) + r"\b", re.IGNORECASE)
                 text = pattern.sub(f"<@{uid}>", text)
 
@@ -646,28 +624,22 @@ class SlackTransport(Transport):
 
         # D = DM, C = channel, G = group
         if channel_id.startswith("D"):
-            name = "DM"
-            self._channels[channel_id] = name
-        else:
-            app = self._require_app()
-            try:
-                resp = await self._api_call(
-                    "conversations.info",
-                    lambda: app.client.conversations_info(channel=channel_id),
-                )
-                channel = resp.get("channel", {})
-                name = channel.get("name") or channel_id
-                if not name.startswith("#"):
-                    name = f"#{name}"
-                # Only cache non-archived channels (unless configured to include them)
-                # to prevent them from leaking into the system prompt.
-                if self._include_archived_channels or not channel.get("is_archived"):
-                    self._channels[channel_id] = name
-            except Exception:
-                logger.warning("Failed to resolve Slack channel %s, using raw ID", channel_id)
-                name = channel_id
+            return "DM"
 
-        return name
+        app = self._require_app()
+        try:
+            resp = await self._api_call(
+                "conversations.info",
+                lambda: app.client.conversations_info(channel=channel_id),
+            )
+            channel = resp.get("channel", {})
+            name = channel.get("name") or channel_id
+            if not name.startswith("#"):
+                name = f"#{name}"
+            return name
+        except Exception:
+            logger.warning("Failed to resolve Slack channel %s, using raw ID", channel_id)
+            return channel_id
 
     @override
     async def resolve_channel_id(self, channel: str) -> str | None:
@@ -905,12 +877,18 @@ class SlackTransport(Transport):
         lines = [
             "# Messaging",
             "",
+            "Slack sessions are thread-scoped.",
+            "Every message addressed to you starts a new session thread or continues the current one.",
+            "In channels, only messages that mention you are addressed to you; unmentioned thread chatter is ambient context unless you inspect it deliberately.",
+            "Stay focused on the current thread unless you intentionally use Slack tools to inspect outside context.",
+            "",
             "Use `send_message` with a channel name (e.g. `#general`) or channel ID.",
             "It returns a Slack message timestamp you can pass as `thread_id` to reply in a thread.",
+            "Use `slack_read_channel` or `slack_read_thread` when you need context outside the current thread.",
             "Use `slack_list_channels` if you need to inspect Slack destinations first.",
             "Use `slack_find_users` to resolve people by name, Slack ID, or linked Operator username.",
-            "When mentioning users or channels in messages, use `@Name` or `#channel`.",
-            "Explicit `<@UID>` and `<#CID>` syntax also works.",
+            "Use `@Name` only when the display name is unambiguous; otherwise call `slack_find_users` and use the returned `<@UID>` mention.",
+            "Use `#channel` for channels. Explicit `<@UID>` and `<#CID>` syntax also works.",
             "",
             "## Reactions",
             "",

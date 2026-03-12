@@ -72,6 +72,31 @@ architecture itself. Transport code should handle ingress, egress, identities,
 thread semantics, attachments, and platform-specific context, while leaving
 agent behavior and memory semantics transport-agnostic.
 
+Transport-specific interaction rules should still be explicit where they matter
+to the product contract. For Slack, conversations are intentionally
+thread-scoped: every top-level message addressed to an agent starts a fresh
+session thread, and only later messages addressed to the agent continue that
+session. In channels, that means mention-gated follow-ups inside the thread;
+ambient human chatter is ignored unless the agent is addressed again. This
+applies in DMs too, where every DM message is addressed to the agent. The
+point is focus and isolation, not maximal ambient context. If an agent needs
+information outside the current Slack session, it should use Slack tools to
+inspect it deliberately.
+
+Prompt-facing transport snapshots should reflect current platform truth rather
+than accumulate stale aliases. For Slack, injected channel lists should be
+rebuilt from the current workspace view when channel lifecycle changes occur.
+
+Human-friendly transport shorthands should fail closed when the platform cannot
+resolve them uniquely. For Slack, outbound `@Name` expansion should only happen
+for unique active display names; otherwise agents should resolve the person
+deliberately and use the explicit `<@UID>` mention.
+
+Ambient system-event surfaces should also stay explicit and narrow. In Slack,
+reaction events are the current conversational system-event surface; user/cache
+maintenance events such as joins, renames, and channel lifecycle changes update
+transport state but are not treated as ambient conversation context.
+
 ## High-Level System Model
 
 ### Directory layout
