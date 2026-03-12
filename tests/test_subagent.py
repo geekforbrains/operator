@@ -10,7 +10,10 @@ from pathlib import Path
 import pytest
 
 from operator_ai.config import Config
+from operator_ai.memory import MemoryStore
 from operator_ai.message_timestamps import MESSAGE_CREATED_AT_KEY
+from operator_ai.tools import memory as memory_tools
+from operator_ai.tools import state as state_tools
 from operator_ai.tools import subagent
 from operator_ai.tools.context import UserContext, set_user_context
 from operator_ai.tools.subagent import (
@@ -68,6 +71,9 @@ class FakeConfig:
 
     def agent_workspace(self, name: str) -> str:
         return f"/home/.operator/agents/{name}/workspace"
+
+    def agent_prompt_path(self, name: str) -> Path:
+        return self.base_dir / "agents" / name / "AGENT.md"
 
     def skills_dir(self) -> Path:
         return self.base_dir / "skills"
@@ -150,7 +156,7 @@ def test_resolve_without_config_returns_current() -> None:
     assert result is current
 
 
-def test_spawn_agent_without_explicit_target_uses_current_agent_prompt(monkeypatch) -> None:
+def test_spawn_agent_without_explicit_target_uses_current_agent_prompt(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
     async def fake_run_agent(**kwargs):
@@ -170,6 +176,9 @@ def test_spawn_agent_without_explicit_target_uses_current_agent_prompt(monkeypat
         lambda _skills_dir, **_kwargs: "",
     )
     monkeypatch.setattr("operator_ai.agent.run_agent", fake_run_agent)
+    set_user_context(UserContext(username="gavin", roles=["admin"]))
+
+    memory_store = MemoryStore(base_dir=tmp_path)
 
     subagent.configure(
         {
@@ -178,10 +187,15 @@ def test_spawn_agent_without_explicit_target_uses_current_agent_prompt(monkeypat
             "workspace": "/ws",
             "agent_name": "operator",
             "skill_filter": None,
+            "memory_store": memory_store,
+            "username": "gavin",
+            "allow_user_scope": True,
+            "allowed_agents": {"operator"},
+            "base_dir": tmp_path,
             "config": Config(
                 defaults={"models": ["openai/gpt-4.1"]},
                 agents={"operator": {}},
-            ),
+            ).set_base_dir(tmp_path),
         }
     )
 
@@ -194,6 +208,8 @@ def test_spawn_agent_without_explicit_target_uses_current_agent_prompt(monkeypat
         "You are a focused sub-agent running in an ephemeral child run."
         in captured["system_prompt"]
     )
+    assert "# Context" in captured["system_prompt"]
+    assert "- Username: gavin" in captured["system_prompt"]
     assert set(captured["kwargs"]) == {
         "messages",
         "models",
@@ -207,12 +223,78 @@ def test_spawn_agent_without_explicit_target_uses_current_agent_prompt(monkeypat
         "extra_tools",
         "usage",
         "tool_filter",
+        "skill_filter",
         "shared_dir",
         "config",
+        "memory_store",
+        "username",
+        "allow_user_scope",
+        "allowed_agents",
+        "base_dir",
     }
     user_message = captured["user_message"]
     assert user_message["content"] == "Summarize the release branch."
     assert user_message[MESSAGE_CREATED_AT_KEY]
+    assert captured["kwargs"]["memory_store"] is memory_store
+    assert captured["kwargs"]["username"] == "gavin"
+    assert captured["kwargs"]["allow_user_scope"] is True
+    assert captured["kwargs"]["allowed_agents"] == {"operator"}
+    assert captured["kwargs"]["base_dir"] == tmp_path
+
+
+def test_spawn_agent_reconfigures_memory_and_state_context_for_target_agent(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    store = MemoryStore(base_dir=tmp_path)
+
+    async def fake_run_agent(**kwargs):
+        captured["kwargs"] = kwargs
+        captured["memory_ctx"] = memory_tools._get_context()
+        captured["state_ctx"] = state_tools._get_context()
+        return "done"
+
+    monkeypatch.setattr("operator_ai.agent.run_agent", fake_run_agent)
+    monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda _path=None: "# System")
+    monkeypatch.setattr(
+        "operator_ai.prompts.load_agent_prompt",
+        lambda _config, agent_name: f"# Agent\n\n{agent_name}",
+    )
+    monkeypatch.setattr(
+        "operator_ai.prompts.load_skills_prompt",
+        lambda _skills_dir, **_kwargs: "",
+    )
+
+    config = Config(
+        defaults={"models": ["openai/gpt-4.1"]},
+        agents={"operator": {}, "researcher": {}},
+        roles={"dev": {"agents": ["operator", "researcher"]}},
+    ).set_base_dir(tmp_path)
+
+    subagent.configure(
+        {
+            "models": ["openai/gpt-4.1"],
+            "max_iterations": 5,
+            "workspace": str(tmp_path / "agents" / "operator" / "workspace"),
+            "agent_name": "operator",
+            "skill_filter": None,
+            "memory_store": store,
+            "username": "alice",
+            "allow_user_scope": True,
+            "allowed_agents": {"operator", "researcher"},
+            "base_dir": tmp_path,
+            "config": config,
+        }
+    )
+    set_user_context(UserContext(username="alice", roles=["dev"]))
+
+    result = asyncio.run(spawn_agent("do research", agent="researcher"))
+
+    assert result == "done"
+    memory_ctx = captured["memory_ctx"]
+    assert memory_ctx[0] is store
+    assert memory_ctx[1] == "researcher"
+    assert memory_ctx[2] == "alice"
+    assert memory_ctx[3] is True
+    assert captured["state_ctx"] == ("researcher", tmp_path)
 
 
 # --- Access control tests ---

@@ -123,8 +123,10 @@ Individual sections below explain each part in detail.
 ### Agent definitions
 
 Agents are defined in markdown with YAML frontmatter at
-`~/.operator/agents/<name>/AGENT.md`. The frontmatter includes a `name` and
-`description`. The body is the stable, human-authored definition of the agent's
+`~/.operator/agents/<name>/AGENT.md`. The configured agent key in
+`operator.yaml` is the runtime identity and source of truth. `AGENT.md`
+frontmatter supplies the human-facing `description` used in delegation
+awareness. The body is the stable, human-authored definition of the agent's
 role, mission, capabilities, and hard constraints.
 
 All configured agents are injected into the system prompt with their name and

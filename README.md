@@ -112,11 +112,10 @@ That's it. Message your agent in Slack. 🐒
 
 ### Agents
 
-Markdown files at `~/.operator/agents/<name>/AGENT.md`. Each agent gets its own system prompt, workspace, model config, and permissions. Add YAML frontmatter with a `description` and agents automatically discover each other for delegation.
+Markdown files at `~/.operator/agents/<name>/AGENT.md`. Each agent gets its own system prompt, workspace, model config, and permissions. The configured agent key in `operator.yaml` is the runnable identity; `AGENT.md` frontmatter supplies the human-facing `description` used when other agents consider delegation.
 
 ```yaml
 ---
-name: researcher
 description: Deep research agent with web access.
 ---
 

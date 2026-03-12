@@ -22,7 +22,7 @@ from rich.table import Table
 from rich.text import Text
 
 import operator_ai.tools  # noqa: F401
-from operator_ai.agents import scan_agents
+from operator_ai.agents import load_configured_agents
 from operator_ai.config import LOGS_DIR, OPERATOR_DIR, ConfigError, load_config
 from operator_ai.frontmatter import rewrite_frontmatter
 from operator_ai.job_specs import find_job_spec, scan_job_specs
@@ -909,7 +909,7 @@ def show_agents() -> None:
         console.print("No agents configured.")
         raise typer.Exit()
 
-    agent_infos = {a.name: a for a in scan_agents()}
+    agent_infos = {a.name: a for a in load_configured_agents(config)}
 
     table = Table(show_header=True, show_edge=False, pad_edge=False)
     table.add_column("Agent", style="bold")

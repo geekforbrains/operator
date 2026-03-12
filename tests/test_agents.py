@@ -1,66 +1,95 @@
-"""Tests for agent frontmatter parsing and prompt injection."""
+"""Tests for configured-agent metadata and prompt injection."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from operator_ai.agents import AgentInfo, build_agents_prompt, load_agent_body, scan_agents
+from operator_ai.agents import (
+    AgentInfo,
+    build_agents_prompt,
+    load_agent_body,
+    load_agent_info,
+    load_configured_agents,
+)
+from operator_ai.config import Config
 
 
-def test_scan_agents_with_frontmatter(tmp_path: Path) -> None:
-    agent_dir = tmp_path / "researcher"
-    agent_dir.mkdir()
-    (agent_dir / "AGENT.md").write_text(
-        "---\nname: researcher\ndescription: Research assistant\n---\n\nYou are a researcher."
+def _config(tmp_path: Path, agents: dict[str, dict] | None = None) -> Config:
+    config = Config(
+        defaults={"models": ["test/model"]},
+        agents=agents or {"operator": {}, "researcher": {}},
     )
-    agents = scan_agents(tmp_path)
-    assert len(agents) == 1
-    assert agents[0].name == "researcher"
-    assert agents[0].description == "Research assistant"
+    config.set_base_dir(tmp_path)
+    return config
 
 
-def test_scan_agents_skips_no_description(tmp_path: Path) -> None:
-    agent_dir = tmp_path / "empty"
-    agent_dir.mkdir()
-    (agent_dir / "AGENT.md").write_text("---\nname: empty\n---\n\nNo description.")
-    agents = scan_agents(tmp_path)
-    assert len(agents) == 0
+def test_load_agent_info_uses_configured_name(tmp_path: Path) -> None:
+    agent_md = tmp_path / "AGENT.md"
+    agent_md.write_text(
+        "---\nname: mismatched\ndescription: Research assistant\n---\n\nYou are a researcher."
+    )
+
+    info = load_agent_info(agent_md, agent_name="researcher")
+
+    assert info == AgentInfo(name="researcher", description="Research assistant")
 
 
-def test_scan_agents_skips_no_frontmatter(tmp_path: Path) -> None:
-    agent_dir = tmp_path / "plain"
-    agent_dir.mkdir()
-    (agent_dir / "AGENT.md").write_text("Just a plain agent prompt.")
-    agents = scan_agents(tmp_path)
-    assert len(agents) == 0
+def test_load_agent_info_missing_description_uses_placeholder(tmp_path: Path) -> None:
+    agent_md = tmp_path / "AGENT.md"
+    agent_md.write_text("---\nname: researcher\n---\n\nNo description.")
+
+    info = load_agent_info(agent_md, agent_name="researcher")
+
+    assert info == AgentInfo(name="researcher", description="No description provided.")
 
 
-def test_scan_agents_uses_dir_name_as_fallback(tmp_path: Path) -> None:
-    agent_dir = tmp_path / "coder"
-    agent_dir.mkdir()
-    (agent_dir / "AGENT.md").write_text("---\ndescription: Writes code\n---\n\nYou write code.")
-    agents = scan_agents(tmp_path)
-    assert len(agents) == 1
-    assert agents[0].name == "coder"
+def test_load_agent_info_missing_file_uses_placeholder(tmp_path: Path) -> None:
+    info = load_agent_info(tmp_path / "missing.md", agent_name="researcher")
+
+    assert info == AgentInfo(name="researcher", description="No description provided.")
 
 
-def test_scan_agents_nonexistent_dir(tmp_path: Path) -> None:
-    agents = scan_agents(tmp_path / "does_not_exist")
-    assert agents == []
+def test_load_agent_info_malformed_yaml_uses_placeholder(tmp_path: Path) -> None:
+    agent_md = tmp_path / "AGENT.md"
+    agent_md.write_text("---\n: [invalid yaml\n---\n\nBody.")
+
+    info = load_agent_info(agent_md, agent_name="researcher")
+
+    assert info == AgentInfo(name="researcher", description="No description provided.")
 
 
-def test_scan_agents_skips_files(tmp_path: Path) -> None:
-    (tmp_path / "not-a-dir.md").write_text("file, not directory")
-    agents = scan_agents(tmp_path)
-    assert agents == []
+def test_load_configured_agents_uses_config_order(tmp_path: Path) -> None:
+    config = _config(tmp_path, {"operator": {}, "reviewer": {}, "researcher": {}})
+    for name, description in {
+        "operator": "Default agent",
+        "reviewer": "Reviews changes",
+        "researcher": "Does research",
+    }.items():
+        agent_dir = tmp_path / "agents" / name
+        agent_dir.mkdir(parents=True)
+        (agent_dir / "AGENT.md").write_text(f"---\ndescription: {description}\n---\n\n{name}")
+
+    infos = load_configured_agents(config)
+
+    assert infos == [
+        AgentInfo(name="operator", description="Default agent"),
+        AgentInfo(name="reviewer", description="Reviews changes"),
+        AgentInfo(name="researcher", description="Does research"),
+    ]
 
 
-def test_scan_agents_skips_malformed_yaml(tmp_path: Path) -> None:
-    agent_dir = tmp_path / "broken"
-    agent_dir.mkdir()
-    (agent_dir / "AGENT.md").write_text("---\n: [invalid yaml\n---\n\nBody.")
-    agents = scan_agents(tmp_path)
-    assert agents == []
+def test_load_configured_agents_keeps_configured_agent_without_metadata(tmp_path: Path) -> None:
+    config = _config(tmp_path, {"operator": {}, "ghost": {}})
+    operator_dir = tmp_path / "agents" / "operator"
+    operator_dir.mkdir(parents=True)
+    (operator_dir / "AGENT.md").write_text("---\ndescription: Default agent\n---\n\noperator")
+
+    infos = load_configured_agents(config)
+
+    assert infos == [
+        AgentInfo(name="operator", description="Default agent"),
+        AgentInfo(name="ghost", description="No description provided."),
+    ]
 
 
 def test_load_agent_body_strips_frontmatter(tmp_path: Path) -> None:
@@ -169,8 +198,6 @@ def test_build_agents_prompt_empty_allowed_marks_all_inaccessible() -> None:
     ]
     prompt = build_agents_prompt(agents, "alpha", allowed_agents=set())
     assert "*(inaccessible to current user)*" in prompt
-    # Both beta and gamma should be inaccessible
-    lines = prompt.strip().split("\n")
-    agent_lines = [line for line in lines if line.startswith("- **")]
+    agent_lines = [line for line in prompt.strip().split("\n") if line.startswith("- **")]
     assert len(agent_lines) == 2
     assert all("inaccessible" in line for line in agent_lines)

@@ -12,11 +12,13 @@ from zoneinfo import ZoneInfo
 
 import litellm
 
+from operator_ai.agent_runtime import resolve_base_dir
 from operator_ai.config import Config, ThinkingLevel, ensure_shared_symlink
 from operator_ai.context import prepare_context
+from operator_ai.memory import MemoryStore
 from operator_ai.tools import registry as tool_registry
 from operator_ai.tools import subagent
-from operator_ai.tools.context import get_skill_filter, get_user_context
+from operator_ai.tools.context import get_user_context
 from operator_ai.tools.registry import ToolDef
 from operator_ai.tools.workspace import set_workspace
 from operator_ai.utils import truncate
@@ -146,43 +148,6 @@ def _apply_reasoning_effort(
         )
 
 
-async def acompletion_with_fallback(
-    models: list[str],
-    *,
-    label: str,
-    **kwargs: Any,
-) -> Any | None:
-    """Call litellm.acompletion with model fallback chain.
-
-    Tries each model in order. Returns None if all models fail.
-    """
-    if not models:
-        logger.error("[%s] no models configured", label)
-        return None
-
-    last_error: Exception | None = None
-    for model in models:
-        try:
-            resp = await litellm.acompletion(model=model, **kwargs)
-            if last_error is not None:
-                logger.info("[%s] recovered using fallback model %s", label, model)
-            return resp
-        except Exception as e:
-            last_error = e
-            logger.debug("[%s] model %s failure traceback", label, model, exc_info=e)
-            if model != models[-1]:
-                logger.warning(
-                    "[%s] model %s failed (%s: %s), trying next",
-                    label,
-                    model,
-                    type(e).__name__,
-                    e,
-                )
-
-    logger.error("[%s] all models failed (%s: %s)", label, type(last_error).__name__, last_error)
-    return None
-
-
 async def run_agent(
     messages: list[dict[str, Any]],
     models: list[str],
@@ -199,8 +164,14 @@ async def run_agent(
     extra_tools: list[ToolDef] | None = None,
     usage: dict[str, int] | None = None,
     tool_filter: Callable[[str], bool] | None = None,
+    skill_filter: Callable[[str], bool] | None = None,
     shared_dir: Path | None = None,
     config: Config | None = None,
+    memory_store: MemoryStore | None = None,
+    username: str = "",
+    allow_user_scope: bool = False,
+    allowed_agents: set[str] | None = None,
+    base_dir: Path | None = None,
     tool_results_keep: int = 5,
     tool_results_soft_trim: int = 10,
 ) -> str:
@@ -231,9 +202,14 @@ async def run_agent(
             "extra_tools": extra_tools,
             "usage": usage,
             "tool_filter": tool_filter,
-            "skill_filter": get_skill_filter(),
+            "skill_filter": skill_filter,
             "shared_dir": shared_dir,
             "config": config,
+            "memory_store": memory_store,
+            "username": username,
+            "allow_user_scope": allow_user_scope,
+            "allowed_agents": allowed_agents,
+            "base_dir": resolve_base_dir(config=config, base_dir=base_dir),
         }
     )
 
@@ -281,6 +257,7 @@ async def run_agent(
                 model,
                 context_ratio=context_ratio,
                 tz=user_tz,
+                tools=tool_defs,
                 tool_results_keep=tool_results_keep,
                 tool_results_soft_trim=tool_results_soft_trim,
             )

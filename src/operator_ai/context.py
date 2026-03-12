@@ -1,9 +1,4 @@
-"""Single-pass context preparation for model input.
-
-Replaces the previous 4-function chain (render_message_timestamps,
-_sanitize_reasoning_history, prepare_messages_for_model, _apply_cache_control)
-with one ``prepare_context()`` call.
-"""
+"""Single-pass context preparation for model input."""
 
 from __future__ import annotations
 
@@ -40,6 +35,7 @@ def prepare_context(
     *,
     context_ratio: float = 0.0,
     tz: ZoneInfo | None = None,
+    tools: list[dict[str, Any]] | None = None,
     tool_results_keep: int = 5,
     tool_results_soft_trim: int = 10,
 ) -> list[dict[str, Any]]:
@@ -61,7 +57,7 @@ def prepare_context(
 
     # Step 3: Budget enforcement
     if context_ratio > 0:
-        result = _enforce_budget(result, model=model, context_ratio=context_ratio)
+        result = _enforce_budget(result, model=model, context_ratio=context_ratio, tools=tools)
 
     # Step 4: Anthropic cache breakpoints
     if model.startswith("anthropic/"):
@@ -239,11 +235,12 @@ def _enforce_budget(
     *,
     model: str,
     context_ratio: float,
+    tools: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Drop oldest exchange groups if over the context budget.
 
-    Fast path: estimate tokens as total_chars / 4. If under budget, skip.
-    Slow path: precise token count, then binary search for minimal drops.
+    Uses the full request shape (messages + tools) so the budget reflects the
+    actual model call, not just the text portion of conversation history.
     """
     max_input_tokens = _get_max_input_tokens(model)
     if not max_input_tokens:
@@ -251,14 +248,7 @@ def _enforce_budget(
 
     budget_tokens = max(1, int(max_input_tokens * context_ratio))
 
-    # Fast path: char-based estimate
-    total_chars = sum(_message_chars(m) for m in messages)
-    estimated_tokens = total_chars // 4
-    if estimated_tokens <= budget_tokens:
-        return messages
-
-    # Slow path: precise count
-    current_tokens = _token_count(model, messages)
+    current_tokens = _token_count(model, messages, tools=tools)
     if current_tokens is None or current_tokens <= budget_tokens:
         return messages
 
@@ -279,7 +269,7 @@ def _enforce_budget(
     while lo <= hi:
         mid = (lo + hi) // 2
         candidate = _messages_without_groups(messages, groups, system_len, drop_count=mid)
-        count = _token_count(model, candidate)
+        count = _token_count(model, candidate, tools=tools)
         if count is None:
             # Can't measure — fall back to dropping all removable
             break
@@ -290,7 +280,7 @@ def _enforce_budget(
             lo = mid + 1
 
     result = _messages_without_groups(messages, groups, system_len, drop_count=best_drop)
-    final_tokens = _token_count(model, result)
+    final_tokens = _token_count(model, result, tools=tools)
     logger.info(
         "Budget enforcement model=%s ratio=%.2f tokens=%d->%s msgs=%d->%d (dropped %d exchange groups)",
         model,
@@ -302,22 +292,6 @@ def _enforce_budget(
         best_drop,
     )
     return result
-
-
-def _message_chars(message: dict[str, Any]) -> int:
-    """Estimate character count for a message."""
-    content = message.get("content")
-    if isinstance(content, str):
-        return len(content)
-    if isinstance(content, list):
-        total = 0
-        for block in content:
-            if isinstance(block, dict):
-                text = block.get("text", "")
-                if isinstance(text, str):
-                    total += len(text)
-        return total
-    return 0
 
 
 def _system_block_length(messages: list[dict[str, Any]]) -> int:
@@ -366,9 +340,14 @@ def _get_max_input_tokens(model: str) -> int | None:
         return None
 
 
-def _token_count(model: str, messages: list[dict[str, Any]]) -> int | None:
+def _token_count(
+    model: str,
+    messages: list[dict[str, Any]],
+    *,
+    tools: list[dict[str, Any]] | None = None,
+) -> int | None:
     try:
-        return int(litellm.token_counter(model=model, messages=messages))
+        return int(litellm.token_counter(model=model, messages=messages, tools=tools))
     except Exception:
         logger.warning(
             "token_counter failed for model=%s (%d messages), count unavailable",

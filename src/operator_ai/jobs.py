@@ -12,6 +12,7 @@ from typing import Any
 
 from croniter import croniter
 
+from operator_ai.agent_runtime import configure_agent_tool_context
 from operator_ai.config import OPERATOR_DIR, Config
 from operator_ai.frontmatter import extract_body, parse_frontmatter
 from operator_ai.job_specs import scan_job_specs
@@ -85,6 +86,7 @@ async def _run_hook(
     agent_name: str = "",
     stdin_data: str = "",
     timeout: int = 30,
+    operator_home: Path | None = None,
 ) -> tuple[int, str]:
     """Run a hook script, resolved relative to the job directory."""
     script_path = job.hooks.get(hook_name, "")
@@ -107,7 +109,7 @@ async def _run_hook(
         "JOB_NAME": job.name,
         "JOB_DIR": job_dir,
         "OPERATOR_AGENT": agent_name or job.agent,
-        "OPERATOR_HOME": str(OPERATOR_DIR),
+        "OPERATOR_HOME": str(operator_home or OPERATOR_DIR),
         "OPERATOR_DB": str(DB_PATH),
     }
 
@@ -166,7 +168,7 @@ async def _build_job_prompt(
         f"- Description: {job.description}\n"
         f"- Job file: `{job.path}`\n"
         f"- Workspace: `{workspace}`\n"
-        f"- Operator home: `{OPERATOR_DIR}` (also `$OPERATOR_HOME`)"
+        f"- Operator home: `{config.base_dir}` (also `$OPERATOR_HOME`)"
     )
     job_ctx = load_prompt("job.md").replace("{job_details}", job_details)
 
@@ -238,7 +240,11 @@ async def _execute_job(
         hook_timeout = config.defaults.hook_timeout
         if job.hooks.get("prerun"):
             exit_code, prerun_output = await _run_hook(
-                job, "prerun", agent_name=agent_name, timeout=hook_timeout
+                job,
+                "prerun",
+                agent_name=agent_name,
+                timeout=hook_timeout,
+                operator_home=config.base_dir,
             )
             if exit_code != 0:
                 logger.info(
@@ -257,10 +263,7 @@ async def _execute_job(
         # Lazy imports to avoid circular dependency:
         # jobs -> agent -> tools/__init__ -> tools/jobs -> jobs
         from operator_ai.agent import run_agent
-        from operator_ai.tools import memory as memory_tools
         from operator_ai.tools import messaging
-        from operator_ai.tools import state as state_tools
-        from operator_ai.tools.context import set_skill_filter
 
         transport = transports.get(agent_name)
         system_prompt = await _build_job_prompt(
@@ -279,16 +282,12 @@ async def _execute_job(
 
         # Configure tools with execution context
         messaging.configure({"transport": transport})
-        state_tools.configure({"agent_name": agent_name})
-        memory_tools.configure(
-            {
-                "memory_store": memory_store,
-                "username": "",
-                "agent_name": agent_name,
-                "allow_user_scope": False,
-            }
+        configure_agent_tool_context(
+            agent_name=agent_name,
+            base_dir=config.base_dir,
+            skill_filter=config.agent_skill_filter(agent_name),
+            memory_store=memory_store,
         )
-        set_skill_filter(config.agent_skill_filter(agent_name))
 
         models = [job.model] if job.model else config.agent_models(agent_name)
         max_iter = job.max_iterations or config.agent_max_iterations(agent_name)
@@ -305,14 +304,22 @@ async def _execute_job(
             thinking=config.agent_thinking(agent_name),
             extra_tools=extra_tools,
             tool_filter=config.agent_tool_filter(agent_name),
+            skill_filter=config.agent_skill_filter(agent_name),
             shared_dir=config.shared_dir,
             config=config,
+            memory_store=memory_store,
+            base_dir=config.base_dir,
         )
 
         # Postrun hook
         if job.hooks.get("postrun"):
             exit_code, postrun_output = await _run_hook(
-                job, "postrun", agent_name=agent_name, stdin_data=output, timeout=hook_timeout
+                job,
+                "postrun",
+                agent_name=agent_name,
+                stdin_data=output,
+                timeout=hook_timeout,
+                operator_home=config.base_dir,
             )
             if exit_code != 0:
                 details = f": {postrun_output.strip()}" if postrun_output.strip() else ""

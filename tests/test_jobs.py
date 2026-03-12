@@ -277,7 +277,7 @@ def test_build_job_prompt_includes_rules(monkeypatch, tmp_path: Path) -> None:
         "operator_ai.prompts.load_skills_prompt",
         lambda _skills_dir, **_kwargs: "",
     )
-    monkeypatch.setattr("operator_ai.prompts.scan_agents", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("operator_ai.prompts.load_configured_agents", lambda *_args, **_kwargs: [])
 
     store = MemoryStore(base_dir=tmp_path)
     store.upsert_rule("agent:operator", "status-style", "Use terse status updates.")
@@ -315,7 +315,7 @@ def test_build_job_prompt_includes_prerun_output(monkeypatch, tmp_path: Path) ->
         "operator_ai.prompts.load_skills_prompt",
         lambda _skills_dir, **_kwargs: "",
     )
-    monkeypatch.setattr("operator_ai.prompts.scan_agents", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr("operator_ai.prompts.load_configured_agents", lambda *_args, **_kwargs: [])
 
     job = Job(
         name="scripted-job",

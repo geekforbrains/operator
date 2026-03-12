@@ -16,7 +16,6 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from operator_ai.config import OPERATOR_DIR
 from operator_ai.tools.registry import tool
 
 logger = logging.getLogger("operator.tools.state")
@@ -32,21 +31,27 @@ def configure(context: dict[str, Any]) -> None:
     _context_var.set(context)
 
 
-def _get_agent_name() -> str:
+def _get_context() -> tuple[str, Path]:
     ctx = _context_var.get()
     if ctx is None:
         raise RuntimeError("state tools not configured")
-    return ctx.get("agent_name", "")
+    agent_name = ctx.get("agent_name", "")
+    if not agent_name:
+        raise RuntimeError("agent_name not set")
+    base_dir = ctx.get("base_dir")
+    if isinstance(base_dir, Path):
+        return agent_name, base_dir
+    raise RuntimeError("state base_dir not set")
 
 
-def _state_dir(agent_name: str) -> Path:
-    return OPERATOR_DIR / "agents" / agent_name / "state"
+def _state_dir(agent_name: str, base_dir: Path) -> Path:
+    return base_dir / "agents" / agent_name / "state"
 
 
-def _state_path(agent_name: str, key: str) -> Path:
+def _state_path(agent_name: str, base_dir: Path, key: str) -> Path:
     # Sanitize key to prevent path traversal
     safe_key = key.replace("/", "_").replace("\\", "_").replace("..", "_")
-    return _state_dir(agent_name) / f"{safe_key}.json"
+    return _state_dir(agent_name, base_dir) / f"{safe_key}.json"
 
 
 def _read_state(path: Path) -> Any:
@@ -73,8 +78,8 @@ async def get_state(key: str) -> str:
     Args:
         key: The state key.
     """
-    agent_name = _get_agent_name()
-    path = _state_path(agent_name, key)
+    agent_name, base_dir = _get_context()
+    path = _state_path(agent_name, base_dir, key)
 
     try:
         data = _read_state(path)
@@ -96,8 +101,8 @@ async def set_state(key: str, value: ScalarValue) -> str:
         key: The state key.
         value: The value to store (string, number, or boolean).
     """
-    agent_name = _get_agent_name()
-    path = _state_path(agent_name, key)
+    agent_name, base_dir = _get_context()
+    path = _state_path(agent_name, base_dir, key)
 
     # Guard against overwriting list state
     try:
@@ -136,8 +141,8 @@ async def append_state(key: str, value: ScalarValue, max_items: int = 0) -> str:
         value: The value to append (string, number, or boolean).
         max_items: Maximum list length. 0 means unlimited.
     """
-    agent_name = _get_agent_name()
-    path = _state_path(agent_name, key)
+    agent_name, base_dir = _get_context()
+    path = _state_path(agent_name, base_dir, key)
 
     try:
         existing = _read_state(path)
@@ -174,8 +179,8 @@ async def pop_state(key: str) -> str:
     Args:
         key: The state key.
     """
-    agent_name = _get_agent_name()
-    path = _state_path(agent_name, key)
+    agent_name, base_dir = _get_context()
+    path = _state_path(agent_name, base_dir, key)
 
     try:
         existing = _read_state(path)
@@ -208,8 +213,8 @@ async def pop_state(key: str) -> str:
 @tool(description="List all state keys for the current agent.")
 async def list_state() -> str:
     """List all state keys."""
-    agent_name = _get_agent_name()
-    state_dir = _state_dir(agent_name)
+    agent_name, base_dir = _get_context()
+    state_dir = _state_dir(agent_name, base_dir)
     if not state_dir.is_dir():
         return "No state found."
 
@@ -241,8 +246,8 @@ async def delete_state(key: str) -> str:
     Args:
         key: The state key.
     """
-    agent_name = _get_agent_name()
-    path = _state_path(agent_name, key)
+    agent_name, base_dir = _get_context()
+    path = _state_path(agent_name, base_dir, key)
     if not path.is_file():
         return f"State key not found: {key}"
 

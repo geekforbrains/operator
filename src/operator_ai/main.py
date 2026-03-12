@@ -16,6 +16,7 @@ from pathlib import Path
 # Import tools to trigger registration
 import operator_ai.tools  # noqa: F401
 from operator_ai.agent import run_agent
+from operator_ai.agent_runtime import configure_agent_tool_context
 from operator_ai.commands import CommandContext, dispatch_command
 from operator_ai.config import LOGS_DIR, OPERATOR_DIR, Config, ConfigError, RoleConfig, load_config
 from operator_ai.jobs import JobRunner
@@ -30,13 +31,10 @@ from operator_ai.prompts import assemble_system_prompt
 from operator_ai.status import StatusIndicator
 from operator_ai.store import Store, get_store
 from operator_ai.system_events import SystemEventBuffer
-from operator_ai.tools import memory as memory_tools
 from operator_ai.tools import messaging
-from operator_ai.tools import state as state_tools
 from operator_ai.tools.context import (
     UserContext,
     get_user_context,
-    set_skill_filter,
     set_user_context,
 )
 from operator_ai.tools.web import close_session
@@ -385,7 +383,14 @@ class Dispatcher:
             current = asyncio.current_task()
             if current is not None:
                 runtime.attach_task(current)
-            await self._run_conversation(msg, transport, runtime, conversation_id, agent_name)
+            await self._run_conversation(
+                msg,
+                transport,
+                runtime,
+                conversation_id,
+                agent_name,
+                allowed_agents=allowed_agents,
+            )
         finally:
             runtime.release()
 
@@ -396,6 +401,8 @@ class Dispatcher:
         runtime: ConversationRuntime,
         conversation_id: str,
         agent_name: str,
+        *,
+        allowed_agents: set[str] | None = None,
     ) -> None:
         messages = self.store.load_messages(conversation_id)
 
@@ -439,18 +446,14 @@ class Dispatcher:
             }
         )
 
-        # Configure memory and state tools with execution context
-        memory_tools.configure(
-            {
-                "memory_store": self.memory_store,
-                "username": username,
-                "agent_name": transport.agent_name,
-                "allow_user_scope": msg.is_private,
-            }
+        configure_agent_tool_context(
+            agent_name=transport.agent_name,
+            base_dir=self.config.base_dir,
+            skill_filter=self.config.agent_skill_filter(agent_name),
+            memory_store=self.memory_store,
+            username=username,
+            allow_user_scope=msg.is_private,
         )
-        state_tools.configure({"agent_name": transport.agent_name})
-
-        set_skill_filter(self.config.agent_skill_filter(agent_name))
 
         msg_count = sum(1 for m in messages if m.get("role") == "user")
         logger.info("conversation %s — message #%d", conversation_id, msg_count)
@@ -501,8 +504,14 @@ class Dispatcher:
                 extra_tools=extra_tools,
                 usage=usage,
                 tool_filter=self.config.agent_tool_filter(agent_name),
+                skill_filter=self.config.agent_skill_filter(agent_name),
                 shared_dir=self.config.shared_dir,
                 config=self.config,
+                memory_store=self.memory_store,
+                username=username,
+                allow_user_scope=msg.is_private,
+                allowed_agents=allowed_agents,
+                base_dir=self.config.base_dir,
             )
             logger.info("conversation %s — done", conversation_id)
             if usage:
@@ -616,7 +625,7 @@ class Dispatcher:
             sections.append(transport_prompt)
         context_prompt = ctx.to_prompt(
             workspace=str(self.config.agent_workspace(agent_name)),
-            operator_home=str(OPERATOR_DIR),
+            operator_home=str(self.config.base_dir),
         )
         if context_prompt:
             sections.append(context_prompt)

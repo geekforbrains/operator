@@ -254,7 +254,7 @@ class TestBudgetEnforcement:
             {"role": "assistant", "content": "second answer"},
         ]
 
-        def fake_token_count(_model: str, msgs: list) -> int:
+        def fake_token_count(_model: str, msgs: list, *, tools=None) -> int:  # noqa: ARG001
             return sum(len(str(m.get("content", ""))) for m in msgs) // 4
 
         with (
@@ -275,7 +275,7 @@ class TestBudgetEnforcement:
             {"role": "user", "content": "only question"},
         ]
 
-        def fake_token_count(_model: str, _msgs: list) -> int:
+        def fake_token_count(_model: str, _msgs: list, *, tools=None) -> int:  # noqa: ARG001
             return 99999  # always over budget
 
         with (
@@ -291,6 +291,69 @@ class TestBudgetEnforcement:
         with patch("operator_ai.context._get_max_input_tokens", return_value=None):
             result = _enforce_budget(messages, model="unknown/model", context_ratio=0.5)
         assert result is messages
+
+    def test_budget_counts_tool_schemas(self) -> None:
+        messages = [
+            {"role": "system", "content": "system"},
+            {"role": "user", "content": "hi"},
+        ]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search",
+                    "description": "Searches for something",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        ]
+        captured: list[list[dict[str, Any]] | None] = []
+
+        def fake_token_count(_model: str, _msgs: list, *, tools=None) -> int:
+            captured.append(tools)
+            return 10
+
+        with (
+            patch("operator_ai.context._get_max_input_tokens", return_value=100),
+            patch("operator_ai.context._token_count", side_effect=fake_token_count),
+        ):
+            result = _enforce_budget(messages, model="openai/gpt-4.1", context_ratio=0.5, tools=tools)
+
+        assert result is messages
+        assert captured == [tools]
+
+    def test_image_only_exchange_still_uses_precise_budget_count(self) -> None:
+        messages = [
+            {"role": "system", "content": "system"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc"}},
+                ],
+            },
+            {"role": "assistant", "content": "first reply"},
+            {"role": "user", "content": "second question"},
+            {"role": "assistant", "content": "second reply"},
+        ]
+
+        def fake_token_count(_model: str, msgs: list, *, tools=None) -> int:  # noqa: ARG001
+            if any(m.get("role") == "user" and isinstance(m.get("content"), list) for m in msgs):
+                return 999
+            return 10
+
+        with (
+            patch("operator_ai.context._get_max_input_tokens", return_value=100),
+            patch("operator_ai.context._token_count", side_effect=fake_token_count),
+        ):
+            result = _enforce_budget(messages, model="openai/gpt-4.1", context_ratio=0.5)
+
+        assert result[0]["role"] == "system"
+        assert not any(isinstance(m.get("content"), list) for m in result)
+        assert any(m.get("content") == "second question" for m in result)
 
 
 # ---------------------------------------------------------------------------

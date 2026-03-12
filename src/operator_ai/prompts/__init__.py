@@ -8,7 +8,12 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from operator_ai.agents import AgentInfo, build_agents_prompt, load_agent_body, scan_agents
+from operator_ai.agents import (
+    AgentInfo,
+    build_agents_prompt,
+    load_agent_body,
+    load_configured_agents,
+)
 from operator_ai.config import Config
 from operator_ai.memory import MemoryStore
 from operator_ai.skills import SkillInfo, build_skills_prompt, scan_skills
@@ -154,7 +159,7 @@ def assemble_system_prompt(
         stable.append(skills_prompt)
 
     if available_agents is None:
-        available_agents = scan_agents(config.base_dir / "agents")
+        available_agents = load_configured_agents(config)
     agents_prompt = build_agents_prompt(available_agents, agent_name, allowed_agents=allowed_agents)
     if agents_prompt:
         stable.append(agents_prompt)
