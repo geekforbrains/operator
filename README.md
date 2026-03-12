@@ -160,7 +160,20 @@ Hook scripts have a configurable timeout (`defaults.hook_timeout`, default 30s) 
 
 ### Skills
 
-Reusable capabilities at `~/.operator/skills/<name>/SKILL.md` — scripts, references, and assets that any agent can discover and use.
+Reusable capabilities at `~/.operator/skills/<name>/SKILL.md` — authored instructions, references, and assets that teach agents how to perform specific tasks. Skills are not tools; they are knowledge that any agent can discover and use.
+
+Agents create and manage skills using deterministic tools with explicit typed parameters — no raw YAML authoring required.
+
+```python
+create_skill(
+    name="pr-reviewer",
+    description="Reviews GitHub PRs by analyzing diffs and posting structured review comments. Use when asked to review a PR or check code quality.",
+    instructions="# PR Reviewer\n\n## Steps\n\n1. Fetch the PR diff using `gh pr diff <number>`\n2. Analyze for security issues, logic errors, style consistency\n3. Post a structured review using `gh pr review`",
+    env="GITHUB_TOKEN",
+)
+```
+
+Four tools cover the full lifecycle: `create_skill`, `update_skill`, `delete_skill`, `list_skills`. Each tool has explicit parameters for every field — the tool assembles the SKILL.md file internally.
 
 ### Memory
 

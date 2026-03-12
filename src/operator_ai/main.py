@@ -27,7 +27,6 @@ from operator_ai.memory_reindex import reindex_diff
 from operator_ai.message_timestamps import attach_message_created_at
 from operator_ai.messages import trim_incomplete_tool_turns
 from operator_ai.prompts import assemble_system_prompt
-from operator_ai.skills import install_bundled_skills
 from operator_ai.status import StatusIndicator
 from operator_ai.store import Store, get_store
 from operator_ai.system_events import SystemEventBuffer
@@ -754,8 +753,6 @@ async def async_main() -> None:
 
         # Bootstrap directory layout
         ensure_layout(config)
-
-        install_bundled_skills(config.skills_dir())
 
         if not any(a.transport for a in config.agents.values()):
             logger.error("No transports configured in %s", OPERATOR_DIR / "operator.yaml")

@@ -393,6 +393,18 @@ instructions, references, and assets that teach an agent how to perform a
 specific task. An agent's available skills are determined by its permissions
 configuration.
 
+#### Deterministic skill tools
+
+Like jobs, skill management uses dedicated tools with explicit typed
+parameters. The agent provides structured data; the tool produces the file:
+
+- `create_skill` — explicit fields: name, description, instructions, env
+- `update_skill` — full replace with the same explicit fields
+- `delete_skill` / `list_skills`
+
+This eliminates format errors and makes the tool signatures self-documenting.
+No bundled skill is needed to teach the agent how to write skill YAML.
+
 ### Permissions and roles
 
 Access in Operator is closed by default. Agents, tools, and skills are not

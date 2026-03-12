@@ -1,44 +1,172 @@
+"""Deterministic skill management tools.
+
+Each tool has explicit typed parameters so the agent never composes raw
+YAML frontmatter.  The tools assemble the skill file internally.
+"""
+
 from __future__ import annotations
 
 import shutil
 
 from operator_ai.config import SKILLS_DIR
-from operator_ai.skills import (
-    extract_body,
-    parse_frontmatter,
-    scan_skills,
-    validate_skill_frontmatter,
-)
+from operator_ai.skills import build_skill_file, scan_skills, validate_skill_name
 from operator_ai.tools.context import get_skill_filter
 from operator_ai.tools.registry import safe_name, tool
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _parse_env(env: str) -> list[str]:
+    """Parse comma-separated env var names into a list."""
+    if not env:
+        return []
+    return [v.strip() for v in env.split(",") if v.strip()]
+
+
+def _validate_fields(name: str, description: str, instructions: str) -> str | None:
+    """Validate common skill fields. Returns error string or None."""
+    try:
+        safe_name(name, "skill")
+    except ValueError as e:
+        return f"[error: {e}]"
+
+    err = validate_skill_name(name)
+    if err:
+        return f"[error: {err}]"
+    if not description:
+        return "[error: description is required]"
+    if len(description) > 1024:
+        return f"[error: description must be <= 1024 characters, got {len(description)}]"
+    if not instructions.strip():
+        return "[error: instructions must not be empty]"
+    return None
+
+
+def _body_warning(instructions: str) -> str:
+    line_count = len(instructions.strip().splitlines())
+    if line_count > 500:
+        return (
+            f"\n[warning: instructions is {line_count} lines — recommended max is 500. "
+            "Consider splitting into references/ files.]"
+        )
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Tools
+# ---------------------------------------------------------------------------
+
 
 @tool(
-    description="Manage skills. Actions: list, create, update, delete.",
+    description=(
+        "Create a new skill. The tool assembles the SKILL.md file — just provide the fields."
+    ),
 )
-async def manage_skill(action: str, name: str = "", config: str = "") -> str:
-    """Manage skills.
+async def create_skill(
+    name: str,
+    description: str,
+    instructions: str,
+    env: str = "",
+) -> str:
+    """Create a skill.
 
     Args:
-        action: One of: list, create, update, delete.
-        name: Skill directory name (required for create, update, delete).
-        config: Full SKILL.md content for create/update. YAML frontmatter (between --- delimiters) with required fields: name, description. Optional: license, compatibility, metadata (with metadata.env for required env vars). Body is the skill instructions in markdown.
+        name: Skill slug (lowercase alphanumeric + hyphens, 1-64 chars, no leading/trailing hyphens).
+        description: What the skill does and when to use it (1-1024 chars, third person).
+        instructions: Markdown body with the skill's instructions. Focus on unique knowledge the agent needs.
+        env: Comma-separated environment variable names the skill requires (e.g. "GITHUB_TOKEN,SLACK_WEBHOOK_URL").
     """
-    action = action.lower().strip()
+    err = _validate_fields(name, description, instructions)
+    if err:
+        return err
 
-    if action == "list":
-        return _list_skills()
-    elif action == "create":
-        return _create_skill(name, config)
-    elif action == "update":
-        return _update_skill(name, config)
-    elif action == "delete":
-        return _delete_skill(name)
-    else:
-        return f"[error: unknown action '{action}'. Use: list, create, update, delete]"
+    skill_dir = SKILLS_DIR / name
+    if skill_dir.exists():
+        return f"[error: skill '{name}' already exists. Use update_skill to modify.]"
+
+    env_list = _parse_env(env)
+    content = build_skill_file(
+        name=name,
+        description=description,
+        instructions=instructions.strip(),
+        env=env_list or None,
+    )
+
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(content)
+
+    return f"Created skill '{name}' at {skill_dir}{_body_warning(instructions)}"
 
 
-def _list_skills() -> str:
+@tool(
+    description=(
+        "Update an existing skill. Replaces the SKILL.md with new values. "
+        "All fields are re-specified to keep the file consistent."
+    ),
+)
+async def update_skill(
+    name: str,
+    description: str,
+    instructions: str,
+    env: str = "",
+) -> str:
+    """Update a skill (full replace).
+
+    Args:
+        name: Skill slug to update.
+        description: What the skill does and when to use it (1-1024 chars, third person).
+        instructions: Markdown body with the skill's instructions.
+        env: Comma-separated environment variable names the skill requires.
+    """
+    err = _validate_fields(name, description, instructions)
+    if err:
+        return err
+
+    skill_dir = SKILLS_DIR / name
+    if not skill_dir.exists():
+        return f"[error: skill '{name}' not found]"
+
+    env_list = _parse_env(env)
+    content = build_skill_file(
+        name=name,
+        description=description,
+        instructions=instructions.strip(),
+        env=env_list or None,
+    )
+
+    (skill_dir / "SKILL.md").write_text(content)
+
+    return f"Updated skill '{name}'{_body_warning(instructions)}"
+
+
+@tool(description="Delete a skill and its entire directory.")
+async def delete_skill(name: str) -> str:
+    """Delete a skill.
+
+    Args:
+        name: Skill slug to delete.
+    """
+    if not name:
+        return "[error: name is required]"
+
+    try:
+        safe_name(name, "skill")
+    except ValueError as e:
+        return f"[error: {e}]"
+
+    skill_dir = SKILLS_DIR / name
+    if not skill_dir.exists():
+        return f"[error: skill '{name}' not found]"
+
+    shutil.rmtree(skill_dir)
+    return f"Deleted skill '{name}'"
+
+
+@tool(description="List all available skills with their descriptions and status.")
+async def list_skills() -> str:
+    """List skills."""
     skills = scan_skills(SKILLS_DIR)
     skill_filter = get_skill_filter()
     if skill_filter is not None:
@@ -53,85 +181,5 @@ def _list_skills() -> str:
             env_note = f" (missing env: {', '.join(s.env_missing)})"
         elif s.env:
             env_note = " (env: ok)"
-        lines.append(f"- **{s.name}**: {s.description}{env_note}\n  Location: `{s.location}`")
+        lines.append(f"- **{s.name}**: {s.description}{env_note}")
     return "\n".join(lines)
-
-
-def _validate_and_parse(name: str, config: str) -> str | None:
-    """Parse and validate config.
-
-    Returns an optional warning string on success, or raises ``ValueError``
-    if validation fails.
-    """
-    if not name:
-        raise ValueError("'name' is required")
-    if not config:
-        raise ValueError("'config' (SKILL.md content) is required")
-
-    fm = parse_frontmatter(config)
-    if not fm:
-        raise ValueError("config must have YAML frontmatter between --- delimiters")
-
-    err = validate_skill_frontmatter(fm, safe_name(name, "skill"))
-    if err:
-        raise ValueError(err)
-
-    body = extract_body(config)
-    if not body.strip():
-        raise ValueError(
-            "skill body must not be empty — include instructions after the frontmatter"
-        )
-
-    line_count = len(body.strip().splitlines())
-    if line_count > 500:
-        return (
-            f"\n[warning: body is {line_count} lines — recommended max is 500. "
-            "Consider splitting into references/ files.]"
-        )
-    return None
-
-
-def _create_skill(name: str, config: str) -> str:
-    try:
-        warning = _validate_and_parse(name, config)
-    except ValueError as e:
-        return f"[error: {e}]"
-
-    skill_dir = SKILLS_DIR / name
-    if skill_dir.exists():
-        return f"[error: skill '{name}' already exists. Use 'update' to modify.]"
-
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    (skill_dir / "SKILL.md").write_text(config)
-    return f"Created skill '{name}' at {skill_dir}{warning or ''}"
-
-
-def _update_skill(name: str, config: str) -> str:
-    try:
-        warning = _validate_and_parse(name, config)
-    except ValueError as e:
-        return f"[error: {e}]"
-
-    skill_dir = SKILLS_DIR / name
-    if not skill_dir.exists():
-        return f"[error: skill '{name}' not found]"
-
-    (skill_dir / "SKILL.md").write_text(config)
-    return f"Updated skill '{name}'{warning or ''}"
-
-
-def _delete_skill(name: str) -> str:
-    if not name:
-        return "[error: 'name' is required for delete]"
-
-    try:
-        slug = safe_name(name, "skill")
-    except ValueError as e:
-        return f"[error: {e}]"
-
-    skill_dir = SKILLS_DIR / slug
-    if not skill_dir.exists():
-        return f"[error: skill '{name}' not found]"
-
-    shutil.rmtree(skill_dir)
-    return f"Deleted skill '{name}'"

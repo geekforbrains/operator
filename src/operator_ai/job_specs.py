@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from operator_ai.config import OPERATOR_DIR
-from operator_ai.skills import parse_frontmatter
+from operator_ai.frontmatter import parse_frontmatter
 
 logger = logging.getLogger("operator.job_specs")
 

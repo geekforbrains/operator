@@ -14,12 +14,12 @@ from typing import Any
 from croniter import croniter
 
 from operator_ai.config import OPERATOR_DIR, Config
+from operator_ai.frontmatter import extract_body, parse_frontmatter
 from operator_ai.job_specs import scan_job_specs
 from operator_ai.log_context import new_run_id, set_run_context
 from operator_ai.memory import MemoryStore
 from operator_ai.message_timestamps import attach_message_created_at
 from operator_ai.prompts import assemble_system_prompt, load_prompt
-from operator_ai.skills import extract_body, parse_frontmatter
 from operator_ai.store import DB_PATH, Store
 from operator_ai.transport.base import Transport
 

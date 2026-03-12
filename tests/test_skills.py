@@ -1,17 +1,16 @@
-"""Tests for skill discovery, frontmatter validation, and prompt assembly."""
+"""Tests for skill discovery, frontmatter parsing, and prompt assembly."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
+from operator_ai.frontmatter import extract_body, parse_frontmatter
 from operator_ai.skills import (
     SkillInfo,
+    build_skill_file,
     build_skills_prompt,
-    extract_body,
-    install_bundled_skills,
-    parse_frontmatter,
     scan_skills,
-    validate_skill_frontmatter,
+    validate_skill_name,
 )
 
 
@@ -101,109 +100,65 @@ def test_scan_skills_location_is_skill_md_path(tmp_path: Path) -> None:
     assert skills[0].location == str(tmp_path / "my-skill" / "SKILL.md")
 
 
-# ── validate_skill_frontmatter ──────────────────────────────────
+# ── validate_skill_name ──────────────────────────────────────────
 
 
-def test_valid_frontmatter() -> None:
-    """Valid frontmatter passes validation."""
-    fm = {"name": "my-skill", "description": "A useful skill"}
-    assert validate_skill_frontmatter(fm, "my-skill") is None
+def test_valid_name() -> None:
+    assert validate_skill_name("my-skill") is None
 
 
-def test_missing_name() -> None:
-    """Missing name field is an error."""
-    fm = {"description": "No name"}
-    err = validate_skill_frontmatter(fm, "my-skill")
-    assert err is not None
-    assert "name" in err
-
-
-def test_missing_description() -> None:
-    """Missing description field is an error."""
-    fm = {"name": "my-skill"}
-    err = validate_skill_frontmatter(fm, "my-skill")
-    assert err is not None
-    assert "description" in err
-
-
-def test_name_mismatch() -> None:
-    """Name not matching directory is an error."""
-    fm = {"name": "wrong-name", "description": "A skill"}
-    err = validate_skill_frontmatter(fm, "my-skill")
-    assert err is not None
-    assert "must match" in err
+def test_empty_name() -> None:
+    assert validate_skill_name("") is not None
 
 
 def test_name_too_long() -> None:
-    """Name > 64 chars is an error."""
-    long_name = "a" * 65
-    fm = {"name": long_name, "description": "A skill"}
-    err = validate_skill_frontmatter(fm, long_name)
+    err = validate_skill_name("a" * 65)
     assert err is not None
     assert "64" in err
 
 
 def test_name_consecutive_hyphens() -> None:
-    """Consecutive hyphens in name is an error."""
-    fm = {"name": "my--skill", "description": "A skill"}
-    err = validate_skill_frontmatter(fm, "my--skill")
+    err = validate_skill_name("my--skill")
     assert err is not None
     assert "consecutive" in err
 
 
 def test_name_leading_hyphen() -> None:
-    """Leading hyphen in name is an error."""
-    fm = {"name": "-skill", "description": "A skill"}
-    err = validate_skill_frontmatter(fm, "-skill")
-    assert err is not None
+    assert validate_skill_name("-skill") is not None
 
 
 def test_name_uppercase() -> None:
-    """Uppercase in name is an error."""
-    fm = {"name": "MySkill", "description": "A skill"}
-    err = validate_skill_frontmatter(fm, "MySkill")
+    err = validate_skill_name("MySkill")
     assert err is not None
     assert "lowercase" in err
 
 
-def test_description_too_long() -> None:
-    """Description > 1024 chars is an error."""
-    fm = {"name": "my-skill", "description": "x" * 1025}
-    err = validate_skill_frontmatter(fm, "my-skill")
-    assert err is not None
-    assert "1024" in err
+# ── build_skill_file ─────────────────────────────────────────────
 
 
-def test_metadata_env_as_string() -> None:
-    """metadata.env as a single string is accepted."""
-    fm = {
-        "name": "my-skill",
-        "description": "A skill",
-        "metadata": {"env": "MY_VAR"},
-    }
-    assert validate_skill_frontmatter(fm, "my-skill") is None
+def test_build_skill_file_minimal() -> None:
+    content = build_skill_file(
+        name="my-skill",
+        description="A useful skill",
+        instructions="# My Skill\n\nDo the thing.",
+    )
+    assert "---" in content
+    assert "name: my-skill" in content
+    assert "description: A useful skill" in content
+    assert "# My Skill" in content
+    assert "metadata" not in content
 
 
-def test_metadata_env_as_list() -> None:
-    """metadata.env as a list of strings is accepted."""
-    fm = {
-        "name": "my-skill",
-        "description": "A skill",
-        "metadata": {"env": ["VAR1", "VAR2"]},
-    }
-    assert validate_skill_frontmatter(fm, "my-skill") is None
-
-
-def test_metadata_env_invalid_type() -> None:
-    """metadata.env as non-string non-list is an error."""
-    fm = {
-        "name": "my-skill",
-        "description": "A skill",
-        "metadata": {"env": 42},
-    }
-    err = validate_skill_frontmatter(fm, "my-skill")
-    assert err is not None
-    assert "env" in err
+def test_build_skill_file_with_env() -> None:
+    content = build_skill_file(
+        name="api-skill",
+        description="Calls APIs",
+        instructions="# API Skill\n\nUse the API.",
+        env=["API_KEY", "API_SECRET"],
+    )
+    assert "metadata" in content
+    assert "API_KEY" in content
+    assert "API_SECRET" in content
 
 
 # ── build_skills_prompt ──────────────────────────────────────────
@@ -259,60 +214,6 @@ def test_skill_filter_in_prompt_loading(tmp_path: Path) -> None:
     prompt = build_skills_prompt(filtered)
     assert "allowed" in prompt
     assert "blocked" not in prompt
-
-
-# ── install_bundled_skills ───────────────────────────────────────
-
-
-def test_install_bundled_skills_copies(tmp_path: Path) -> None:
-    """Bundled skills are copied to the target directory."""
-    # Create a fake bundled skill source
-    source = tmp_path / "bundled"
-    source.mkdir()
-    skill_src = source / "demo-skill"
-    skill_src.mkdir()
-    (skill_src / "SKILL.md").write_text("---\nname: demo-skill\ndescription: Demo\n---\n\n# Demo\n")
-
-    target = tmp_path / "skills"
-
-    # Patch BUNDLED_SKILLS_DIR for this test
-    import operator_ai.skills as skills_mod
-
-    orig = skills_mod.BUNDLED_SKILLS_DIR
-    try:
-        skills_mod.BUNDLED_SKILLS_DIR = source
-        installed = install_bundled_skills(target)
-    finally:
-        skills_mod.BUNDLED_SKILLS_DIR = orig
-
-    assert "demo-skill" in installed
-    assert (target / "demo-skill" / "SKILL.md").exists()
-
-
-def test_install_bundled_skills_skips_existing(tmp_path: Path) -> None:
-    """Bundled skills are not overwritten if already present."""
-    source = tmp_path / "bundled"
-    source.mkdir()
-    skill_src = source / "demo-skill"
-    skill_src.mkdir()
-    (skill_src / "SKILL.md").write_text("---\nname: demo-skill\ndescription: Demo\n---\n\n# Demo\n")
-
-    target = tmp_path / "skills"
-    (target / "demo-skill").mkdir(parents=True)
-    (target / "demo-skill" / "SKILL.md").write_text("custom content")
-
-    import operator_ai.skills as skills_mod
-
-    orig = skills_mod.BUNDLED_SKILLS_DIR
-    try:
-        skills_mod.BUNDLED_SKILLS_DIR = source
-        installed = install_bundled_skills(target)
-    finally:
-        skills_mod.BUNDLED_SKILLS_DIR = orig
-
-    assert installed == []
-    # Content should not be overwritten
-    assert (target / "demo-skill" / "SKILL.md").read_text() == "custom content"
 
 
 # ── parse_frontmatter / extract_body ─────────────────────────────

@@ -27,6 +27,7 @@ from rich.text import Text
 import operator_ai.tools  # noqa: F401
 from operator_ai.agents import scan_agents
 from operator_ai.config import LOGS_DIR, OPERATOR_DIR, ConfigError, load_config, parse_env_file
+from operator_ai.frontmatter import rewrite_frontmatter
 from operator_ai.job_specs import find_job_spec, scan_job_specs
 from operator_ai.jobs import run_job_now
 from operator_ai.log_context import setup_logging
@@ -36,13 +37,7 @@ from operator_ai.memory_index import MemoryIndex
 from operator_ai.memory_reindex import reindex_diff, reindex_full
 from operator_ai.message_timestamps import format_ts
 from operator_ai.prompts import load_prompt
-from operator_ai.skills import (
-    install_bundled_skills,
-    list_bundled_skill_names,
-    reset_bundled_skill,
-    rewrite_frontmatter,
-    scan_skills,
-)
+from operator_ai.skills import scan_skills
 from operator_ai.store import USERNAME_RE, get_store
 from operator_ai.tools.registry import get_tools
 from operator_ai.transport.cli import CliTransport
@@ -243,6 +238,7 @@ def _build_starter_config(
         "    - search_notes",
         "    - list_rules",
         "    - list_notes",
+        "    - read_note",
         "    - forget_rule",
         "    - forget_note",
         "  files:",
@@ -252,6 +248,13 @@ def _build_starter_config(
         "  messaging:",
         "    - send_message",
         "    - send_file",
+        "  skills:",
+        "    - create_skill",
+        "    - update_skill",
+        "    - delete_skill",
+        "    - list_skills",
+        "    - read_skill",
+        "    - run_skill",
         "  jobs:",
         "    - create_job",
         "    - update_job",
@@ -259,6 +262,22 @@ def _build_starter_config(
         "    - enable_job",
         "    - disable_job",
         "    - list_jobs",
+        "  state:",
+        "    - get_state",
+        "    - set_state",
+        "    - append_state",
+        "    - pop_state",
+        "    - delete_state",
+        "    - list_state",
+        "  shell:",
+        "    - run_shell",
+        "  web:",
+        "    - web_fetch",
+        "  users:",
+        "    - manage_users",
+        "    - set_timezone",
+        "  agents:",
+        "    - spawn_agent",
         "",
         "agents:",
         f"  {_DEFAULT_AGENT_NAME}:",
@@ -348,11 +367,6 @@ def _scaffold_operator_home(
                 wrote_config = True
             if emit_output:
                 console.print(f"  [green]wrote[/green]  {path}")
-
-    installed = install_bundled_skills(home / "skills")
-    if emit_output:
-        for skill_name in installed:
-            console.print(f"  [green]skill[/green]  {skill_name}")
 
     return ScaffoldResult(
         home=home,
@@ -1399,37 +1413,6 @@ def _show_skills() -> None:
             env_status = Text("ok", style="green")
         table.add_row(s.name, desc, env_status)
     console.print(table)
-
-
-@skill_app.command("reset")
-def skills_reset(
-    name: str = typer.Argument(None, help="Bundled skill name to reset."),
-    all_skills: bool = typer.Option(False, "--all", help="Reset all bundled skills."),
-) -> None:
-    """Reset bundled skill(s) to their original version."""
-    skills_dir = OPERATOR_DIR / "skills"
-    bundled = list_bundled_skill_names()
-
-    if not bundled:
-        console.print("No bundled skills available.")
-        raise typer.Exit()
-
-    if name is None and not all_skills:
-        console.print("Available bundled skills:\n")
-        for n in bundled:
-            console.print(f"  {n}")
-        console.print("\nUsage: [bold]operator skills reset <name>[/bold] or [bold]--all[/bold]")
-        raise typer.Exit()
-
-    targets = bundled if all_skills else [name]
-    for n in targets:
-        if not reset_bundled_skill(n, skills_dir):
-            console.print(f"'{n}' is not a bundled skill.", style="red")
-            raise typer.Exit(code=1)
-        console.print(f"  [green]reset[/green] {n}")
-
-    if all_skills:
-        console.print(f"\nReset {len(targets)} bundled skill(s).")
 
 
 # ── User commands ────────────────────────────────────────────

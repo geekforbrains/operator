@@ -13,10 +13,10 @@ import yaml
 from croniter import croniter
 
 from operator_ai.config import OPERATOR_DIR, ConfigError, load_config
+from operator_ai.frontmatter import rewrite_frontmatter
 from operator_ai.job_specs import JOBS_DIR
 from operator_ai.jobs import scan_jobs
 from operator_ai.message_timestamps import format_ts
-from operator_ai.skills import rewrite_frontmatter
 from operator_ai.store import get_store
 from operator_ai.tools.registry import safe_name, tool
 
