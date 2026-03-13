@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import logging
 
-from operator_ai.memory import MemoryStore, _parse_memory_file
-from operator_ai.memory_index import MemoryIndex, _content_hash, _derive_scope_kind
+from operator_ai.memory.index import MemoryIndex, content_hash, derive_scope_kind
+from operator_ai.memory.store import MemoryFile, MemoryStore, _parse_memory_file
 
 logger = logging.getLogger("operator.memory.reindex")
 
@@ -21,7 +21,7 @@ def reindex_diff(store: MemoryStore, index: MemoryIndex) -> tuple[int, int]:
     upserted = 0
     for rel_path, (mf, disk_hash) in disk_files.items():
         if indexed_hashes.get(rel_path) != disk_hash:
-            scope, kind = _derive_scope_kind(rel_path)
+            scope, kind = derive_scope_kind(rel_path)
             index.upsert(
                 rel_path,
                 scope,
@@ -35,7 +35,6 @@ def reindex_diff(store: MemoryStore, index: MemoryIndex) -> tuple[int, int]:
             )
             upserted += 1
 
-    # Remove entries for files no longer on disk
     deleted_paths = set(indexed_hashes.keys()) - set(disk_files.keys())
     if deleted_paths:
         index.delete_missing(deleted_paths)
@@ -52,7 +51,7 @@ def reindex_full(store: MemoryStore, index: MemoryIndex) -> int:
 
     count = 0
     for rel_path, (mf, disk_hash) in disk_files.items():
-        scope, kind = _derive_scope_kind(rel_path)
+        scope, kind = derive_scope_kind(rel_path)
         index.upsert(
             rel_path,
             scope,
@@ -70,12 +69,9 @@ def reindex_full(store: MemoryStore, index: MemoryIndex) -> int:
     return count
 
 
-def _scan_disk_files(store: MemoryStore) -> dict[str, tuple]:
+def _scan_disk_files(store: MemoryStore) -> dict[str, tuple[MemoryFile, str]]:
     """Walk all memory directories and return {relative_path: (MemoryFile, hash)}."""
-    from operator_ai.memory import MemoryFile
-
     disk_files: dict[str, tuple[MemoryFile, str]] = {}
-    base_dir = store._base_dir
 
     for root in store.memory_roots():
         if not root.is_dir():
@@ -83,10 +79,9 @@ def _scan_disk_files(store: MemoryStore) -> dict[str, tuple]:
         for md_path in root.rglob("*.md"):
             if md_path.parent.name not in ("rules", "notes"):
                 continue
-            mf = _parse_memory_file(md_path, base_dir)
+            mf = _parse_memory_file(md_path, store.base_dir)
             if mf is None:
                 continue
-            disk_hash = _content_hash(mf.content)
-            disk_files[mf.relative_path] = (mf, disk_hash)
+            disk_files[mf.relative_path] = (mf, content_hash(mf.content))
 
     return disk_files

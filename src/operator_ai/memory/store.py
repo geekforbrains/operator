@@ -1,3 +1,9 @@
+"""File-backed memory store.
+
+Files are the source of truth. When an index is provided, writes and deletes
+are mirrored into the FTS5/vector index synchronously.
+"""
+
 from __future__ import annotations
 
 import logging
@@ -10,14 +16,15 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 from operator_ai.config import OPERATOR_DIR
+from operator_ai.frontmatter import extract_body, parse_frontmatter
 
 if TYPE_CHECKING:
-    from operator_ai.memory_index import MemoryIndex
+    from operator_ai.memory.index import MemoryIndex
 
 logger = logging.getLogger("operator.memory")
 
 _TTL_RE = re.compile(r"^(\d+)\s*([mhdw])$", re.IGNORECASE)
-_MEMORY_DIR_BY_KIND = {"rule": "rules", "note": "notes"}
+_KIND_DIRS = {"rule": "rules", "note": "notes"}
 
 
 def parse_ttl(ttl: str) -> timedelta:
@@ -42,13 +49,14 @@ def parse_ttl(ttl: str) -> timedelta:
     raise ValueError(f"Unknown TTL unit: {unit!r}")  # pragma: no cover
 
 
-def _slugify(content: str, max_len: int = 60) -> str:
-    """Generate a slug from the first ~max_len chars of content."""
-    text = content[:max_len].lower()
+def _normalize_key(key: str, max_len: int = 80) -> str:
+    """Normalize a memory key into a stable filename-safe slug."""
+    if not re.search(r"[a-z0-9]", key, re.IGNORECASE):
+        raise ValueError(f"Invalid memory key: {key!r}")
+    text = key[:max_len].lower()
     text = re.sub(r"[^a-z0-9]+", "-", text)
     text = re.sub(r"-{2,}", "-", text)
-    text = text.strip("-")
-    return text or "untitled"
+    return text.strip("-") or "untitled"
 
 
 def _unique_path(directory: Path, slug: str) -> Path:
@@ -72,7 +80,7 @@ def _format_dt(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _write_memory_file(
+def write_memory_file(
     path: Path,
     content: str,
     *,
@@ -82,24 +90,16 @@ def _write_memory_file(
 ) -> None:
     """Write a memory file with YAML frontmatter."""
     now = _now_utc()
-    created = created_at or now
-    updated = updated_at or now
-
-    frontmatter: dict[str, Any] = {
-        "created_at": _format_dt(created),
-        "updated_at": _format_dt(updated),
+    fm: dict[str, Any] = {
+        "created_at": _format_dt(created_at or now),
+        "updated_at": _format_dt(updated_at or now),
     }
     if expires_at is not None:
-        frontmatter["expires_at"] = _format_dt(expires_at)
+        fm["expires_at"] = _format_dt(expires_at)
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    lines = ["---"]
-    lines.append(yaml.dump(frontmatter, default_flow_style=False).rstrip())
-    lines.append("---")
-    lines.append("")
-    lines.append(content.rstrip())
-    lines.append("")
-    path.write_text("\n".join(lines))
+    fm_text = yaml.dump(fm, default_flow_style=False).rstrip()
+    path.write_text(f"---\n{fm_text}\n---\n\n{content.rstrip()}\n")
 
 
 def _parse_memory_file(path: Path, relative_to: Path) -> MemoryFile | None:
@@ -110,29 +110,20 @@ def _parse_memory_file(path: Path, relative_to: Path) -> MemoryFile | None:
         logger.warning("could not read memory file: %s", path)
         return None
 
-    relative_path = str(path.relative_to(relative_to))
+    fm = parse_frontmatter(text)
+    content = extract_body(text)
+
     created_at = None
     updated_at = None
     expires_at = None
-    content = text
-
-    if text.startswith("---"):
-        parts = text.split("---", 2)
-        if len(parts) >= 3:
-            frontmatter_text = parts[1]
-            content = parts[2].strip()
-            try:
-                fm = yaml.safe_load(frontmatter_text) or {}
-            except yaml.YAMLError:
-                fm = {}
-            if isinstance(fm, dict):
-                created_at = _parse_dt(fm.get("created_at"))
-                updated_at = _parse_dt(fm.get("updated_at"))
-                expires_at = _parse_dt(fm.get("expires_at"))
+    if fm:
+        created_at = _parse_dt(fm.get("created_at"))
+        updated_at = _parse_dt(fm.get("updated_at"))
+        expires_at = _parse_dt(fm.get("expires_at"))
 
     return MemoryFile(
         path=path,
-        relative_path=relative_path,
+        relative_path=str(path.relative_to(relative_to)),
         key=path.stem,
         created_at=created_at,
         updated_at=updated_at,
@@ -161,20 +152,10 @@ def _resolve_scope(scope: str, base_dir: Path) -> Path:
     if scope == "global":
         return base_dir / "memory" / "global"
     if scope.startswith("agent:"):
-        name = scope[6:]
-        return base_dir / "agents" / name / "memory"
+        return base_dir / "agents" / scope[6:] / "memory"
     if scope.startswith("user:"):
-        name = scope[5:]
-        return base_dir / "memory" / "users" / name
+        return base_dir / "memory" / "users" / scope[5:]
     raise ValueError(f"Invalid scope: {scope!r}")
-
-
-def _normalize_key(key: str, max_len: int = 80) -> str:
-    """Normalize a memory key into a stable filename-safe slug."""
-    if not re.search(r"[a-z0-9]", key, re.IGNORECASE):
-        raise ValueError(f"Invalid memory key: {key!r}")
-    normalized = _slugify(key, max_len=max_len)
-    return normalized
 
 
 def _is_expired(expires_at: datetime | None, *, now: datetime | None = None) -> bool:
@@ -199,34 +180,29 @@ class MemoryStore:
 
     Files remain the source of truth. When an index is provided, writes
     and deletes are mirrored into the FTS5/vector index synchronously.
-    Search uses the index when available, falling back to text matching.
     """
 
     def __init__(self, base_dir: Path = OPERATOR_DIR, *, index: MemoryIndex | None = None):
-        self._base_dir = base_dir
+        self.base_dir = base_dir
         self._index = index
 
     def _scope_dir(self, scope: str) -> Path:
-        return _resolve_scope(scope, self._base_dir)
-
-    def _relative_to(self) -> Path:
-        return self._base_dir
+        return _resolve_scope(scope, self.base_dir)
 
     def _memory_dir(self, scope: str, kind: str) -> Path:
         try:
-            subdir = _MEMORY_DIR_BY_KIND[kind]
+            subdir = _KIND_DIRS[kind]
         except KeyError:
             raise ValueError(f"Invalid memory kind: {kind!r}") from None
         return self._scope_dir(scope) / subdir
 
     def _memory_path(self, scope: str, kind: str, key: str) -> Path:
-        normalized_key = _normalize_key(key)
-        return self._memory_dir(scope, kind) / f"{normalized_key}.md"
+        return self._memory_dir(scope, kind) / f"{_normalize_key(key)}.md"
 
     def _read_path(self, path: Path, *, include_expired: bool = False) -> MemoryFile | None:
         if not path.is_file():
             return None
-        mf = _parse_memory_file(path, self._relative_to())
+        mf = _parse_memory_file(path, self.base_dir)
         if mf is None:
             return None
         if not include_expired and _is_expired(mf.expires_at):
@@ -249,31 +225,32 @@ class MemoryStore:
         now = _now_utc()
         expires_at = now + parse_ttl(ttl) if ttl else None
         created_at = existing.created_at if existing else now
-        _write_memory_file(
+        write_memory_file(
             path,
             content,
             created_at=created_at,
             updated_at=now,
             expires_at=expires_at,
         )
-        relative = str(path.relative_to(self._relative_to()))
+        relative = str(path.relative_to(self.base_dir))
         logger.info("saved %s: %s", kind, relative)
 
-        # Mirror to FTS5 index
         if self._index:
-            from operator_ai.memory_index import _content_hash
+            from operator_ai.memory.index import content_hash
 
+            normalized_key = _normalize_key(key)
             self._index.upsert(
                 relative,
                 scope,
-                kind.rstrip("s"),  # "rule" not "rules"
-                _normalize_key(key),
+                kind,
+                normalized_key,
                 content,
-                _content_hash(content),
+                content_hash(content),
                 created_at=created_at.timestamp() if created_at else None,
                 updated_at=now.timestamp(),
                 expires_at=expires_at.timestamp() if expires_at else None,
             )
+            self._index.embed(relative, content)
 
         return relative
 
@@ -288,11 +265,9 @@ class MemoryStore:
     # ── List ─────────────────────────────────────────────────────
 
     def list_rules(self, scope: str) -> list[MemoryFile]:
-        """List all rule files in the given scope."""
         return self._list_files(self._memory_dir(scope, "rule"))
 
     def list_notes(self, scope: str) -> list[MemoryFile]:
-        """List all note files in the given scope."""
         return self._list_files(self._memory_dir(scope, "note"))
 
     def _list_files(self, directory: Path) -> list[MemoryFile]:
@@ -315,23 +290,20 @@ class MemoryStore:
         return []
 
     def _search_notes_indexed(self, scope: str, query: str) -> list[MemoryFile]:
-        """Search notes via the FTS5 index, returning MemoryFile objects."""
         assert self._index is not None
         results = self._index.search(query, scopes=[scope], kind="note")
         memory_files: list[MemoryFile] = []
         for r in results:
-            path = self._base_dir / r.relative_path
+            path = self.base_dir / r.relative_path
             mf = self._read_path(path)
             if mf is not None:
                 memory_files.append(mf)
         return memory_files
 
     def get_rule(self, scope: str, key: str) -> MemoryFile | None:
-        """Read a specific active rule by deterministic key."""
         return self._read_path(self._memory_path(scope, "rule", key))
 
     def get_note(self, scope: str, key: str) -> MemoryFile | None:
-        """Read a specific active note by deterministic key."""
         return self._read_path(self._memory_path(scope, "note", key))
 
     def _forget_path(self, path: Path) -> bool:
@@ -339,29 +311,23 @@ class MemoryStore:
         if not path.is_file():
             return False
 
-        # Capture relative path before moving
-        relative = str(path.relative_to(self._relative_to()))
-
-        parent = path.parent
-        trash_dir = parent.parent / "trash"
+        relative = str(path.relative_to(self.base_dir))
+        trash_dir = path.parent.parent / "trash"
         trash_dir.mkdir(parents=True, exist_ok=True)
 
         dest = _unique_path(trash_dir, path.stem)
         path.rename(dest)
         logger.info("moved to trash: %s → %s", path, dest)
 
-        # Remove from index
         if self._index:
             self._index.delete(relative)
 
         return True
 
     def forget_rule(self, scope: str, key: str) -> bool:
-        """Move a rule file to trash by deterministic key."""
         return self._forget_path(self._memory_path(scope, "rule", key))
 
     def forget_note(self, scope: str, key: str) -> bool:
-        """Move a note file to trash by deterministic key."""
         return self._forget_path(self._memory_path(scope, "note", key))
 
     # ── Helpers ────────────────────────────────────────────────────
@@ -369,9 +335,9 @@ class MemoryStore:
     def memory_roots(self) -> list[Path]:
         """Return the root directories that contain memory files."""
         return [
-            self._base_dir / "memory" / "global",
-            self._base_dir / "memory" / "users",
-            self._base_dir / "agents",
+            self.base_dir / "memory" / "global",
+            self.base_dir / "memory" / "users",
+            self.base_dir / "agents",
         ]
 
     # ── Sweep expired ────────────────────────────────────────────
@@ -385,17 +351,14 @@ class MemoryStore:
             if not root.is_dir():
                 continue
             for md_path in root.rglob("*.md"):
-                # Only process files in rules/ or notes/ directories
                 if md_path.parent.name not in ("rules", "notes"):
                     continue
-
-                mf = _parse_memory_file(md_path, self._relative_to())
+                mf = _parse_memory_file(md_path, self.base_dir)
                 if mf is None:
                     continue
                 if _is_expired(mf.expires_at, now=now) and self._forget_path(md_path):
                     count += 1
 
-        # Belt-and-suspenders: also clean stale index entries
         if self._index:
             self._index.delete_expired()
 

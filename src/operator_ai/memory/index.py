@@ -33,20 +33,12 @@ class IndexResult:
     rank: float
 
 
-@dataclass
-class EmbeddingConfig:
-    """Configuration for optional vector embeddings."""
-
-    model: str
-    dimensions: int = 1536
-
-
-def _content_hash(text: str) -> str:
+def content_hash(text: str) -> str:
     """MD5 hash of content for change detection (not security)."""
     return hashlib.md5(text.encode()).hexdigest()
 
 
-def _derive_scope_kind(relative_path: str) -> tuple[str, str]:
+def derive_scope_kind(relative_path: str) -> tuple[str, str]:
     """Parse a relative memory path into (scope, kind).
 
     Examples:
@@ -58,21 +50,16 @@ def _derive_scope_kind(relative_path: str) -> tuple[str, str]:
     parts = Path(relative_path).parts
 
     if len(parts) >= 4 and parts[0] == "memory" and parts[1] == "global":
-        kind_dir = parts[2]  # "rules" or "notes"
-        kind = "rule" if kind_dir == "rules" else "note"
+        kind = "rule" if parts[2] == "rules" else "note"
         return ("global", kind)
 
     if len(parts) >= 5 and parts[0] == "memory" and parts[1] == "users":
-        username = parts[2]
-        kind_dir = parts[3]
-        kind = "rule" if kind_dir == "rules" else "note"
-        return (f"user:{username}", kind)
+        kind = "rule" if parts[3] == "rules" else "note"
+        return (f"user:{parts[2]}", kind)
 
     if len(parts) >= 5 and parts[0] == "agents" and parts[2] == "memory":
-        agent_name = parts[1]
-        kind_dir = parts[3]
-        kind = "rule" if kind_dir == "rules" else "note"
-        return (f"agent:{agent_name}", kind)
+        kind = "rule" if parts[3] == "rules" else "note"
+        return (f"agent:{parts[1]}", kind)
 
     raise ValueError(f"Cannot derive scope/kind from path: {relative_path}")
 
@@ -108,7 +95,6 @@ class MemoryIndex:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
 
-        # Metadata table — one row per memory file
         self._conn.execute("""
             CREATE TABLE IF NOT EXISTS memory_meta (
                 relative_path TEXT PRIMARY KEY,
@@ -131,7 +117,6 @@ class MemoryIndex:
             ON memory_meta(expires_at) WHERE expires_at IS NOT NULL
         """)
 
-        # FTS5 virtual table for full-text search with Porter stemming
         self._conn.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
                 relative_path,
@@ -141,7 +126,6 @@ class MemoryIndex:
             )
         """)
 
-        # Optional: vector table via sqlite-vec
         if self._embed_fn is not None:
             self._init_vec()
 
@@ -189,7 +173,6 @@ class MemoryIndex:
         expires_at: float | None = None,
     ) -> None:
         """Index a memory file. Replaces any existing entry for the path."""
-        # Update metadata
         self._conn.execute(
             """
             INSERT INTO memory_meta
@@ -215,7 +198,6 @@ class MemoryIndex:
             ),
         )
 
-        # Update FTS: delete old, insert new
         self._conn.execute(
             "DELETE FROM memory_fts WHERE relative_path = ?",
             (relative_path,),
@@ -231,15 +213,13 @@ class MemoryIndex:
     def embed(self, relative_path: str, content: str) -> None:
         """Compute and store the vector embedding for a memory file.
 
-        Call this after upsert when embeddings are configured. Safe to call
-        even if sqlite-vec is not available (no-op).
+        Safe to call even if sqlite-vec is not available (no-op).
         """
         if not self._has_vec or not self._embed_fn:
             return
 
         try:
             embedding = self._embed_fn(content)
-            # Delete old vector if exists
             self._conn.execute(
                 "DELETE FROM memory_vec WHERE relative_path = ?",
                 (relative_path,),
@@ -282,15 +262,12 @@ class MemoryIndex:
         kind: str = "note",
         limit: int = 20,
     ) -> list[IndexResult]:
-        """Search memory using FTS5 with optional vector re-ranking.
-
-        Returns results ranked by BM25 relevance.
-        """
+        """Search memory using FTS5 with optional vector re-ranking."""
         query = query.strip()
         if not query:
             return []
 
-        fts_query = _build_fts_query(query)
+        fts_query = build_fts_query(query)
         if not fts_query:
             return []
 
@@ -331,7 +308,6 @@ class MemoryIndex:
             len(results),
         )
 
-        # If vector search is available, fuse results
         if self._has_vec and self._embed_fn and results:
             results = self._fuse_with_vectors(query, scopes, kind, results, limit)
 
@@ -368,7 +344,6 @@ class MemoryIndex:
             (_serialize_vec(query_vec), *scopes, kind, limit),
         ).fetchall()
 
-        # RRF fusion: score = sum(1 / (k + rank)) across both lists
         k = 60  # standard RRF constant
         rrf_scores: dict[str, float] = {}
 
@@ -379,12 +354,10 @@ class MemoryIndex:
             path = row["relative_path"]
             rrf_scores[path] = rrf_scores.get(path, 0) + 1.0 / (k + rank)
 
-        # Build lookup for metadata
         meta_by_path = {r.relative_path: r for r in fts_results}
         for row in vec_rows:
             path = row["relative_path"]
             if path not in meta_by_path:
-                # Vector found something FTS missed — look up metadata
                 meta_row = self._conn.execute(
                     "SELECT scope, kind, key FROM memory_meta WHERE relative_path = ?",
                     (path,),
@@ -398,7 +371,6 @@ class MemoryIndex:
                         rank=0.0,
                     )
 
-        # Sort by RRF score descending, build results
         sorted_paths = sorted(rrf_scores, key=lambda p: rrf_scores[p], reverse=True)
         fused = []
         for path in sorted_paths[:limit]:
@@ -449,7 +421,6 @@ class MemoryIndex:
 
     def delete_expired(self) -> int:
         """Remove index entries whose expires_at is in the past. Returns count."""
-        # Collect paths first to also clean FTS and vec
         rows = self._conn.execute(
             """
             SELECT relative_path FROM memory_meta
@@ -485,7 +456,7 @@ class MemoryIndex:
 _FTS_UNSAFE = re.compile(r"[^\w\s]", re.UNICODE)
 
 
-def _build_fts_query(raw: str) -> str:
+def build_fts_query(raw: str) -> str:
     """Build an FTS5 query from a raw user string.
 
     Strips special characters and joins words with implicit AND.
@@ -494,7 +465,6 @@ def _build_fts_query(raw: str) -> str:
     words = _FTS_UNSAFE.sub(" ", raw).split()
     if not words:
         return ""
-    # Each word as a prefix match, joined with AND
     return " ".join(f'"{w}"*' for w in words)
 
 

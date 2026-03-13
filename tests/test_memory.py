@@ -6,9 +6,14 @@ from pathlib import Path
 
 import pytest
 
-from operator_ai.memory import MemoryStore, _slugify, _write_memory_file, parse_ttl
-from operator_ai.memory_index import MemoryIndex
-from operator_ai.memory_reindex import reindex_diff, reindex_full
+from operator_ai.memory import (
+    MemoryIndex,
+    MemoryStore,
+    parse_ttl,
+    reindex_diff,
+    reindex_full,
+    write_memory_file,
+)
 from operator_ai.tools import memory as memory_tools
 
 
@@ -40,28 +45,6 @@ def test_parse_ttl_invalid() -> None:
 def test_parse_ttl_invalid_no_unit() -> None:
     with pytest.raises(ValueError, match="Invalid TTL format"):
         parse_ttl("42")
-
-
-def test_slugify_basic() -> None:
-    assert _slugify("Release date moved to April 3") == "release-date-moved-to-april-3"
-
-
-def test_slugify_special_chars() -> None:
-    assert _slugify("Use `uv` rather than `pip`") == "use-uv-rather-than-pip"
-
-
-def test_slugify_truncates() -> None:
-    long_text = "a" * 100
-    slug = _slugify(long_text, max_len=60)
-    assert len(slug) <= 60
-
-
-def test_slugify_empty() -> None:
-    assert _slugify("") == "untitled"
-
-
-def test_slugify_only_special_chars() -> None:
-    assert _slugify("!@#$%^&*()") == "untitled"
 
 
 def test_scope_global(tmp_path: Path) -> None:
@@ -181,7 +164,7 @@ def test_expired_note_hidden_from_get_list_and_search(tmp_path: Path) -> None:
     store = MemoryStore(base_dir=tmp_path)
     notes_dir = tmp_path / "memory" / "global" / "notes"
     notes_dir.mkdir(parents=True, exist_ok=True)
-    _write_memory_file(
+    write_memory_file(
         notes_dir / "travel-plan.md",
         "Traveling this week",
         expires_at=datetime.now(UTC) - timedelta(minutes=1),
@@ -196,7 +179,7 @@ def test_expired_rule_hidden_from_list_and_get(tmp_path: Path) -> None:
     store = MemoryStore(base_dir=tmp_path)
     rules_dir = tmp_path / "memory" / "global" / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)
-    _write_memory_file(
+    write_memory_file(
         rules_dir / "temporary-style.md",
         "This should not remain active",
         expires_at=datetime.now(UTC) - timedelta(minutes=1),
@@ -271,7 +254,7 @@ def test_sweep_expired(tmp_path: Path) -> None:
 
     notes_dir = tmp_path / "memory" / "global" / "notes"
     notes_dir.mkdir(parents=True, exist_ok=True)
-    _write_memory_file(
+    write_memory_file(
         notes_dir / "expired-note.md",
         "This has expired",
         expires_at=datetime.now(UTC) - timedelta(hours=1),
@@ -279,7 +262,7 @@ def test_sweep_expired(tmp_path: Path) -> None:
 
     rules_dir = tmp_path / "memory" / "global" / "rules"
     rules_dir.mkdir(parents=True, exist_ok=True)
-    _write_memory_file(
+    write_memory_file(
         rules_dir / "expired-rule.md",
         "This rule has expired",
         expires_at=datetime.now(UTC) - timedelta(hours=1),
@@ -490,7 +473,7 @@ def test_indexed_sweep_cleans_index(tmp_path: Path) -> None:
     store, index = _make_indexed_store(tmp_path)
     notes_dir = tmp_path / "memory" / "global" / "notes"
     notes_dir.mkdir(parents=True, exist_ok=True)
-    _write_memory_file(
+    write_memory_file(
         notes_dir / "expired.md",
         "This has expired",
         expires_at=datetime.now(UTC) - timedelta(hours=1),
@@ -517,7 +500,7 @@ def test_reindex_diff_picks_up_new_files(tmp_path: Path) -> None:
     # Write files directly (simulating human edits)
     notes_dir = tmp_path / "memory" / "global" / "notes"
     notes_dir.mkdir(parents=True, exist_ok=True)
-    _write_memory_file(notes_dir / "manual-note.md", "Manually created note")
+    write_memory_file(notes_dir / "manual-note.md", "Manually created note")
 
     upserted, deleted = reindex_diff(store, index)
     assert upserted == 1

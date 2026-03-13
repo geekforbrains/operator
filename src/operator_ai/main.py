@@ -21,9 +21,7 @@ from operator_ai.config import Config, ConfigError, RoleConfig, load_config
 from operator_ai.jobs import JobRunner
 from operator_ai.layout import ensure_layout
 from operator_ai.log_context import new_run_id, set_run_context, setup_logging
-from operator_ai.memory import MemoryStore
-from operator_ai.memory_index import MemoryIndex
-from operator_ai.memory_reindex import reindex_diff
+from operator_ai.memory import MemoryIndex, MemoryStore, reindex_diff
 from operator_ai.message_timestamps import attach_message_created_at
 from operator_ai.messages import trim_incomplete_tool_turns
 from operator_ai.run_prompt import ChatEnvelope, build_agent_system_prompt

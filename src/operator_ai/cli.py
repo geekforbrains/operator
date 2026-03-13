@@ -30,9 +30,7 @@ from operator_ai.jobs import run_job_now
 from operator_ai.layout import ensure_layout
 from operator_ai.log_context import setup_logging
 from operator_ai.main import async_main
-from operator_ai.memory import MemoryStore
-from operator_ai.memory_index import MemoryIndex
-from operator_ai.memory_reindex import reindex_diff, reindex_full
+from operator_ai.memory import MemoryIndex, MemoryStore, reindex_diff, reindex_full
 from operator_ai.message_timestamps import format_ts
 from operator_ai.prompts import load_prompt
 from operator_ai.skills import scan_skills
@@ -784,6 +782,13 @@ def _toggle_job(name: str, *, enabled: bool) -> None:
 # ── Memory commands ──────────────────────────────────────────
 
 
+def _cli_memory_store() -> MemoryStore:
+    """Create a MemoryStore for CLI commands, with index if available."""
+    index_db = OPERATOR_DIR / "db" / "memory_index.db"
+    index = MemoryIndex(index_db) if index_db.exists() else None
+    return MemoryStore(base_dir=OPERATOR_DIR, index=index)
+
+
 @memory_app.callback(invoke_without_command=True)
 def memory_main(ctx: typer.Context) -> None:
     """Browse and search file-backed memories."""
@@ -796,9 +801,7 @@ def memory_list_cmd(
     scope: str = typer.Argument("global", help="Scope: global, agent:<name>, or user:<name>."),
 ) -> None:
     """List rules and notes for a scope."""
-    index_db = OPERATOR_DIR / "db" / "memory_index.db"
-    index = MemoryIndex(index_db) if index_db.exists() else None
-    mem = MemoryStore(base_dir=OPERATOR_DIR, index=index)
+    mem = _cli_memory_store()
     rules = mem.list_rules(scope)
     notes = mem.list_notes(scope)
 
@@ -838,9 +841,7 @@ def memory_search_cmd(
     scope: str = typer.Option("global", "--scope", "-s", help="Scope to search."),
 ) -> None:
     """Search notes by filename and content."""
-    index_db = OPERATOR_DIR / "db" / "memory_index.db"
-    index = MemoryIndex(index_db) if index_db.exists() else None
-    mem = MemoryStore(base_dir=OPERATOR_DIR, index=index)
+    mem = _cli_memory_store()
     results = mem.search_notes(scope, query)
 
     if not results:
