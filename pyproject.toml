@@ -73,7 +73,7 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "src/operator_ai/transport/base.py" = ["ARG002", "B027"]  # interface defaults have unused args and empty bodies by design
-"src/operator_ai/cli.py" = ["T20"]  # CLI outputs via print()
+"src/operator_ai/cli/*.py" = ["T20"]  # CLI outputs via print()
 "src/operator_ai/commands.py" = ["ARG001"]  # command handlers have uniform signature
 "src/operator_ai/main.py" = ["ARG002"]  # _handle_command signature includes conversation_id for logging
 

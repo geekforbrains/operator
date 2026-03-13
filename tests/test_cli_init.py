@@ -6,7 +6,9 @@ from unittest.mock import patch
 
 from typer.testing import CliRunner
 
-from operator_ai.cli import _STARTER_CONFIG, _generate_plist, _generate_systemd_unit, app
+from operator_ai.cli import app
+from operator_ai.cli.init import _STARTER_CONFIG
+from operator_ai.cli.service import _generate_plist, _generate_systemd_unit
 from operator_ai.config import load_config
 
 runner = CliRunner()
@@ -35,7 +37,7 @@ def test_starter_config_references_env_file() -> None:
 def test_init_creates_full_scaffold_and_points_user_to_manual_edits(tmp_path: Path) -> None:
     op_dir = tmp_path / ".operator"
 
-    with patch("operator_ai.cli.OPERATOR_DIR", op_dir):
+    with patch("operator_ai.cli.init.OPERATOR_DIR", op_dir):
         result = runner.invoke(app, ["init"])
 
     assert result.exit_code == 0
@@ -101,7 +103,7 @@ def test_init_creates_full_scaffold_and_points_user_to_manual_edits(tmp_path: Pa
 def test_init_creates_env_file_with_api_key_placeholders(tmp_path: Path) -> None:
     op_dir = tmp_path / ".operator"
 
-    with patch("operator_ai.cli.OPERATOR_DIR", op_dir):
+    with patch("operator_ai.cli.init.OPERATOR_DIR", op_dir):
         result = runner.invoke(app, ["init"])
 
     assert result.exit_code == 0
@@ -142,11 +144,11 @@ def test_service_start_bootstraps_launchd_agent_when_unloaded(tmp_path: Path) ->
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     with (
-        patch("operator_ai.cli._is_macos", return_value=True),
-        patch("operator_ai.cli._PLIST_PATH", plist_path),
-        patch("operator_ai.cli._launchd_service_loaded", return_value=False),
-        patch("operator_ai.cli._launchd_domain_target", return_value="gui/501"),
-        patch("operator_ai.cli.subprocess.run", side_effect=fake_run),
+        patch("operator_ai.cli.service._is_macos", return_value=True),
+        patch("operator_ai.cli.service._PLIST_PATH", plist_path),
+        patch("operator_ai.cli.service._launchd_service_loaded", return_value=False),
+        patch("operator_ai.cli.service._launchd_domain_target", return_value="gui/501"),
+        patch("operator_ai.cli.service.subprocess.run", side_effect=fake_run),
     ):
         result = runner.invoke(app, ["service", "start"])
 
@@ -167,10 +169,12 @@ def test_service_stop_boots_out_launchd_agent_on_macos() -> None:
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     with (
-        patch("operator_ai.cli._is_macos", return_value=True),
-        patch("operator_ai.cli._launchd_service_loaded", return_value=True),
-        patch("operator_ai.cli._launchd_service_target", return_value="gui/501/ai.operator"),
-        patch("operator_ai.cli.subprocess.run", side_effect=fake_run),
+        patch("operator_ai.cli.service._is_macos", return_value=True),
+        patch("operator_ai.cli.service._launchd_service_loaded", return_value=True),
+        patch(
+            "operator_ai.cli.service._launchd_service_target", return_value="gui/501/ai.operator"
+        ),
+        patch("operator_ai.cli.service.subprocess.run", side_effect=fake_run),
     ):
         result = runner.invoke(app, ["service", "stop"])
 
@@ -193,11 +197,13 @@ def test_service_restart_kickstarts_loaded_launchd_agent_on_macos(tmp_path: Path
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     with (
-        patch("operator_ai.cli._is_macos", return_value=True),
-        patch("operator_ai.cli._PLIST_PATH", plist_path),
-        patch("operator_ai.cli._launchd_service_loaded", return_value=True),
-        patch("operator_ai.cli._launchd_service_target", return_value="gui/501/ai.operator"),
-        patch("operator_ai.cli.subprocess.run", side_effect=fake_run),
+        patch("operator_ai.cli.service._is_macos", return_value=True),
+        patch("operator_ai.cli.service._PLIST_PATH", plist_path),
+        patch("operator_ai.cli.service._launchd_service_loaded", return_value=True),
+        patch(
+            "operator_ai.cli.service._launchd_service_target", return_value="gui/501/ai.operator"
+        ),
+        patch("operator_ai.cli.service.subprocess.run", side_effect=fake_run),
     ):
         result = runner.invoke(app, ["service", "restart"])
 
@@ -216,7 +222,7 @@ def test_init_skips_existing_env_file(tmp_path: Path) -> None:
     env_file = op_dir / ".env"
     env_file.write_text("EXISTING=yes\n")
 
-    with patch("operator_ai.cli.OPERATOR_DIR", op_dir):
+    with patch("operator_ai.cli.init.OPERATOR_DIR", op_dir):
         result = runner.invoke(app, ["init"])
 
     assert result.exit_code == 0
@@ -229,7 +235,7 @@ def test_init_prompts_before_overwriting_existing_config(tmp_path: Path) -> None
     config_file = op_dir / "operator.yaml"
     config_file.write_text("defaults:\n  models:\n    - custom/model\n")
 
-    with patch("operator_ai.cli.OPERATOR_DIR", op_dir):
+    with patch("operator_ai.cli.init.OPERATOR_DIR", op_dir):
         result = runner.invoke(app, ["init"], input="n\n")
 
     assert result.exit_code == 0
@@ -247,7 +253,7 @@ def test_init_overwrites_existing_config_when_confirmed_and_preserves_agent_prom
     agent_md.write_text("custom agent\n")
     (op_dir / "operator.yaml").write_text("defaults:\n  models:\n    - custom/model\n")
 
-    with patch("operator_ai.cli.OPERATOR_DIR", op_dir):
+    with patch("operator_ai.cli.init.OPERATOR_DIR", op_dir):
         result = runner.invoke(app, ["init"], input="y\n")
 
     assert result.exit_code == 0
@@ -261,7 +267,7 @@ def test_init_force_overwrites_existing_config_without_prompt(tmp_path: Path) ->
     config_file = op_dir / "operator.yaml"
     config_file.write_text("defaults:\n  models:\n    - custom/model\n")
 
-    with patch("operator_ai.cli.OPERATOR_DIR", op_dir):
+    with patch("operator_ai.cli.init.OPERATOR_DIR", op_dir):
         result = runner.invoke(app, ["init", "--force"])
 
     assert result.exit_code == 0
