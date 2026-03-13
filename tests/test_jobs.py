@@ -378,6 +378,10 @@ def test_execute_job_configures_memory_and_skill_filter(monkeypatch, tmp_path: P
         agents={"operator": {"permissions": {"skills": ["allowed-skill"]}}},
     )
     config.set_base_dir(tmp_path)
+    config.system_prompt_path().write_text("# System")
+    agent_md = config.agent_prompt_path("operator")
+    agent_md.parent.mkdir(parents=True, exist_ok=True)
+    agent_md.write_text("---\ndescription: Operator\n---\n\nYou are the operator.")
     fake_store = FakeStore()
 
     asyncio.run(
@@ -575,8 +579,8 @@ def test_create_job_with_hooks_creates_scripts(monkeypatch, tmp_path: Path) -> N
             schedule="0 8 * * *",
             prompt="Do the hooked thing.",
             description="Job with hooks",
-            prerun=True,
-            postrun=True,
+            prerun="scripts/prerun.sh",
+            postrun="scripts/postrun.sh",
         )
     )
     assert "Created job" in result
@@ -595,6 +599,46 @@ def test_create_job_with_hooks_creates_scripts(monkeypatch, tmp_path: Path) -> N
     assert "scripts/prerun.sh" in content
     assert "postrun" in content
     assert "scripts/postrun.sh" in content
+
+
+def test_create_job_with_custom_hook_paths_creates_scripts(monkeypatch, tmp_path: Path) -> None:
+    jobs_dir = tmp_path / "jobs"
+    monkeypatch.setattr("operator_ai.tools.jobs.resolve_dir", lambda name: tmp_path / name)
+    monkeypatch.setattr("operator_ai.tools.jobs.load_config", lambda: _config())
+
+    from operator_ai.tools.jobs import create_job
+
+    result = asyncio.run(
+        create_job(
+            name="custom-hooks",
+            schedule="0 8 * * *",
+            prompt="Do the custom hooked thing.",
+            prerun="hooks/fetch-data",
+            postrun="hooks/publish-result",
+        )
+    )
+    assert "Created job" in result
+
+    job_dir = jobs_dir / "custom-hooks"
+    assert (job_dir / "hooks" / "fetch-data").exists()
+    assert (job_dir / "hooks" / "publish-result").exists()
+
+
+def test_create_job_rejects_hook_paths_outside_job_dir(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr("operator_ai.tools.jobs.resolve_dir", lambda name: tmp_path / name)
+    monkeypatch.setattr("operator_ai.tools.jobs.load_config", lambda: _config())
+
+    from operator_ai.tools.jobs import create_job
+
+    result = asyncio.run(
+        create_job(
+            name="bad-hooks",
+            schedule="0 8 * * *",
+            prompt="Do the thing.",
+            prerun="../escape.sh",
+        )
+    )
+    assert "escapes job directory" in result
 
 
 # ---------------------------------------------------------------------------

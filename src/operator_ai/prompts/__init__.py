@@ -34,16 +34,24 @@ def load_prompt(name: str) -> str:
 
 
 def load_system_prompt(path: Path) -> str:
-    """Load SYSTEM.md from disk, creating it from the bundled default if missing."""
-    if not path.exists():
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(load_prompt("system.md"))
-    return path.read_text().strip()
+    """Load the required SYSTEM.md from disk."""
+    try:
+        return path.read_text().strip()
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Missing required SYSTEM.md: {path}") from None
+    except OSError as e:
+        raise OSError(f"Could not read SYSTEM.md at {path}: {e}") from e
 
 
 def load_agent_prompt(config: Config, agent_name: str) -> str:
     """Load AGENT.md body, stripping frontmatter if present."""
-    return load_agent_body(config.agent_prompt_path(agent_name))
+    path = config.agent_prompt_path(agent_name)
+    try:
+        return load_agent_body(path)
+    except FileNotFoundError:
+        raise FileNotFoundError(
+            f"Missing required AGENT.md for agent '{agent_name}': {path}"
+        ) from None
 
 
 def load_skills_prompt(

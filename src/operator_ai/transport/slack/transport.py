@@ -236,10 +236,6 @@ class SlackTransport(Transport):
         self._linked_operator_usernames = linked
         return linked
 
-    def invalidate_linked_usernames(self) -> None:
-        """Invalidate the cached linked operator usernames."""
-        self._linked_operator_usernames = None
-
     # --- Mention resolution ---
 
     def _get_user_mention_patterns(self) -> list[tuple[re.Pattern[str], str]]:

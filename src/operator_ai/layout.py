@@ -27,32 +27,9 @@ def _ensure_dirs(*paths: Path) -> None:
         p.mkdir(parents=True, exist_ok=True)
 
 
-_AGENT_TEMPLATE: str | None = None
-
-
-def _load_agent_template() -> str:
-    """Load and cache the bundled agent.md template."""
-    global _AGENT_TEMPLATE
-    if _AGENT_TEMPLATE is None:
-        _AGENT_TEMPLATE = (Path(__file__).parent / "prompts" / "agent.md").read_text()
-    return _AGENT_TEMPLATE
-
-
 def _ensure_agent(name: str, config: Config) -> None:
     """Bootstrap a single agent's directory tree."""
     agent_dir = config.agent_dir(name)
-
-    # AGENT.md — create from template if missing
-    agent_md = config.agent_prompt_path(name)
-    if not agent_md.exists():
-        agent_md.parent.mkdir(parents=True, exist_ok=True)
-        template = (
-            _load_agent_template()
-            .replace("{name}", name)
-            .replace("{name_title}", name.capitalize())
-        )
-        agent_md.write_text(template)
-        logger.info("layout: created default AGENT.md for %s", name)
 
     # workspace/<subdir>
     ws = config.agent_workspace(name)
@@ -76,8 +53,8 @@ def ensure_layout(config: Config) -> None:
     """Create the full ``~/.operator/`` directory tree.
 
     This is safe to call on every startup. It creates directories, symlinks,
-    and a default ``AGENT.md`` for any configured agent that does not already
-    have one.
+    and other runtime-managed layout state. Authored prompt files are created
+    by ``operator init`` and are not synthesized at runtime.
 
     Parameters
     ----------

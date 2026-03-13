@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from operator_ai.agent import (
     AgentInfo,
     build_agents_prompt,
@@ -107,9 +109,9 @@ def test_load_agent_body_no_frontmatter(tmp_path: Path) -> None:
     assert body == "Just a plain prompt."
 
 
-def test_load_agent_body_missing_file(tmp_path: Path) -> None:
-    body = load_agent_body(tmp_path / "nonexistent.md")
-    assert body == ""
+def test_load_agent_body_missing_file_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match=r"Missing required AGENT\.md"):
+        load_agent_body(tmp_path / "nonexistent.md")
 
 
 def test_load_agent_body_frontmatter_only(tmp_path: Path) -> None:

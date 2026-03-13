@@ -69,9 +69,12 @@ def load_agent_info(agent_md: Path, *, agent_name: str) -> AgentInfo:
 
 def load_agent_body(agent_md: Path) -> str:
     """Load the markdown body of an AGENT.md, stripping frontmatter if present."""
-    if not agent_md.exists():
-        return ""
-    return extract_body(agent_md.read_text())
+    try:
+        return extract_body(agent_md.read_text())
+    except FileNotFoundError:
+        raise FileNotFoundError(f"Missing required AGENT.md: {agent_md}") from None
+    except OSError as e:
+        raise OSError(f"Could not read AGENT.md at {agent_md}: {e}") from e
 
 
 def build_agents_prompt(

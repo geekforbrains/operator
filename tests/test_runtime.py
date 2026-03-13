@@ -20,6 +20,7 @@ from operator_ai.main import (
     create_transports,
     resolve_allowed_agents,
 )
+from operator_ai.main.startup import _validate_required_prompts
 from operator_ai.store import Store
 from operator_ai.transport.base import IncomingMessage, MessageContext, Transport
 
@@ -197,6 +198,26 @@ def test_create_transports_uses_normalized_transport_config(monkeypatch, tmp_pat
     assert isinstance(settings, dict)
     assert settings["inject_users_into_prompt"] is False
     assert settings["inject_channels_into_prompt"] is True
+
+
+def test_validate_required_prompts_fails_when_agent_prompt_missing(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    system_md = config.system_prompt_path()
+    system_md.parent.mkdir(parents=True, exist_ok=True)
+    system_md.write_text("# System")
+
+    with pytest.raises(FileNotFoundError, match=r"Missing required AGENT\.md"):
+        _validate_required_prompts(config)
+
+
+def test_validate_required_prompts_passes_when_required_prompts_exist(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.system_prompt_path().write_text("# System")
+    agent_md = config.agent_prompt_path("operator")
+    agent_md.parent.mkdir(parents=True, exist_ok=True)
+    agent_md.write_text("---\ndescription: Operator\n---\n\nYou are the operator.")
+
+    _validate_required_prompts(config)
 
 
 # ── ConversationRuntime ────────────────────────────────────────────

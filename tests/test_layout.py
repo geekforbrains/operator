@@ -139,19 +139,17 @@ def test_ensure_user_memory_idempotent(tmp_path: Path) -> None:
     assert (op_dir / "memory" / "users" / "gavin" / "rules").is_dir()
 
 
-# ── AGENT.md creation ──────────────────────────────────────────
+# ── AGENT.md handling ──────────────────────────────────────────
 
 
-def test_ensure_layout_creates_agent_md(tmp_path: Path) -> None:
+def test_ensure_layout_does_not_create_agent_md(tmp_path: Path) -> None:
     op_dir = tmp_path / ".operator"
     config = _make_config(op_dir, "hermy")
 
     ensure_layout(config)
 
     agent_md = op_dir / "agents" / "hermy" / "AGENT.md"
-    assert agent_md.exists()
-    content = agent_md.read_text()
-    assert "name: hermy" in content
+    assert not agent_md.exists()
 
 
 def test_ensure_layout_does_not_overwrite_agent_md(tmp_path: Path) -> None:

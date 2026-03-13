@@ -18,6 +18,7 @@ from operator_ai.log_context import setup_logging
 from operator_ai.main.dispatcher import Dispatcher
 from operator_ai.main.runtime import RuntimeManager
 from operator_ai.memory import MemoryIndex, MemoryStore, reindex_diff
+from operator_ai.prompts import load_agent_prompt, load_system_prompt
 from operator_ai.store import Store, get_store, reset_store
 from operator_ai.tools.web import close_session
 from operator_ai.transport.base import Transport
@@ -71,6 +72,13 @@ def _acquire_lock(base_dir: Path) -> int:
     return fd
 
 
+def _validate_required_prompts(config: Config) -> None:
+    """Fail fast when required authored prompt files are missing or unreadable."""
+    load_system_prompt(config.system_prompt_path())
+    for agent_name in config.agents:
+        load_agent_prompt(config, agent_name)
+
+
 _SWEEP_INTERVAL = 3600  # seconds — sweep expired memories once per hour
 
 
@@ -111,6 +119,10 @@ async def async_main() -> None:
     try:
         # Bootstrap directory layout
         ensure_layout(config)
+        try:
+            _validate_required_prompts(config)
+        except (FileNotFoundError, OSError) as e:
+            raise SystemExit(str(e)) from None
 
         if not any(a.transport for a in config.agents.values()):
             logger.error("No transports configured in %s", config.base_dir / "operator.yaml")

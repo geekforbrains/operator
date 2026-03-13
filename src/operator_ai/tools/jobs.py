@@ -3,8 +3,9 @@
 Each tool has explicit typed parameters so the agent never composes raw
 YAML frontmatter.  The tools assemble the job file internally.
 
-Jobs live at ``jobs/<name>/JOB.md``.  Hook scripts default to
-``scripts/prerun.sh`` and ``scripts/postrun.sh`` inside the job directory.
+Jobs live at ``jobs/<name>/JOB.md``. Hook scripts use explicit relative
+paths, with ``scripts/prerun.sh`` and ``scripts/postrun.sh`` as the
+recommended convention.
 """
 
 from __future__ import annotations
@@ -46,13 +47,19 @@ def _validate_agent(agent: str) -> str | None:
     return None
 
 
+def _normalize_hook_path(path: str) -> str:
+    return path.strip()
+
+
 def _validate_hook_path(job_dir: Path, path: str, label: str) -> str | None:
-    """Return an error string if a hook path escapes the job directory."""
+    """Return an error string if a hook path is invalid for this job."""
     if not path:
         return None
     p = Path(path)
     if p.is_absolute():
-        return f"[error: {label} path must be relative: {path!r}]"
+        return f"[error: {label} must be a relative path: {path!r}]"
+    if not p.name:
+        return f"[error: {label} must point to a runnable script file: {path!r}]"
     resolved = (job_dir / p).resolve()
     try:
         resolved.relative_to(job_dir.resolve())
@@ -62,7 +69,7 @@ def _validate_hook_path(job_dir: Path, path: str, label: str) -> str | None:
 
 
 def _ensure_hook_script(job_dir: Path, path: str, hook_name: str, job_name: str) -> str | None:
-    """Create a placeholder hook script if it doesn't exist. Returns error or None."""
+    """Create a placeholder hook script at the configured path if it doesn't exist."""
     if not path:
         return None
     full_path = job_dir / path
@@ -146,13 +153,10 @@ def _write_job_file(
     model: str,
     max_iterations: int,
     enabled: bool,
-    prerun: bool,
-    postrun: bool,
+    prerun: str,
+    postrun: str,
 ) -> None:
     """Build and write JOB.md plus placeholder hook scripts."""
-    prerun_path = DEFAULT_PRERUN if prerun else ""
-    postrun_path = DEFAULT_POSTRUN if postrun else ""
-
     content = _build_job_file(
         name=name,
         schedule=schedule,
@@ -162,14 +166,14 @@ def _write_job_file(
         model=model,
         max_iterations=max_iterations,
         enabled=enabled,
-        prerun=prerun_path,
-        postrun=postrun_path,
+        prerun=prerun,
+        postrun=postrun,
     )
 
     job_dir.mkdir(parents=True, exist_ok=True)
     (job_dir / "JOB.md").write_text(content)
-    _ensure_hook_script(job_dir, prerun_path, "prerun", name)
-    _ensure_hook_script(job_dir, postrun_path, "postrun", name)
+    _ensure_hook_script(job_dir, prerun, "prerun", name)
+    _ensure_hook_script(job_dir, postrun, "postrun", name)
 
 
 # ---------------------------------------------------------------------------
@@ -191,8 +195,8 @@ async def create_job(
     model: str = "",
     max_iterations: int = 0,
     enabled: bool = True,
-    prerun: bool = False,
-    postrun: bool = False,
+    prerun: str = "",
+    postrun: str = "",
 ) -> str:
     """Create a scheduled job.
 
@@ -205,8 +209,8 @@ async def create_job(
         model: Model override in litellm format (omit for agent default).
         max_iterations: Override max tool-call iterations (0 = agent default). Increase for complex multi-step jobs.
         enabled: Whether the job is active (default true).
-        prerun: Create a prerun gate script at scripts/prerun.sh. Non-zero exit skips the run. Stdout is injected into the prompt as context.
-        postrun: Create a postrun script at scripts/postrun.sh. Receives agent output on stdin. Non-zero exit marks the run failed.
+        prerun: Relative path to a runnable prerun script inside the job directory. Leave empty to disable. Recommended convention: scripts/prerun.sh. Stdout is injected into the prompt as context.
+        postrun: Relative path to a runnable postrun script inside the job directory. Leave empty to disable. Recommended convention: scripts/postrun.sh. Receives agent output on stdin.
     """
     err = _validate_job_inputs(name, schedule, prompt, agent)
     if err:
@@ -217,6 +221,13 @@ async def create_job(
         return err
     if job_dir.exists():
         return f"[error: job '{name}' already exists. Use update_job to modify.]"
+
+    prerun = _normalize_hook_path(prerun)
+    postrun = _normalize_hook_path(postrun)
+    if err := _validate_hook_path(job_dir, prerun, "prerun"):
+        return err
+    if err := _validate_hook_path(job_dir, postrun, "postrun"):
+        return err
 
     _write_job_file(
         job_dir,
@@ -249,8 +260,8 @@ async def update_job(
     model: str = "",
     max_iterations: int = 0,
     enabled: bool = True,
-    prerun: bool = False,
-    postrun: bool = False,
+    prerun: str = "",
+    postrun: str = "",
 ) -> str:
     """Update a scheduled job (full replace).
 
@@ -263,8 +274,8 @@ async def update_job(
         model: Model override in litellm format.
         max_iterations: Override max iterations (0 = agent default).
         enabled: Whether the job is active.
-        prerun: Enable a prerun gate script at scripts/prerun.sh.
-        postrun: Enable a postrun script at scripts/postrun.sh.
+        prerun: Relative path to a runnable prerun script inside the job directory. Leave empty to disable. Recommended convention: scripts/prerun.sh.
+        postrun: Relative path to a runnable postrun script inside the job directory. Leave empty to disable. Recommended convention: scripts/postrun.sh.
     """
     err = _validate_job_inputs(name, schedule, prompt, agent)
     if err:
@@ -275,6 +286,13 @@ async def update_job(
         return err
     if not job_dir.exists():
         return f"[error: job '{name}' not found]"
+
+    prerun = _normalize_hook_path(prerun)
+    postrun = _normalize_hook_path(postrun)
+    if err := _validate_hook_path(job_dir, prerun, "prerun"):
+        return err
+    if err := _validate_hook_path(job_dir, postrun, "postrun"):
+        return err
 
     _write_job_file(
         job_dir,

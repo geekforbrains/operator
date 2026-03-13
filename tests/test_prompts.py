@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from operator_ai.agent import AgentInfo
 from operator_ai.config import Config
 from operator_ai.memory import MemoryStore
-from operator_ai.prompts import CACHE_BOUNDARY, assemble_system_prompt
+from operator_ai.prompts import CACHE_BOUNDARY, assemble_system_prompt, load_system_prompt
 from operator_ai.run_prompt import ChatEnvelope, JobEnvelope, build_agent_system_prompt
 from operator_ai.transport.base import MessageContext
 
@@ -44,6 +46,11 @@ def test_prompt_ordering_system_then_agent(monkeypatch) -> None:
         available_agents=[],
     )
     assert prompt.startswith("# System\n\n# Agent\n\noperator")
+
+
+def test_load_system_prompt_missing_file_raises(tmp_path: Path) -> None:
+    with pytest.raises(FileNotFoundError, match=r"Missing required SYSTEM\.md"):
+        load_system_prompt(tmp_path / "SYSTEM.md")
 
 
 def test_skills_appear_in_stable_prefix(monkeypatch) -> None:
