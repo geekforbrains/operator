@@ -6,6 +6,7 @@ from textwrap import dedent
 
 from operator_ai.config import Config
 from operator_ai.job import Job, execute_job, find_job, scan_jobs
+from operator_ai.job.runner import JobRunner, run_hook
 from operator_ai.memory import MemoryStore
 from operator_ai.message_timestamps import MESSAGE_CREATED_AT_KEY
 from operator_ai.run_prompt import JobEnvelope, build_agent_system_prompt
@@ -700,3 +701,260 @@ def test_build_job_file_omits_empty_optional_fields() -> None:
     assert "hooks:" not in content
     assert "prerun:" not in content
     assert "postrun:" not in content
+
+
+# ---------------------------------------------------------------------------
+# Hook execution
+# ---------------------------------------------------------------------------
+
+
+def test_run_hook_skips_when_not_configured() -> None:
+    job = Job(name="j", description="", schedule="* * * * *", prompt="", path=Path("/tmp/j/JOB.md"))
+    code, output = asyncio.run(run_hook(job, "prerun"))
+    assert code == 0
+    assert output == ""
+
+
+def test_run_hook_rejects_absolute_path(tmp_path: Path) -> None:
+    job = Job(
+        name="j",
+        description="",
+        schedule="* * * * *",
+        prompt="",
+        path=tmp_path / "j" / "JOB.md",
+        hooks={"prerun": "/etc/passwd"},
+    )
+    code, output = asyncio.run(run_hook(job, "prerun"))
+    assert code == 1
+    assert "invalid" in output
+
+
+def test_run_hook_rejects_path_traversal(tmp_path: Path) -> None:
+    job = Job(
+        name="j",
+        description="",
+        schedule="* * * * *",
+        prompt="",
+        path=tmp_path / "j" / "JOB.md",
+        hooks={"prerun": "../escape.sh"},
+    )
+    code, output = asyncio.run(run_hook(job, "prerun"))
+    assert code == 1
+    assert "invalid" in output
+
+
+def test_run_hook_executes_script(tmp_path: Path) -> None:
+    job_dir = tmp_path / "j"
+    job_dir.mkdir()
+    script = job_dir / "run.sh"
+    script.write_text("#!/bin/bash\necho hello from hook")
+    script.chmod(0o755)
+
+    job = Job(
+        name="j",
+        description="",
+        schedule="* * * * *",
+        prompt="",
+        path=job_dir / "JOB.md",
+        hooks={"prerun": "run.sh"},
+    )
+    code, output = asyncio.run(run_hook(job, "prerun"))
+    assert code == 0
+    assert "hello from hook" in output
+
+
+def test_run_hook_timeout(tmp_path: Path) -> None:
+    job_dir = tmp_path / "j"
+    job_dir.mkdir()
+    script = job_dir / "slow.sh"
+    script.write_text("#!/bin/bash\nsleep 60")
+    script.chmod(0o755)
+
+    job = Job(
+        name="j",
+        description="",
+        schedule="* * * * *",
+        prompt="",
+        path=job_dir / "JOB.md",
+        hooks={"prerun": "slow.sh"},
+    )
+    code, output = asyncio.run(run_hook(job, "prerun", timeout=1))
+    assert code == 1
+    assert "timed out" in output
+
+
+def test_run_hook_receives_env_vars(tmp_path: Path) -> None:
+    job_dir = tmp_path / "j"
+    job_dir.mkdir()
+    script = job_dir / "env.sh"
+    script.write_text("#!/bin/bash\necho $JOB_NAME $OPERATOR_AGENT")
+    script.chmod(0o755)
+
+    job = Job(
+        name="my-job",
+        description="",
+        schedule="* * * * *",
+        prompt="",
+        path=job_dir / "JOB.md",
+        hooks={"prerun": "env.sh"},
+    )
+    code, output = asyncio.run(run_hook(job, "prerun", agent_name="operator"))
+    assert code == 0
+    assert "my-job" in output
+    assert "operator" in output
+
+
+def test_run_hook_passes_stdin(tmp_path: Path) -> None:
+    job_dir = tmp_path / "j"
+    job_dir.mkdir()
+    script = job_dir / "cat.sh"
+    script.write_text("#!/bin/bash\ncat")
+    script.chmod(0o755)
+
+    job = Job(
+        name="j",
+        description="",
+        schedule="* * * * *",
+        prompt="",
+        path=job_dir / "JOB.md",
+        hooks={"postrun": "cat.sh"},
+    )
+    code, output = asyncio.run(run_hook(job, "postrun", stdin_data="agent output"))
+    assert code == 0
+    assert "agent output" in output
+
+
+# ---------------------------------------------------------------------------
+# JobRunner
+# ---------------------------------------------------------------------------
+
+
+def _make_runner(tmp_path: Path, *, store: FakeStore | None = None) -> JobRunner:
+    config = Config(
+        defaults={"models": ["test/model"]},
+        agents={"operator": {}},
+    )
+    config.set_base_dir(tmp_path)
+    runner = JobRunner(
+        config=config,
+        transports={},
+        store=store or FakeStore(),
+    )
+    return runner
+
+
+def test_tick_fires_matching_job(monkeypatch, tmp_path: Path) -> None:
+    """A matching cron job is added to the queue and marked running."""
+    jobs_dir = tmp_path / "jobs"
+    _write_job(
+        jobs_dir,
+        "every-minute",
+        dedent("""\
+        ---
+        schedule: "* * * * *"
+        agent: operator
+        enabled: true
+        ---
+        Do it.
+    """),
+    )
+
+    runner = _make_runner(tmp_path)
+    # Stub _agent_worker so the queue isn't consumed during the tick
+    monkeypatch.setattr(runner, "_agent_worker", lambda _name: asyncio.sleep(999))
+
+    asyncio.run(runner._tick())
+    assert "every-minute" in runner._running
+    assert "operator" in runner._agent_queues
+    assert runner._agent_queues["operator"].qsize() == 1
+
+
+def test_tick_skips_disabled_job(tmp_path: Path) -> None:
+    jobs_dir = tmp_path / "jobs"
+    _write_job(jobs_dir, "disabled", JOB_MD_DISABLED)
+
+    runner = _make_runner(tmp_path)
+
+    asyncio.run(runner._tick())
+    assert "disabled-job" not in runner._running
+    assert len(runner._agent_queues) == 0
+
+
+def test_tick_increments_skip_count_when_running(tmp_path: Path) -> None:
+    """When a job is already running, tick increments skip_count."""
+    jobs_dir = tmp_path / "jobs"
+    _write_job(
+        jobs_dir,
+        "every-minute",
+        dedent("""\
+        ---
+        schedule: "* * * * *"
+        agent: operator
+        enabled: true
+        ---
+        Do it.
+    """),
+    )
+
+    store = FakeStore()
+    runner = _make_runner(tmp_path, store=store)
+    runner._running.add("every-minute")
+
+    asyncio.run(runner._tick())
+    assert store.state.skip_count == 1
+
+    # Second tick increments again
+    asyncio.run(runner._tick())
+    assert store.state.skip_count == 2
+
+
+def test_tick_queues_multiple_jobs_for_same_agent(monkeypatch, tmp_path: Path) -> None:
+    """Multiple matching jobs for the same agent go into the same queue."""
+    jobs_dir = tmp_path / "jobs"
+    _write_job(
+        jobs_dir,
+        "job-a",
+        dedent("""\
+        ---
+        schedule: "* * * * *"
+        agent: operator
+        enabled: true
+        ---
+        Job A.
+    """),
+    )
+    _write_job(
+        jobs_dir,
+        "job-b",
+        dedent("""\
+        ---
+        schedule: "* * * * *"
+        agent: operator
+        enabled: true
+        ---
+        Job B.
+    """),
+    )
+
+    runner = _make_runner(tmp_path)
+    monkeypatch.setattr(runner, "_agent_worker", lambda _name: asyncio.sleep(999))
+    asyncio.run(runner._tick())
+
+    assert runner._agent_queues["operator"].qsize() == 2
+    assert "job-a" in runner._running
+    assert "job-b" in runner._running
+
+
+def test_runner_stop_cleans_up(tmp_path: Path) -> None:
+    runner = _make_runner(tmp_path)
+
+    async def run() -> None:
+        runner.start()
+        assert runner._loop_task is not None
+        await runner.stop()
+
+    asyncio.run(run())
+    assert runner._loop_task is None
+    assert len(runner._agent_workers) == 0
+    assert len(runner._agent_queues) == 0
+    assert len(runner._running) == 0
