@@ -5,7 +5,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
-import operator_ai.agent as agent_module
+import operator_ai.agent.loop as agent_module
 from operator_ai.agent import run_agent
 from operator_ai.config import Config
 from operator_ai.message_timestamps import attach_message_created_at
@@ -60,8 +60,8 @@ def test_run_agent_renders_user_message_timestamp_in_live_request(
         captured["messages"] = kwargs["messages"]
         return _FakeResponse("done")
 
-    monkeypatch.setattr("operator_ai.agent.tool_registry.get_tools", lambda: [])
-    monkeypatch.setattr("operator_ai.agent.litellm.acompletion", fake_acompletion)
+    monkeypatch.setattr("operator_ai.agent.loop.tool_registry.get_tools", lambda: [])
+    monkeypatch.setattr("operator_ai.agent.loop.litellm.acompletion", fake_acompletion)
 
     # Set user context with timezone for timestamp rendering
     set_user_context(UserContext(username="test", roles=[], timezone="America/Vancouver"))
@@ -107,8 +107,8 @@ def test_run_agent_keeps_anthropic_system_cache_boundary_stable(
         captured["messages"] = kwargs["messages"]
         return _FakeResponse("done")
 
-    monkeypatch.setattr("operator_ai.agent.tool_registry.get_tools", lambda: [])
-    monkeypatch.setattr("operator_ai.agent.litellm.acompletion", fake_acompletion)
+    monkeypatch.setattr("operator_ai.agent.loop.tool_registry.get_tools", lambda: [])
+    monkeypatch.setattr("operator_ai.agent.loop.litellm.acompletion", fake_acompletion)
 
     asyncio.run(
         run_agent(
@@ -151,10 +151,10 @@ def test_run_agent_maps_thinking_to_reasoning_effort_when_supported(
         return _FakeResponse("done")
 
     agent_module._supports_reasoning_effort.cache_clear()
-    monkeypatch.setattr("operator_ai.agent.tool_registry.get_tools", lambda: [])
-    monkeypatch.setattr("operator_ai.agent.litellm.acompletion", fake_acompletion)
+    monkeypatch.setattr("operator_ai.agent.loop.tool_registry.get_tools", lambda: [])
+    monkeypatch.setattr("operator_ai.agent.loop.litellm.acompletion", fake_acompletion)
     monkeypatch.setattr(
-        "operator_ai.agent.litellm.get_supported_openai_params",
+        "operator_ai.agent.loop.litellm.get_supported_openai_params",
         lambda *_args, **_kwargs: ["reasoning_effort"],
     )
 
@@ -191,10 +191,10 @@ def test_run_agent_omits_reasoning_effort_for_anthropic_when_thinking_off(
         return _FakeResponse("done")
 
     agent_module._supports_reasoning_effort.cache_clear()
-    monkeypatch.setattr("operator_ai.agent.tool_registry.get_tools", lambda: [])
-    monkeypatch.setattr("operator_ai.agent.litellm.acompletion", fake_acompletion)
+    monkeypatch.setattr("operator_ai.agent.loop.tool_registry.get_tools", lambda: [])
+    monkeypatch.setattr("operator_ai.agent.loop.litellm.acompletion", fake_acompletion)
     monkeypatch.setattr(
-        "operator_ai.agent.litellm.get_supported_openai_params",
+        "operator_ai.agent.loop.litellm.get_supported_openai_params",
         lambda *_args, **_kwargs: ["reasoning_effort"],
     )
 
@@ -233,16 +233,16 @@ def test_run_agent_routes_openai_tool_reasoning_calls_through_responses_bridge(
     agent_module._supports_reasoning_effort.cache_clear()
     agent_module._get_llm_provider.cache_clear()
     monkeypatch.setattr(
-        "operator_ai.agent.tool_registry.get_tools",
+        "operator_ai.agent.loop.tool_registry.get_tools",
         lambda: [ToolDef(_fake_tool, "Echo the query back")],
     )
-    monkeypatch.setattr("operator_ai.agent.litellm.acompletion", fake_acompletion)
+    monkeypatch.setattr("operator_ai.agent.loop.litellm.acompletion", fake_acompletion)
     monkeypatch.setattr(
-        "operator_ai.agent.litellm.get_supported_openai_params",
+        "operator_ai.agent.loop.litellm.get_supported_openai_params",
         lambda *_args, **_kwargs: ["reasoning_effort", "tools"],
     )
     monkeypatch.setattr(
-        "operator_ai.agent.litellm.get_llm_provider",
+        "operator_ai.agent.loop.litellm.get_llm_provider",
         lambda *_args, **_kwargs: ("gpt-5.4", "openai", None, None),
     )
 
@@ -288,10 +288,10 @@ def test_run_agent_fallback_omits_reasoning_effort_and_sanitizes_history(
         return ["max_tokens"]
 
     agent_module._supports_reasoning_effort.cache_clear()
-    monkeypatch.setattr("operator_ai.agent.tool_registry.get_tools", lambda: [])
-    monkeypatch.setattr("operator_ai.agent.litellm.acompletion", fake_acompletion)
+    monkeypatch.setattr("operator_ai.agent.loop.tool_registry.get_tools", lambda: [])
+    monkeypatch.setattr("operator_ai.agent.loop.litellm.acompletion", fake_acompletion)
     monkeypatch.setattr(
-        "operator_ai.agent.litellm.get_supported_openai_params",
+        "operator_ai.agent.loop.litellm.get_supported_openai_params",
         fake_supported_params,
     )
 
@@ -356,8 +356,8 @@ def test_run_agent_falls_back_on_unusable_empty_model_response(
             return _EmptyResponse()
         return _FakeResponse("done")
 
-    monkeypatch.setattr("operator_ai.agent.tool_registry.get_tools", lambda: [])
-    monkeypatch.setattr("operator_ai.agent.litellm.acompletion", fake_acompletion)
+    monkeypatch.setattr("operator_ai.agent.loop.tool_registry.get_tools", lambda: [])
+    monkeypatch.setattr("operator_ai.agent.loop.litellm.acompletion", fake_acompletion)
 
     with caplog.at_level(logging.WARNING, logger="operator.agent"):
         result = asyncio.run(

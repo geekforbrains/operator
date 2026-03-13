@@ -12,7 +12,7 @@ from typing import Any
 
 from croniter import croniter
 
-from operator_ai.agent_runtime import configure_agent_tool_context
+from operator_ai.agent.runtime import configure_agent_tool_context
 from operator_ai.config import Config
 from operator_ai.frontmatter import extract_body, parse_frontmatter
 from operator_ai.job_specs import scan_job_specs

@@ -15,8 +15,7 @@ from pathlib import Path
 
 # Import tools to trigger registration
 import operator_ai.tools  # noqa: F401
-from operator_ai.agent import run_agent
-from operator_ai.agent_runtime import configure_agent_tool_context
+from operator_ai.agent import configure_agent_tool_context, run_agent
 from operator_ai.config import Config, ConfigError, RoleConfig, load_config
 from operator_ai.jobs import JobRunner
 from operator_ai.layout import ensure_layout

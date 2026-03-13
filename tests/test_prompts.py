@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from operator_ai.agents import AgentInfo
+from operator_ai.agent import AgentInfo
 from operator_ai.config import Config
 from operator_ai.memory import MemoryStore
 from operator_ai.prompts import CACHE_BOUNDARY, assemble_system_prompt

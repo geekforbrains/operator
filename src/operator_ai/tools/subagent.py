@@ -8,7 +8,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from operator_ai.agent_runtime import configure_agent_tool_context, resolve_base_dir
+from operator_ai.agent.runtime import configure_agent_tool_context, resolve_base_dir
 from operator_ai.config import Config, ThinkingLevel
 from operator_ai.log_context import get_run_context, new_run_id, set_run_context
 from operator_ai.memory import MemoryStore

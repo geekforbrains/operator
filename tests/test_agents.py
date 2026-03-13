@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from operator_ai.agents import (
+from operator_ai.agent import (
     AgentInfo,
     build_agents_prompt,
     load_agent_body,

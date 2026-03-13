@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 import litellm
 
-from operator_ai.agent_runtime import resolve_base_dir
+from operator_ai.agent.runtime import resolve_base_dir
 from operator_ai.config import Config, ThinkingLevel, ensure_shared_symlink
 from operator_ai.context import prepare_context
 from operator_ai.memory import MemoryStore
@@ -401,20 +401,17 @@ async def run_agent(
                 result = f"[error: unknown tool '{func_name}']"
                 logger.warning("%s unknown tool: %s", step, func_name)
             else:
-                result = ""
-
-                if not result:
-                    logger.info("%s tool %s(%s)", step, func_name, truncate(str(args), 150))
-                    try:
-                        raw_result = await tool_def.func(**args)
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as e:
-                        result = f"[error: {e}]"
-                        logger.error("%s tool %s failed: %s", step, func_name, e)
-                    else:
-                        result = _normalize_tool_result(raw_result)
-                        logger.info("%s tool %s → %d chars", step, func_name, len(result))
+                logger.info("%s tool %s(%s)", step, func_name, truncate(str(args), 150))
+                try:
+                    raw_result = await tool_def.func(**args)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    result = f"[error: {e}]"
+                    logger.error("%s tool %s failed: %s", step, func_name, e)
+                else:
+                    result = _normalize_tool_result(raw_result)
+                    logger.info("%s tool %s → %d chars", step, func_name, len(result))
 
             messages.append(
                 {

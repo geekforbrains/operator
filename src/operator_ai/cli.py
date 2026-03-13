@@ -22,7 +22,7 @@ from rich.table import Table
 from rich.text import Text
 
 import operator_ai.tools  # noqa: F401
-from operator_ai.agents import load_configured_agents
+from operator_ai.agent import load_configured_agents
 from operator_ai.config import LOGS_DIR, OPERATOR_DIR, ConfigError, load_config
 from operator_ai.frontmatter import rewrite_frontmatter
 from operator_ai.job_specs import find_job_spec, scan_job_specs
