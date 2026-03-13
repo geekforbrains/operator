@@ -160,7 +160,7 @@ def test_create_transports_uses_normalized_transport_config(monkeypatch, tmp_pat
         captured["store"] = store
         return object()
 
-    monkeypatch.setattr("operator_ai.main.create_transport", fake_create_transport)
+    monkeypatch.setattr("operator_ai.main.startup.create_transport", fake_create_transport)
 
     config = Config(
         defaults={"models": ["test/m"]},
@@ -343,7 +343,9 @@ def test_stop_signal_cancels_active_conversation(
         def fake_system_prompt(*_args: Any, **_kwargs: Any) -> str:
             return "system"
 
-        monkeypatch.setattr("operator_ai.main.build_agent_system_prompt", fake_system_prompt)
+        monkeypatch.setattr(
+            "operator_ai.main.dispatcher.build_agent_system_prompt", fake_system_prompt
+        )
 
         started = asyncio.Event()
 
@@ -352,7 +354,7 @@ def test_stop_signal_cancels_active_conversation(
             await asyncio.sleep(60)
             return ""
 
-        monkeypatch.setattr("operator_ai.main.run_agent", fake_run_agent)
+        monkeypatch.setattr("operator_ai.main.dispatcher.run_agent", fake_run_agent)
 
         first = _message("hello", message_id="1", root_message_id="1")
         task = asyncio.create_task(dispatcher.handle_message(first))
@@ -387,7 +389,9 @@ def test_stop_words_require_exact_match(
         def fake_system_prompt(*_args: Any, **_kwargs: Any) -> str:
             return "system"
 
-        monkeypatch.setattr("operator_ai.main.build_agent_system_prompt", fake_system_prompt)
+        monkeypatch.setattr(
+            "operator_ai.main.dispatcher.build_agent_system_prompt", fake_system_prompt
+        )
 
         started = asyncio.Event()
         allow_finish = asyncio.Event()
@@ -397,7 +401,7 @@ def test_stop_words_require_exact_match(
             await allow_finish.wait()
             return ""
 
-        monkeypatch.setattr("operator_ai.main.run_agent", fake_run_agent)
+        monkeypatch.setattr("operator_ai.main.dispatcher.run_agent", fake_run_agent)
 
         first = _message("hello", message_id="1", root_message_id="1")
         task = asyncio.create_task(dispatcher.handle_message(first))
@@ -432,13 +436,15 @@ def test_dispatch_replies_in_the_inbound_thread(
         def fake_system_prompt(*_args: Any, **_kwargs: Any) -> str:
             return "system"
 
-        monkeypatch.setattr("operator_ai.main.build_agent_system_prompt", fake_system_prompt)
+        monkeypatch.setattr(
+            "operator_ai.main.dispatcher.build_agent_system_prompt", fake_system_prompt
+        )
 
         async def fake_run_agent(**kwargs: Any) -> str:
             await kwargs["on_message"]("Threaded reply")
             return ""
 
-        monkeypatch.setattr("operator_ai.main.run_agent", fake_run_agent)
+        monkeypatch.setattr("operator_ai.main.dispatcher.run_agent", fake_run_agent)
 
         await dispatcher.handle_message(_message("hello", message_id="1", root_message_id="1"))
 
