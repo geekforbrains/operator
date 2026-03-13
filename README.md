@@ -5,7 +5,7 @@
 <h1 align="center">🐒 Operator</h1>
 <p align="center"><strong>Agents have joined the chat.</strong></p>
 
-Operator deploys autonomous AI agents into your team's chat — Slack today, more platforms coming. Define agents in markdown, give them tools and permissions, and let them work alongside your team. They remember context, hand off tasks to each other, and run scheduled jobs while you sleep.
+Operator deploys autonomous AI agents into your team's chat. Slack today, more platforms coming. Define agents in markdown, give them tools and permissions, and let them work alongside your team. They remember context, hand off tasks to each other, and run scheduled jobs while you sleep.
 
 Built for teams, not just individuals. Multi-user auth, role-based access,
 isolated memories, agent-to-agent delegation, model failover — the
@@ -26,9 +26,7 @@ guidelines behind Operator.
 - **Multi-agent orchestration.** Agents delegate to each other via `spawn_agent`. A coordinator can dispatch work to a researcher, a coder, and a reviewer — each with their own prompt, tools, and permissions.
 - **Team-native.** Multi-user auth with roles. Control who can talk to which agents. Isolated per-user memories. Not a single-player toy.
 - **Markdown-driven.** Agents, jobs, and skills are markdown files with YAML frontmatter. Version them in git, review them in PRs, edit them in your editor. No dashboards, no YAML hellscapes.
-- **Time-aware request history.** User requests, job prompts, and sub-agent task messages carry their creation time into model input, rendered like `[Monday, 2026-03-09T09:22:40-07:00]` in your configured timezone without mutating the stable system prompt.
-- **Portable thinking controls.** Set `thinking: off|low|medium|high` instead of provider-specific reasoning budgets. Operator maps it when the concrete model supports reasoning and drops it safely when it does not.
-- **Model-agnostic.** Supports 100+ LLM providers out of the box. Define fallback chains so if your primary model fails or returns an unusable response, the next one picks up automatically. Failover applies to agents, jobs, and other model-backed operations.
+- **Model-agnostic.** Supports 100+ LLM providers out of the box. Define fallback chains so if your primary model fails or returns an unusable response, the next one picks up automatically.
 - **Runs on your machine.** No SaaS, no cloud dependency, no data leaving your network. Install it, run it, own it.
 
 ## Quickstart
@@ -84,9 +82,13 @@ agents:
         expand_mentions: true
 ```
 
-Transport config has three parts: `type`, `env`, and `settings`. `env` maps logical credential names to environment variable names, while `settings` covers non-secret transport behavior. For Slack, the required fields are `type`, `env.bot_token`, and `env.app_token`. Users and channels are injected into the agent prompt by default so the agent knows who and what is available without a tool call. The Slack channel list is a current snapshot refreshed on startup and channel lifecycle events, so renamed channels do not linger under old names. Override `settings.inject_users_into_prompt` or `settings.inject_channels_into_prompt` for large workspaces.
+Transport config has three parts: `type`, `env`, and `settings`.
 
-Slack is intentionally thread-scoped. Every message addressed to an agent is handled in a Slack thread session: a top-level DM or top-level channel mention starts a new thread, and later messages continue that session only when they are also addressed to the agent. Ambient channel chatter is ignored unless the agent is mentioned. If the agent needs context outside that session, it can use Slack tools like `slack_read_channel` or `slack_read_thread`.
+- `env` maps logical credential names to environment variable names
+- `settings` covers non-secret transport behavior
+- For Slack, the required fields are `type`, `env.bot_token`, and `env.app_token`
+
+Users and channels are injected into the agent prompt by default so the agent knows who and what is available without a tool call. The channel list is a current snapshot refreshed on startup and channel lifecycle events, so renamed channels don't linger under old names. Override `inject_users_into_prompt` or `inject_channels_into_prompt` for large workspaces.
 
 Add your keys to `~/.operator/.env`:
 
@@ -233,49 +235,9 @@ roles:
     agents: [operator, researcher]
 ```
 
-### System Events
-
-Transports may emit lightweight system events that are too noisy to trigger a full agent run but useful as ambient context. In the current Slack transport, this surface is reaction events. Events are buffered in memory per conversation and injected into the next user message when the agent runs.
-
-```
-<context_snapshot source="system_events">
-Recent platform events since your last response:
-
-- [3:18 AM] Reaction :thumbsup: added by Alice on message 1773310673.238109 in #general
-</context_snapshot>
-```
-
-The buffer is capped at 20 events per conversation, consecutive duplicates are suppressed, and events are drained on read. No persistence — if the process restarts, pending events are lost.
-
-Transports can also inject per-message context blocks via `get_message_context()`. For Slack, this includes the current message ID and channel ID so the agent can react to or reference the message it's responding to without an extra API call.
-
-### Slack Threading
-
-Slack conversations are intentionally thread-scoped. A top-level channel mention or top-level DM message starts a fresh session rooted at that message. Later messages continue the same Operator conversation only when they are directed at the agent in that Slack thread. In channels, that means mentioning the agent again; unmentioned human replies are treated as ambient conversation and ignored. This keeps each conversation focused and prevents the agent from jumping into every thread reply.
-
-When the agent needs context outside the addressed messages in the current session, it should reach for Slack tools like `slack_read_channel` or `slack_read_thread` rather than assuming the rest of the workspace conversation is in scope.
-
-### Reactions (Slack)
-
-Agents can add and remove emoji reactions via `slack_add_reaction` and `slack_remove_reaction`. When users react to messages the agent has seen, those reactions appear as system events in the next interaction.
-
-Slack transport tools are namespaced with a `slack_` prefix: `slack_find_users`, `slack_list_channels`, `slack_read_channel`, `slack_read_thread`, `slack_add_reaction`, `slack_remove_reaction`.
-When multiple Slack users share a display name, use `slack_find_users` and the returned `<@UID>` mention instead of relying on raw `@Name`.
-
-### Model failover
-
-`models` is a fallback chain. If the first model errors, rate limits, goes down, or returns an unusable response, the next one picks up. No downtime, no babysitting.
-
-```yaml
-defaults:
-  models:
-    - "anthropic/claude-sonnet-4-6"
-    - "openai/gpt-4.1"
-```
-
 ### Thinking
 
-Use `thinking` to request a simple reasoning level without exposing provider-specific knobs:
+Use `thinking` to request a reasoning level without exposing provider-specific knobs:
 
 ```yaml
 defaults:
@@ -298,14 +260,48 @@ agents:
     thinking: "low"
 ```
 
-Supported values:
+Supported values: `off`, `low`, `medium`, `high`.
 
-- `off`
-- `low`
-- `medium`
-- `high`
+Operator maps these to LiteLLM reasoning controls when the selected model supports them. If a fallback model does not support reasoning control, Operator omits the param and continues normally. Jobs inherit the agent's thinking level; there is no per-job thinking override.
 
-Operator maps these to LiteLLM reasoning controls when the selected model supports them. For most reasoning-capable models that means `reasoning_effort`; for Anthropic, `thinking: off` is sent by omitting the control entirely for LiteLLM compatibility. If a fallback model does not support reasoning control, Operator omits the param and continues normally. Jobs inherit the agent's thinking level; there is no per-job thinking override.
+### Model failover
+
+`models` is a fallback chain. If the first model errors, rate limits, goes down, or returns an unusable response, the next one picks up. No downtime, no babysitting.
+
+```yaml
+defaults:
+  models:
+    - "anthropic/claude-sonnet-4-6"
+    - "openai/gpt-4.1"
+```
+
+### Time-aware history
+
+User requests, job prompts, and sub-agent task messages carry their creation time into model input, rendered like `[Monday, 2026-03-09T09:22:40-07:00]` in the user's configured timezone. This keeps the agent temporally grounded without mutating the stable system prompt.
+
+### Slack
+
+Slack conversations are intentionally thread-scoped. A top-level channel mention or DM starts a fresh session rooted at that message. Later messages continue the same session only when they are directed at the agent in that thread. In channels, that means mentioning the agent again; unmentioned human replies are ignored. This keeps each conversation focused and prevents the agent from jumping into every thread reply.
+
+When the agent needs context outside the current session, it should reach for Slack tools like `slack_read_channel` or `slack_read_thread`.
+
+**Reactions.** Agents can add and remove emoji reactions via `slack_add_reaction` and `slack_remove_reaction`. When users react to messages the agent has seen, those reactions appear as system events in the next interaction.
+
+**System events.** Lightweight platform events (currently reactions) that are too noisy to trigger a full agent run but useful as ambient context. Events are buffered per conversation and injected into the next user message:
+
+```
+<context_snapshot source="system_events">
+Recent platform events since your last response:
+
+- [3:18 AM] Reaction :thumbsup: added by Alice on message 1773310673.238109 in #general
+</context_snapshot>
+```
+
+The buffer is capped at 20 events per conversation, consecutive duplicates are suppressed, and events are drained on read. No persistence — if the process restarts, pending events are lost.
+
+**Tools.** Slack transport tools are namespaced with a `slack_` prefix: `slack_find_users`, `slack_list_channels`, `slack_read_channel`, `slack_read_thread`, `slack_add_reaction`, `slack_remove_reaction`. When multiple users share a display name, use `slack_find_users` and the returned `<@UID>` mention instead of relying on raw `@Name`.
+
+**Message context.** Each inbound message includes its message ID and channel ID so the agent can react to or reference the message it's responding to without an extra API call.
 
 ## CLI
 
