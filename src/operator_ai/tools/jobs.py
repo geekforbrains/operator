@@ -319,9 +319,6 @@ async def delete_job(name: str) -> str:
     Args:
         name: Job slug to delete.
     """
-    if not name:
-        return "[error: name is required]"
-
     job_dir, err = _job_dir(name)
     if err:
         return err
@@ -339,9 +336,6 @@ async def enable_job(name: str) -> str:
     Args:
         name: Job slug to enable.
     """
-    if not name:
-        return "[error: name is required]"
-
     job_dir, err = _job_dir(name)
     if err:
         return err
@@ -361,9 +355,6 @@ async def disable_job(name: str) -> str:
     Args:
         name: Job slug to disable.
     """
-    if not name:
-        return "[error: name is required]"
-
     job_dir, err = _job_dir(name)
     if err:
         return err
