@@ -40,7 +40,8 @@ operator init
 
 - writes `operator.yaml`, `.env`, `SYSTEM.md`, and `agents/operator/AGENT.md`
 - creates the default workspace, memory, state, shared, db, jobs, skills, and logs directories
-- gives the default `operator` agent full tool and skill access
+- gives the default `operator` agent full tool/skill access and full filesystem access
+- writes built-in `permission_groups` at the bottom of `operator.yaml`
 - prompts before overwriting an existing `operator.yaml`
 
 If the `operator` script is not on your `PATH` yet right after `pip install`, use:
@@ -67,7 +68,12 @@ defaults:
 
 agents:
   operator:
+    sandbox: false
     permissions:
+      # Define groups with @groupname or tool name
+      # Example:
+      #   tools: ["@memory", "@files"]
+      #   tools: ["@memory", "read_file", "list_files"]
       tools: "*"
       skills: "*"
     transport:
@@ -80,6 +86,58 @@ agents:
         inject_channels_into_prompt: true
         inject_users_into_prompt: true
         expand_mentions: true
+
+roles:
+  guest:
+    agents: []
+
+permission_groups:
+  memory:
+    - save_rule
+    - save_note
+    - search_notes
+    - list_rules
+    - list_notes
+    - read_note
+    - forget_rule
+    - forget_note
+  files:
+    - read_file
+    - write_file
+    - list_files
+  messaging:
+    - send_message
+    - send_file
+  skills:
+    - create_skill
+    - update_skill
+    - delete_skill
+    - list_skills
+    - read_skill
+    - run_skill
+  jobs:
+    - create_job
+    - update_job
+    - delete_job
+    - enable_job
+    - disable_job
+    - list_jobs
+  state:
+    - get_state
+    - set_state
+    - append_state
+    - pop_state
+    - list_state
+    - delete_state
+  shell:
+    - run_shell
+  web:
+    - web_fetch
+  users:
+    - manage_users
+    - set_timezone
+  agents:
+    - spawn_agent
 ```
 
 Transport config has three parts: `type`, `env`, and `settings`.
@@ -89,6 +147,8 @@ Transport config has three parts: `type`, `env`, and `settings`.
 - For Slack, the required fields are `type`, `env.bot_token`, and `env.app_token`
 
 Users and channels are injected into the agent prompt by default so the agent knows who and what is available without a tool call. The channel list is a current snapshot refreshed on startup and channel lifecycle events, so renamed channels don't linger under old names. Override `inject_users_into_prompt` or `inject_channels_into_prompt` for large workspaces.
+
+The generated `permission_groups` block stays at the bottom of the file so the main runtime, model, and transport settings stay easy to scan.
 
 Add your keys to `~/.operator/.env`:
 

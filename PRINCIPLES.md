@@ -562,9 +562,10 @@ into `operator.yaml` at init time with sensible defaults. From that point the
 user owns them and can modify, split, or extend groups as needed. Individual
 tools can still be added alongside groups for granularity.
 
-When new tools are introduced in a future version, they are not automatically
-added to any group. The user adds them manually. The CLI provides a command to
-list all available tools so the user can see what is new.
+Built-in tool groups are derived from the central tool registry when the init
+scaffold is generated, so a fresh `operator init` picks up newly added built-in
+tools automatically. Existing user configs remain user-owned and are not
+rewritten on upgrade.
 
 Permissions are enforced at two layers. Only permitted tools and skills are
 injected into the agent's context, so the agent never sees what it cannot use.

@@ -32,8 +32,11 @@ def test_starter_config_contains_runtime() -> None:
 
 
 def test_starter_config_contains_permissions_examples() -> None:
-    assert '      # tools: ["@memory", "@files"]' in _STARTER_CONFIG
-    assert '      # tools: ["@memory", "web_fetch"]' in _STARTER_CONFIG
+    assert "    sandbox: false" in _STARTER_CONFIG
+    assert "      # Define groups with @groupname or tool name" in _STARTER_CONFIG
+    assert "      # Example:" in _STARTER_CONFIG
+    assert '      #   tools: ["@memory", "@files"]' in _STARTER_CONFIG
+    assert '      #   tools: ["@memory", "read_file", "list_files"]' in _STARTER_CONFIG
     assert "permission_groups:" in _STARTER_CONFIG
     assert _STARTER_CONFIG.index("roles:\n") < _STARTER_CONFIG.index("permission_groups:\n")
 
@@ -111,13 +114,16 @@ def test_init_creates_full_scaffold_and_points_user_to_manual_edits(tmp_path: Pa
     assert 'thinking: "off"' in content
     assert "max_iterations: 25" in content
     assert "hook_timeout: 30" in content
+    assert "    sandbox: false" in content
     assert "permission_groups:" in content
-    assert '      # tools: ["@memory", "@files"]' in content
+    assert "      # Define groups with @groupname or tool name" in content
+    assert '      #   tools: ["@memory", "@files"]' in content
     assert content.index("roles:\n") < content.index("permission_groups:\n")
 
     config = load_config(config_file)
     transport = config.agents["operator"].transport
     assert transport is not None
+    assert config.agents["operator"].sandbox is False
     assert transport.type == "slack"
     assert transport.env["bot_token"] == "SLACK_BOT_TOKEN"
     assert transport.env["app_token"] == "SLACK_APP_TOKEN"
