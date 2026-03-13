@@ -38,7 +38,7 @@ def build_channel_mention_patterns(
             re.compile(r"(?<!<)#" + re.escape(ch_name) + r"\b", re.IGNORECASE),
             f"<#{ch_id}>",
         )
-        for ch_name, ch_id in channel_ids.items()
+        for ch_name, ch_id in sorted(channel_ids.items(), key=lambda x: len(x[0]), reverse=True)
     ]
 
 
