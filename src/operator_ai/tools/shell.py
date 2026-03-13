@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 
+__tool_group__ = "shell"
+
 from operator_ai.tools.registry import format_process_output, tool
 from operator_ai.tools.workspace import get_workspace
 

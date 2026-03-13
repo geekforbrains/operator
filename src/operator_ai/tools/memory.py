@@ -11,6 +11,8 @@ import logging
 from datetime import datetime
 from typing import Any, Literal
 
+__tool_group__ = "memory"
+
 from operator_ai.memory import MemoryFile, MemoryStore
 from operator_ai.tools.registry import tool
 

@@ -6,6 +6,8 @@ from collections import OrderedDict
 from html.parser import HTMLParser
 from urllib.parse import urlparse
 
+__tool_group__ = "web"
+
 import aiohttp
 import trafilatura
 

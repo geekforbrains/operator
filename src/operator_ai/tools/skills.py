@@ -9,6 +9,8 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
+__tool_group__ = "skills"
+
 from operator_ai.skills import build_skill_file, scan_skills, validate_skill_name
 from operator_ai.tools.context import get_skill_filter, resolve_dir
 from operator_ai.tools.registry import safe_name, tool

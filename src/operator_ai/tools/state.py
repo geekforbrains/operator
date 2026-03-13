@@ -16,6 +16,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+__tool_group__ = "state"
+
 from operator_ai.tools.registry import tool
 
 logger = logging.getLogger("operator.tools.state")

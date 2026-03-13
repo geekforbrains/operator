@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 
+__tool_group__ = "files"
+
 from operator_ai.tools.registry import MAX_OUTPUT, tool
 from operator_ai.tools.workspace import get_workspace, is_sandboxed
 

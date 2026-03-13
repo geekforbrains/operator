@@ -7,9 +7,11 @@ import typer
 import yaml
 from rich.console import Console
 
+import operator_ai.tools  # noqa: F401
 from operator_ai.config import OPERATOR_DIR, load_config
 from operator_ai.layout import ensure_layout
 from operator_ai.prompts import load_prompt
+from operator_ai.tools.registry import get_tools
 
 console = Console()
 
@@ -41,6 +43,7 @@ def _build_starter_config(*, default_model: str = _DEFAULT_MODEL) -> str:
         },
     }
     transport_block = yaml.safe_dump(transport_data, sort_keys=False).rstrip().splitlines()
+    permission_groups = get_tools(grouped=True)
 
     lines = [
         "# Operator configuration",
@@ -68,59 +71,11 @@ def _build_starter_config(*, default_model: str = _DEFAULT_MODEL) -> str:
         "  context_ratio: 0.5",
         "  hook_timeout: 30",
         "",
-        "# Permission groups — clusters of related tools that can be referenced",
-        "# as @groupname in agent permissions. Modify, split, or extend as needed.",
-        "permission_groups:",
-        "  memory:",
-        "    - save_rule",
-        "    - save_note",
-        "    - search_notes",
-        "    - list_rules",
-        "    - list_notes",
-        "    - read_note",
-        "    - forget_rule",
-        "    - forget_note",
-        "  files:",
-        "    - read_file",
-        "    - write_file",
-        "    - list_files",
-        "  messaging:",
-        "    - send_message",
-        "    - send_file",
-        "  skills:",
-        "    - create_skill",
-        "    - update_skill",
-        "    - delete_skill",
-        "    - list_skills",
-        "    - read_skill",
-        "    - run_skill",
-        "  jobs:",
-        "    - create_job",
-        "    - update_job",
-        "    - delete_job",
-        "    - enable_job",
-        "    - disable_job",
-        "    - list_jobs",
-        "  state:",
-        "    - get_state",
-        "    - set_state",
-        "    - append_state",
-        "    - pop_state",
-        "    - delete_state",
-        "    - list_state",
-        "  shell:",
-        "    - run_shell",
-        "  web:",
-        "    - web_fetch",
-        "  users:",
-        "    - manage_users",
-        "    - set_timezone",
-        "  agents:",
-        "    - spawn_agent",
-        "",
         "agents:",
         f"  {_DEFAULT_AGENT_NAME}:",
         "    permissions:",
+        '      # tools: ["@memory", "@files"]',
+        '      # tools: ["@memory", "web_fetch"]',
         '      tools: "*"',
         '      skills: "*"',
         "    transport:",
@@ -132,8 +87,16 @@ def _build_starter_config(*, default_model: str = _DEFAULT_MODEL) -> str:
             "roles:",
             "  guest:",
             "    agents: []",
+            "",
+            "# Built-in tools grouped for use in `permissions.tools` via @group.",
+            "# Modify, split, or extend these groups as needed.",
+            "permission_groups:",
         ]
     )
+    for group_name, tools in permission_groups.items():
+        lines.append(f"  {group_name}:")
+        for tool_def in tools:
+            lines.append(f"    - {tool_def.name}")
     return "\n".join(lines) + "\n"
 
 

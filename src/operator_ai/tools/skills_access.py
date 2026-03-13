@@ -7,6 +7,8 @@ import re
 import shlex
 from pathlib import Path
 
+__tool_group__ = "skills"
+
 from operator_ai.config import ConfigError, load_config
 from operator_ai.tools.context import get_skill_filter, resolve_dir
 from operator_ai.tools.registry import MAX_OUTPUT, format_process_output, safe_name, tool

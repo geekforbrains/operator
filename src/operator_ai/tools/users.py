@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Literal
 
+__tool_group__ = "users"
+
 from operator_ai.store import get_store
 from operator_ai.tools.context import UserContext, get_user_context, set_user_context
 from operator_ai.tools.registry import tool

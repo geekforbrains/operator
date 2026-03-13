@@ -3,6 +3,8 @@ from __future__ import annotations
 import contextvars
 from typing import Any
 
+__tool_group__ = "messaging"
+
 from operator_ai.tools.files import _resolve
 from operator_ai.tools.registry import tool
 

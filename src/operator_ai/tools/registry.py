@@ -3,10 +3,23 @@ from __future__ import annotations
 import inspect
 import re
 from collections.abc import Callable
+from importlib import import_module
 from types import UnionType
 from typing import Any, Literal, Union, get_args, get_origin, get_type_hints
 
 _TOOLS: list[ToolDef] = []
+_GROUP_ORDER = (
+    "memory",
+    "files",
+    "messaging",
+    "skills",
+    "jobs",
+    "state",
+    "shell",
+    "web",
+    "users",
+    "agents",
+)
 
 MAX_OUTPUT = 16_384  # 16 KB — keeps tool results within ~4K tokens
 
@@ -42,11 +55,13 @@ class ToolDef:
         self,
         func: Callable[..., Any],
         description: str,
+        permission_group: str | None = None,
         status_label: str | Callable[[dict[str, Any]], str] | None = None,
     ):
         self.func = func
         self.name = func.__name__
         self.description = description
+        self.permission_group = permission_group
         self.status_label = status_label
         self.parameters = _build_parameters(func)
 
@@ -63,14 +78,29 @@ class ToolDef:
 
 def tool(description: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
-        _TOOLS.append(ToolDef(func, description))
+        module = import_module(func.__module__)
+        group = getattr(module, "__tool_group__", "")
+        if not group:
+            raise RuntimeError(f"{func.__module__}.{func.__name__} is missing __tool_group__")
+        _TOOLS.append(ToolDef(func, description, group))
         return func
 
     return decorator
 
 
-def get_tools() -> list[ToolDef]:
-    return list(_TOOLS)
+def get_tools(*, grouped: bool = False) -> list[ToolDef] | dict[str, list[ToolDef]]:
+    if not grouped:
+        return list(_TOOLS)
+
+    groups: dict[str, list[ToolDef]] = {}
+    for tool_def in _TOOLS:
+        groups.setdefault(tool_def.permission_group or "", []).append(tool_def)
+
+    ordered = {group: groups[group] for group in _GROUP_ORDER if group in groups}
+    extras = sorted(group for group in groups if group and group not in ordered)
+    for group in extras:
+        ordered[group] = groups[group]
+    return ordered
 
 
 # --- schema generation from type hints + docstring ---

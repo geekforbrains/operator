@@ -14,6 +14,8 @@ import shutil
 import stat
 from pathlib import Path
 
+__tool_group__ = "jobs"
+
 import yaml
 from croniter import croniter
 

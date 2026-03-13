@@ -10,6 +10,7 @@ from operator_ai.cli import app
 from operator_ai.cli.init import _STARTER_CONFIG
 from operator_ai.cli.service import _generate_plist, _generate_systemd_unit
 from operator_ai.config import load_config
+from operator_ai.tools.registry import get_tools
 
 runner = CliRunner()
 
@@ -28,6 +29,26 @@ def test_starter_config_contains_runtime() -> None:
     assert "hook_timeout: 30" in _STARTER_CONFIG
     assert "env:" in _STARTER_CONFIG
     assert "settings:" in _STARTER_CONFIG
+
+
+def test_starter_config_contains_permissions_examples() -> None:
+    assert '      # tools: ["@memory", "@files"]' in _STARTER_CONFIG
+    assert '      # tools: ["@memory", "web_fetch"]' in _STARTER_CONFIG
+    assert "permission_groups:" in _STARTER_CONFIG
+    assert _STARTER_CONFIG.index("roles:\n") < _STARTER_CONFIG.index("permission_groups:\n")
+
+
+def test_tools_registry_exposes_flat_and_grouped_views() -> None:
+    tools = get_tools()
+    grouped = get_tools(grouped=True)
+
+    assert isinstance(grouped, dict)
+    assert {t.name for t in tools} == {
+        t.name for group_tools in grouped.values() for t in group_tools
+    }
+    assert grouped["files"][0].name == "read_file"
+    assert grouped["skills"][0].name == "create_skill"
+    assert grouped["agents"][0].name == "spawn_agent"
 
 
 def test_starter_config_references_env_file() -> None:
@@ -91,6 +112,8 @@ def test_init_creates_full_scaffold_and_points_user_to_manual_edits(tmp_path: Pa
     assert "max_iterations: 25" in content
     assert "hook_timeout: 30" in content
     assert "permission_groups:" in content
+    assert '      # tools: ["@memory", "@files"]' in content
+    assert content.index("roles:\n") < content.index("permission_groups:\n")
 
     config = load_config(config_file)
     transport = config.agents["operator"].transport
