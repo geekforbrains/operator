@@ -149,9 +149,7 @@ class StatusIndicator:
             self._ticker_task = None
         if self._message_id is not None:
             try:
-                await self._transport.delete(
-                    self._channel_id, self._message_id, thread_id=self._thread_id
-                )
+                await self._transport.delete(self._channel_id, self._message_id)
             except Exception:
                 logger.debug("Failed to delete status message", exc_info=True)
             self._message_id = None
@@ -172,9 +170,7 @@ class StatusIndicator:
                 action = self._tool_label or self._next_idle()
                 text = self._format(action)
                 try:
-                    await self._transport.update(
-                        self._channel_id, self._message_id, text, thread_id=self._thread_id
-                    )
+                    await self._transport.update(self._channel_id, self._message_id, text)
                 except Exception:
                     logger.debug("Failed to update status message", exc_info=True)
         except asyncio.CancelledError:

@@ -254,9 +254,9 @@ class Dispatcher:
         self._system_events = SystemEventBuffer()
 
     def register_transport(self, transport: Transport) -> None:
-        self.transports[transport.name] = transport
+        self.transports[transport.agent_name] = transport
         transport.set_system_event_handler(
-            functools.partial(self._handle_system_event, transport.name)
+            functools.partial(self._handle_system_event, transport.agent_name)
         )
 
     async def _handle_system_event(
@@ -393,9 +393,13 @@ class Dispatcher:
             )
             self.store.ensure_conversation(conversation_id)
             self.store.ensure_system_message(conversation_id, system_prompt)
-            self.store.index_platform_message(msg.transport_name, msg.root_message_id, conversation_id)
+            self.store.index_platform_message(
+                msg.transport_name, msg.root_message_id, conversation_id
+            )
             if msg.message_id and msg.message_id != msg.root_message_id:
-                self.store.index_platform_message(msg.transport_name, msg.message_id, conversation_id)
+                self.store.index_platform_message(
+                    msg.transport_name, msg.message_id, conversation_id
+                )
             await self._run_conversation(
                 msg,
                 transport,
@@ -670,7 +674,6 @@ def create_transports(config: Config, store: Store) -> list[Transport]:
         try:
             transport = create_transport(
                 type_name=tc.type,
-                name=agent_name,
                 agent_name=agent_name,
                 env=tc.env,
                 settings=tc.settings,
@@ -813,7 +816,7 @@ async def async_main() -> None:
             def _on_done(
                 done: asyncio.Task[None],
                 *,
-                transport_name: str = transport.name,
+                transport_name: str = transport.agent_name,
             ) -> None:
                 if done.cancelled():
                     return
@@ -833,7 +836,7 @@ async def async_main() -> None:
 
             task.add_done_callback(_on_done)
             transport_tasks.append(task)
-            logger.info("Transport '%s' starting (agent: %s)", transport.name, transport.agent_name)
+            logger.info("Transport starting for agent '%s'", transport.agent_name)
 
         logger.info(
             "Operator running with %d transport(s). Ctrl+C to stop.",

@@ -460,7 +460,9 @@ async def run_job_now(
     Raises:
         ValueError: If the named job does not exist.
     """
-    job = next((candidate for candidate in scan_jobs(config.jobs_dir()) if candidate.name == name), None)
+    job = next(
+        (candidate for candidate in scan_jobs(config.jobs_dir()) if candidate.name == name), None
+    )
     if job is None:
         raise ValueError(f"job '{name}' not found")
 

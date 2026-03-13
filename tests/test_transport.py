@@ -9,7 +9,6 @@ from operator_ai.transport.slack import SlackTransport, SlackUserProfile
 
 def test_slack_message_formatting_uses_utc() -> None:
     transport = SlackTransport(
-        name="slack",
         agent_name="operator",
         bot_token="xoxb-test",
         app_token="xapp-test",
@@ -37,7 +36,6 @@ def test_slack_message_formatting_uses_utc() -> None:
 
 def test_slack_conversation_ids_are_thread_scoped_sessions() -> None:
     transport = SlackTransport(
-        name="slack",
         agent_name="operator",
         bot_token="xoxb-test",
         app_token="xapp-test",
@@ -71,14 +69,13 @@ def test_slack_conversation_ids_are_thread_scoped_sessions() -> None:
         is_private=True,
     )
 
-    assert transport.build_conversation_id(first) == "slack:slack:D123:1701.1"
+    assert transport.build_conversation_id(first) == "slack:operator:D123:1701.1"
     assert transport.build_conversation_id(reply) == transport.build_conversation_id(first)
     assert transport.build_conversation_id(second) != transport.build_conversation_id(first)
 
 
 def test_slack_prompt_extra_documents_thread_scoped_sessions() -> None:
     transport = SlackTransport(
-        name="slack",
         agent_name="operator",
         bot_token="xoxb-test",
         app_token="xapp-test",
@@ -95,7 +92,6 @@ def test_slack_prompt_extra_documents_thread_scoped_sessions() -> None:
 
 def test_slack_outbound_mentions_expand_unique_display_names() -> None:
     transport = SlackTransport(
-        name="slack",
         agent_name="operator",
         bot_token="xoxb-test",
         app_token="xapp-test",
@@ -117,7 +113,6 @@ def test_slack_outbound_mentions_expand_unique_display_names() -> None:
 
 def test_slack_outbound_mentions_skip_ambiguous_display_names() -> None:
     transport = SlackTransport(
-        name="slack",
         agent_name="operator",
         bot_token="xoxb-test",
         app_token="xapp-test",
@@ -158,7 +153,6 @@ def test_slack_outbound_mentions_skip_ambiguous_display_names() -> None:
 def test_slack_channel_snapshot_refresh_replaces_old_names(monkeypatch) -> None:
     async def _run() -> None:
         transport = SlackTransport(
-            name="slack",
             agent_name="operator",
             bot_token="xoxb-test",
             app_token="xapp-test",
@@ -252,7 +246,6 @@ def test_slack_channel_events_refresh_full_snapshot(monkeypatch) -> None:
         monkeypatch.setattr("operator_ai.transport.slack.AsyncSocketModeHandler", _FakeHandler)
 
         transport = SlackTransport(
-            name="slack",
             agent_name="operator",
             bot_token="xoxb-test",
             app_token="xapp-test",
@@ -275,27 +268,26 @@ def test_slack_channel_events_refresh_full_snapshot(monkeypatch) -> None:
         monkeypatch.setattr(transport, "_fetch_all_users", _noop)
         monkeypatch.setattr(transport, "_fetch_all_channels", _refresh_channels)
 
-        scheduled: list[asyncio.Task[None]] = []
-
-        def _capture_task(coro) -> None:
-            scheduled.append(asyncio.create_task(coro))
-
-        monkeypatch.setattr(transport, "_create_task", _capture_task)
-
         async def _on_message(msg: IncomingMessage) -> None:  # noqa: ARG001
             return None
 
         await transport.start(_on_message)
         refresh_calls.clear()
 
+        # Fire four channel events rapidly — debounce should coalesce into one refresh
         await handlers["channel_created"]({"channel": {"id": "C1", "name": "general"}}, None)  # type: ignore[operator]
         await handlers["channel_rename"]({"channel": {"id": "C1", "name": "eng"}}, None)  # type: ignore[operator]
         await handlers["channel_archive"]({"channel": "C1"}, None)  # type: ignore[operator]
         await handlers["channel_unarchive"]({"channel": "C1"}, None)  # type: ignore[operator]
 
-        await asyncio.gather(*scheduled)
+        assert refresh_calls == [], "debounce should delay the refresh"
 
-        assert refresh_calls == ["refresh", "refresh", "refresh", "refresh"]
+        # Wait for debounce to fire
+        await asyncio.sleep(transport._CHANNEL_REFRESH_DELAY + 0.1)
+        # Let the scheduled task run
+        await asyncio.sleep(0)
+
+        assert refresh_calls == ["refresh"], "rapid events should coalesce into a single refresh"
 
         await transport.stop()
 
@@ -337,7 +329,6 @@ def test_slack_channel_replies_require_mentions(monkeypatch) -> None:
         monkeypatch.setattr("operator_ai.transport.slack.AsyncSocketModeHandler", _FakeHandler)
 
         transport = SlackTransport(
-            name="slack",
             agent_name="operator",
             bot_token="xoxb-test",
             app_token="xapp-test",

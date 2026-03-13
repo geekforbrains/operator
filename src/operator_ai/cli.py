@@ -361,7 +361,9 @@ def init(
     ensure_layout(config)
 
     console.print(f"\n[bold green]Operator initialized at {result.home}[/bold green]")
-    console.print(f"Edit [bold]{result.config_file}[/bold] to review the Slack config and model defaults.")
+    console.print(
+        f"Edit [bold]{result.config_file}[/bold] to review the Slack config and model defaults."
+    )
     console.print(f"Add secrets to [bold]{result.env_file}[/bold].")
     console.print(
         "Then create an admin user: [bold]operator user add <username> --role admin slack <YOUR_SLACK_USER_ID>[/bold]"

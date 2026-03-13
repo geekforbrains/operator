@@ -148,14 +148,12 @@ def test_create_transports_uses_normalized_transport_config(monkeypatch, tmp_pat
     def fake_create_transport(
         *,
         type_name: str,
-        name: str,
         agent_name: str,
         env: dict[str, object],
         settings: dict[str, object],
         store: Store,
     ) -> object:
         captured["type_name"] = type_name
-        captured["name"] = name
         captured["agent_name"] = agent_name
         captured["env"] = env
         captured["settings"] = settings
@@ -187,7 +185,6 @@ def test_create_transports_uses_normalized_transport_config(monkeypatch, tmp_pat
 
     assert len(transports) == 1
     assert captured["type_name"] == "slack"
-    assert captured["name"] == "operator"
     assert captured["agent_name"] == "operator"
     assert captured["store"] is not None
 

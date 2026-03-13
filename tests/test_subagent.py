@@ -167,7 +167,9 @@ def test_resolve_without_config_returns_current() -> None:
     assert result is current
 
 
-def test_spawn_agent_without_explicit_target_uses_current_agent_prompt(monkeypatch, tmp_path: Path) -> None:
+def test_spawn_agent_without_explicit_target_uses_current_agent_prompt(
+    monkeypatch, tmp_path: Path
+) -> None:
     captured: dict[str, object] = {}
 
     async def fake_run_agent(**kwargs):
@@ -271,7 +273,9 @@ def test_spawn_agent_without_explicit_target_uses_current_agent_prompt(monkeypat
     assert captured["kwargs"]["base_dir"] == tmp_path
 
 
-def test_spawn_agent_reconfigures_memory_and_state_context_for_target_agent(monkeypatch, tmp_path) -> None:
+def test_spawn_agent_reconfigures_memory_and_state_context_for_target_agent(
+    monkeypatch, tmp_path
+) -> None:
     captured: dict[str, object] = {}
     store = MemoryStore(base_dir=tmp_path)
 
@@ -400,9 +404,10 @@ def test_spawn_agent_preserves_job_run_mode(monkeypatch, tmp_path: Path) -> None
     assert "- Name: nightly-sync" in captured["system_prompt"]
     assert "<prerun_output>" in captured["system_prompt"]
     assert "42 rows ready" in captured["system_prompt"]
-    assert "You are a focused sub-agent running in an ephemeral child run." not in captured[
-        "system_prompt"
-    ]
+    assert (
+        "You are a focused sub-agent running in an ephemeral child run."
+        not in captured["system_prompt"]
+    )
     assert "<additional_context>" in captured["user_message"]["content"]
 
 
@@ -491,7 +496,9 @@ class TestSpawnAgentAccessControl:
             "operator_ai.prompts.load_skills_prompt",
             lambda _skills_dir, **_kwargs: "",
         )
-        monkeypatch.setattr("operator_ai.prompts.load_configured_agents", lambda *_args, **_kwargs: [])
+        monkeypatch.setattr(
+            "operator_ai.prompts.load_configured_agents", lambda *_args, **_kwargs: []
+        )
         result = asyncio.run(spawn_agent("do research", agent="researcher"))
         assert result == "done"
 
@@ -513,7 +520,9 @@ class TestSpawnAgentAccessControl:
             "operator_ai.prompts.load_skills_prompt",
             lambda _skills_dir, **_kwargs: "",
         )
-        monkeypatch.setattr("operator_ai.prompts.load_configured_agents", lambda *_args, **_kwargs: [])
+        monkeypatch.setattr(
+            "operator_ai.prompts.load_configured_agents", lambda *_args, **_kwargs: []
+        )
         result = asyncio.run(spawn_agent("do research", agent="researcher"))
         assert result == "admin-done"
 
@@ -534,7 +543,9 @@ class TestSpawnAgentAccessControl:
             "operator_ai.prompts.load_skills_prompt",
             lambda _skills_dir, **_kwargs: "",
         )
-        monkeypatch.setattr("operator_ai.prompts.load_configured_agents", lambda *_args, **_kwargs: [])
+        monkeypatch.setattr(
+            "operator_ai.prompts.load_configured_agents", lambda *_args, **_kwargs: []
+        )
 
         # Run in a fresh context where _user_var is unset — simulates a job run
         def _run_in_clean_context() -> str:
@@ -565,6 +576,8 @@ class TestSpawnAgentAccessControl:
             "operator_ai.prompts.load_skills_prompt",
             lambda _skills_dir, **_kwargs: "",
         )
-        monkeypatch.setattr("operator_ai.prompts.load_configured_agents", lambda *_args, **_kwargs: [])
+        monkeypatch.setattr(
+            "operator_ai.prompts.load_configured_agents", lambda *_args, **_kwargs: []
+        )
         result = asyncio.run(spawn_agent("summarize this"))
         assert result == "inherited"

@@ -27,7 +27,9 @@ def load_configured_agents(config: Config) -> list[AgentInfo]:
     The configured agent key is the runtime identity and source of truth.
     `AGENT.md` contributes human-authored description text when available.
     """
-    return [load_agent_info(config.agent_prompt_path(name), agent_name=name) for name in config.agents]
+    return [
+        load_agent_info(config.agent_prompt_path(name), agent_name=name) for name in config.agents
+    ]
 
 
 def load_agent_info(agent_md: Path, *, agent_name: str) -> AgentInfo:

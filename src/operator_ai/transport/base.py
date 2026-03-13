@@ -29,7 +29,6 @@ class IncomingMessage:
     root_message_id: str
     transport_name: str
     is_private: bool = False
-    was_mentioned: bool = False
     attachments: list[Attachment] = field(default_factory=list)
     created_at: float | None = None
 
@@ -50,7 +49,6 @@ class MessageContext:
 
 
 class Transport(ABC):
-    name: str
     agent_name: str
     platform: str
 
@@ -87,7 +85,7 @@ class Transport(ABC):
 
     def build_conversation_id(self, msg: IncomingMessage) -> str:
         """Build a canonical conversation ID from an incoming message."""
-        return f"{self.platform}:{self.name}:{msg.channel_id}:{msg.root_message_id}"
+        return f"{self.platform}:{self.agent_name}:{msg.channel_id}:{msg.root_message_id}"
 
     async def resolve_channel_id(self, channel: str) -> str | None:
         """Resolve a channel name or ID to a platform channel ID."""
@@ -127,12 +125,10 @@ class Transport(ABC):
         """
         raise NotImplementedError(f"{type(self).__name__} does not support file uploads")
 
-    async def update(
-        self, channel_id: str, message_id: str, text: str, thread_id: str | None = None
-    ) -> None:
+    async def update(self, channel_id: str, message_id: str, text: str) -> None:
         """Update an existing message. No-op by default."""
 
-    async def delete(self, channel_id: str, message_id: str, thread_id: str | None = None) -> None:
+    async def delete(self, channel_id: str, message_id: str) -> None:
         """Delete a message. No-op by default."""
 
     def get_prompt_extra(self) -> str:

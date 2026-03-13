@@ -321,7 +321,9 @@ class TestBudgetEnforcement:
             patch("operator_ai.context._get_max_input_tokens", return_value=100),
             patch("operator_ai.context._token_count", side_effect=fake_token_count),
         ):
-            result = _enforce_budget(messages, model="openai/gpt-4.1", context_ratio=0.5, tools=tools)
+            result = _enforce_budget(
+                messages, model="openai/gpt-4.1", context_ratio=0.5, tools=tools
+            )
 
         assert result is messages
         assert captured == [tools]

@@ -13,6 +13,7 @@ VANCOUVER = ZoneInfo("America/Vancouver")
 # 2026-03-06 17:45:00 UTC as unix timestamp
 TS_2026_03_06_1745 = datetime(2026, 3, 6, 17, 45, tzinfo=UTC).timestamp()
 
+
 def test_build_message_timestamp_prefix_uses_configured_timezone() -> None:
     prefix = build_message_timestamp_prefix(
         VANCOUVER,

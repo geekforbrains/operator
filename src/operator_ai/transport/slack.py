@@ -78,6 +78,30 @@ def _extract_attachments(event: dict) -> list[Attachment]:
     return attachments
 
 
+def _parse_user_profile(raw_user: dict) -> SlackUserProfile | None:
+    user_id = raw_user.get("id", "")
+    if not user_id:
+        return None
+    profile = raw_user.get("profile", {}) or {}
+    display_name = (
+        profile.get("display_name")
+        or profile.get("display_name_normalized")
+        or raw_user.get("real_name")
+        or profile.get("real_name")
+        or raw_user.get("name")
+        or user_id
+    )
+    return SlackUserProfile(
+        user_id=user_id,
+        slack_name=raw_user.get("name", ""),
+        display_name=display_name,
+        real_name=raw_user.get("real_name") or profile.get("real_name", ""),
+        email=profile.get("email", ""),
+        is_bot=bool(raw_user.get("is_bot") or raw_user.get("is_app_user")),
+        is_deleted=bool(raw_user.get("deleted")),
+    )
+
+
 def _slack_ts_to_float(value: str) -> float | None:
     try:
         return float(value)
@@ -113,7 +137,6 @@ def _resolve_env_var(env_var: str, agent_name: str) -> str:
 class SlackTransport(Transport):
     def __init__(
         self,
-        name: str,
         agent_name: str,
         bot_token: str,
         app_token: str,
@@ -124,7 +147,6 @@ class SlackTransport(Transport):
         inject_users_into_prompt: bool = True,
         expand_mentions: bool = True,
     ):
-        self.name = name
         self.platform = "slack"
         self.agent_name = agent_name
         self._bot_token = bot_token
@@ -139,15 +161,19 @@ class SlackTransport(Transport):
         self._background_tasks: set[asyncio.Task] = set()
 
         self._bot_user_id: str = ""
+        self._channel_refresh_handle: asyncio.TimerHandle | None = None
 
         # In-memory caches. Users are patched incrementally; channels are
         # replaced from a fresh full snapshot on startup and channel lifecycle
         # events so the prompt-facing list stays aligned with Slack truth.
-        self._users: dict[str, str] = {}
         self._user_directory: dict[str, SlackUserProfile] = {}
         self._channels: dict[str, str] = {}
         self._channel_ids: dict[str, str] = {}
         self._channel_info: dict[str, str] = {}
+
+        # Pre-compiled mention patterns, invalidated on cache changes.
+        self._user_mention_patterns: list[tuple[re.Pattern[str], str]] | None = None
+        self._channel_mention_patterns: list[tuple[re.Pattern[str], str]] | None = None
 
     @override
     def build_conversation_id(self, msg: IncomingMessage) -> str:
@@ -157,8 +183,7 @@ class SlackTransport(Transport):
         that message. Replies in the same Slack thread reuse the root ts and
         therefore stay in the same Operator conversation.
         """
-        root_message_id = msg.root_message_id or msg.message_id
-        return f"{self.platform}:{self.name}:{msg.channel_id}:{root_message_id}"
+        return f"{self.platform}:{self.agent_name}:{msg.channel_id}:{msg.root_message_id}"
 
     @override
     async def start(self, on_message: Callable[[IncomingMessage], Awaitable[None]]) -> None:
@@ -171,7 +196,7 @@ class SlackTransport(Transport):
             # can cause duplicate processing.
             if event.get("channel_type") == "im":
                 return
-            self._create_task(self._dispatch(event, on_message, was_mentioned=True))
+            self._create_task(self._dispatch(event, on_message))
 
         @self._app.event("message")
         async def handle_message(event: dict, say):  # noqa: ARG001
@@ -189,19 +214,19 @@ class SlackTransport(Transport):
 
         @self._app.event("channel_created")
         async def handle_channel_created(event: dict, say):  # noqa: ARG001
-            self._create_task(self._fetch_all_channels())
+            self._schedule_channel_refresh()
 
         @self._app.event("channel_rename")
         async def handle_channel_rename(event: dict, say):  # noqa: ARG001
-            self._create_task(self._fetch_all_channels())
+            self._schedule_channel_refresh()
 
         @self._app.event("channel_archive")
         async def handle_channel_archive(event: dict, say):  # noqa: ARG001
-            self._create_task(self._fetch_all_channels())
+            self._schedule_channel_refresh()
 
         @self._app.event("channel_unarchive")
         async def handle_channel_unarchive(event: dict, say):  # noqa: ARG001
-            self._create_task(self._fetch_all_channels())
+            self._schedule_channel_refresh()
 
         @self._app.event("reaction_added")
         async def handle_reaction_added(event: dict, say):  # noqa: ARG001
@@ -228,11 +253,14 @@ class SlackTransport(Transport):
             logger.debug("Loaded %d Slack channels", len(self._channels))
         except Exception:
             logger.warning("Failed to load Slack channels on startup", exc_info=True)
-        logger.info("Starting Slack transport '%s'", self.name)
+        logger.info("Starting Slack transport '%s'", self.agent_name)
         await self._handler.start_async()
 
     @override
     async def stop(self) -> None:
+        if self._channel_refresh_handle is not None:
+            self._channel_refresh_handle.cancel()
+            self._channel_refresh_handle = None
         if self._background_tasks:
             for task in list(self._background_tasks):
                 task.cancel()
@@ -240,7 +268,7 @@ class SlackTransport(Transport):
             self._background_tasks.clear()
         if self._handler:
             await self._handler.close_async()
-            logger.info("Stopped Slack transport '%s'", self.name)
+            logger.info("Stopped Slack transport '%s'", self.agent_name)
             self._handler = None
         self._app = None
 
@@ -248,6 +276,17 @@ class SlackTransport(Transport):
         task = asyncio.create_task(coro)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
+
+    _CHANNEL_REFRESH_DELAY = 2.0  # seconds — coalesce rapid channel events
+
+    def _schedule_channel_refresh(self) -> None:
+        if self._channel_refresh_handle is not None:
+            self._channel_refresh_handle.cancel()
+        loop = asyncio.get_running_loop()
+        self._channel_refresh_handle = loop.call_later(
+            self._CHANNEL_REFRESH_DELAY,
+            lambda: self._create_task(self._fetch_all_channels()),
+        )
 
     def _require_app(self) -> AsyncApp:
         if self._app is None:
@@ -306,28 +345,10 @@ class SlackTransport(Transport):
     # --- Cache management ---
 
     def _upsert_user(self, raw_user: dict) -> None:
-        user_id = raw_user.get("id", "")
-        if not user_id:
-            return
-        profile = raw_user.get("profile", {}) or {}
-        display_name = (
-            profile.get("display_name")
-            or profile.get("display_name_normalized")
-            or raw_user.get("real_name")
-            or profile.get("real_name")
-            or raw_user.get("name")
-            or user_id
-        )
-        self._users[user_id] = display_name
-        self._user_directory[user_id] = SlackUserProfile(
-            user_id=user_id,
-            slack_name=raw_user.get("name", ""),
-            display_name=display_name,
-            real_name=raw_user.get("real_name") or profile.get("real_name", ""),
-            email=profile.get("email", ""),
-            is_bot=bool(raw_user.get("is_bot") or raw_user.get("is_app_user")),
-            is_deleted=bool(raw_user.get("deleted")),
-        )
+        profile = _parse_user_profile(raw_user)
+        if profile:
+            self._user_directory[profile.user_id] = profile
+            self._user_mention_patterns = None
 
     async def _fetch_all_channels(self) -> None:
         """Replace the channel snapshot with the current Slack channel list."""
@@ -371,12 +392,12 @@ class SlackTransport(Transport):
         self._channels = channels
         self._channel_ids = channel_ids
         self._channel_info = channel_info
+        self._channel_mention_patterns = None
 
     async def _fetch_all_users(self) -> None:
-        """Paginate users.list and replace user caches."""
+        """Paginate users.list and replace user cache atomically."""
         app = self._require_app()
-        self._users.clear()
-        self._user_directory.clear()
+        directory: dict[str, SlackUserProfile] = {}
 
         cursor = None
         while True:
@@ -389,10 +410,15 @@ class SlackTransport(Transport):
                 lambda rp=request_params: app.client.users_list(**rp),
             )
             for raw_user in resp.get("members", []):
-                self._upsert_user(raw_user)
+                profile = _parse_user_profile(raw_user)
+                if profile:
+                    directory[profile.user_id] = profile
             cursor = resp.get("response_metadata", {}).get("next_cursor")
             if not cursor:
                 break
+
+        self._user_directory = directory
+        self._user_mention_patterns = None
 
     # --- Outbound mention resolution ---
 
@@ -416,26 +442,39 @@ class SlackTransport(Transport):
             parts[i] = self._expand_mentions_in(part)
         return "".join(parts)
 
-    def _expand_mentions_in(self, text: str) -> str:
-        if self._user_directory:
+    def _get_user_mention_patterns(self) -> list[tuple[re.Pattern[str], str]]:
+        if self._user_mention_patterns is None:
             by_name: dict[str, list[str]] = {}
             for profile in self._user_directory.values():
                 if profile.is_deleted:
                     continue
                 by_name.setdefault(profile.display_name.lower(), []).append(profile.user_id)
-            for name in sorted(by_name, key=len, reverse=True):
-                user_ids = by_name[name]
-                if len(user_ids) != 1:
-                    continue
-                uid = user_ids[0]
-                pattern = re.compile(r"(?<![<\w])@" + re.escape(name) + r"\b", re.IGNORECASE)
-                text = pattern.sub(f"<@{uid}>", text)
+            self._user_mention_patterns = [
+                (
+                    re.compile(r"(?<![<\w])@" + re.escape(name) + r"\b", re.IGNORECASE),
+                    f"<@{uids[0]}>",
+                )
+                for name, uids in sorted(by_name.items(), key=lambda x: len(x[0]), reverse=True)
+                if len(uids) == 1
+            ]
+        return self._user_mention_patterns
 
-        if self._channel_ids:
-            for ch_name, ch_id in self._channel_ids.items():
-                pattern = re.compile(r"(?<!<)#" + re.escape(ch_name) + r"\b", re.IGNORECASE)
-                text = pattern.sub(f"<#{ch_id}>", text)
+    def _get_channel_mention_patterns(self) -> list[tuple[re.Pattern[str], str]]:
+        if self._channel_mention_patterns is None:
+            self._channel_mention_patterns = [
+                (
+                    re.compile(r"(?<!<)#" + re.escape(ch_name) + r"\b", re.IGNORECASE),
+                    f"<#{ch_id}>",
+                )
+                for ch_name, ch_id in self._channel_ids.items()
+            ]
+        return self._channel_mention_patterns
 
+    def _expand_mentions_in(self, text: str) -> str:
+        for pattern, replacement in self._get_user_mention_patterns():
+            text = pattern.sub(replacement, text)
+        for pattern, replacement in self._get_channel_mention_patterns():
+            text = pattern.sub(replacement, text)
         return text
 
     # --- Messaging ---
@@ -454,9 +493,7 @@ class SlackTransport(Transport):
         return resp["ts"]
 
     @override
-    async def update(
-        self, channel_id: str, message_id: str, text: str, thread_id: str | None = None
-    ) -> None:
+    async def update(self, channel_id: str, message_id: str, text: str) -> None:
         app = self._require_app()
         text = self._resolve_outbound_mentions(text)
         await self._api_call(
@@ -467,7 +504,7 @@ class SlackTransport(Transport):
         )
 
     @override
-    async def delete(self, channel_id: str, message_id: str, thread_id: str | None = None) -> None:
+    async def delete(self, channel_id: str, message_id: str) -> None:
         app = self._require_app()
         await self._api_call(
             "chat.delete",
@@ -560,21 +597,17 @@ class SlackTransport(Transport):
         if profile:
             return profile.display_name
 
-        cached = self._users.get(user_id)
-        if cached:
-            return cached
-
         app = self._require_app()
         try:
             resp = await self._api_call("users.info", lambda: app.client.users_info(user=user_id))
-            user = resp.get("user", {})
-            name = user.get("real_name") or user.get("profile", {}).get("display_name") or user_id
+            self._upsert_user(resp.get("user", {}))
+            profile = self._user_directory.get(user_id)
+            if profile:
+                return profile.display_name
         except Exception:
             logger.warning("Failed to resolve Slack user %s, using raw ID", user_id)
-            name = user_id
 
-        self._users[user_id] = name
-        return name
+        return user_id
 
     def _linked_operator_usernames(self) -> dict[str, str]:
         if self._store is None:
@@ -636,6 +669,7 @@ class SlackTransport(Transport):
             name = channel.get("name") or channel_id
             if not name.startswith("#"):
                 name = f"#{name}"
+            self._channels[channel_id] = name
             return name
         except Exception:
             logger.warning("Failed to resolve Slack channel %s, using raw ID", channel_id)
@@ -643,7 +677,7 @@ class SlackTransport(Transport):
 
     @override
     async def resolve_channel_id(self, channel: str) -> str | None:
-        if channel.startswith(("C", "G", "D")) and len(channel) > 1:
+        if channel[0:1] in "CGD" and channel.isalnum() and channel == channel.upper():
             return channel
         name = channel.lstrip("#")
         return self._channel_ids.get(name)
@@ -907,14 +941,17 @@ class SlackTransport(Transport):
             else:
                 lines += [
                     "",
-                    "User list not cached yet. Call `find_slack_users` if needed.",
+                    "User list not cached yet. Call `slack_find_users` if needed.",
                 ]
         if self._inject_channels_into_prompt:
             if self._channels:
                 lines += ["", "## Channels", ""]
                 lines += self._format_channel_list()
             else:
-                lines += ["", "Channel names are not cached yet. Call `list_channels` if needed."]
+                lines += [
+                    "",
+                    "Channel names are not cached yet. Call `slack_list_channels` if needed.",
+                ]
         return "\n".join(lines)
 
     # --- Per-message context ---
@@ -1030,8 +1067,6 @@ class SlackTransport(Transport):
         self,
         event: dict,
         on_message: Callable[[IncomingMessage], Awaitable[None]],
-        *,
-        was_mentioned: bool = False,
     ) -> None:
         subtype = event.get("subtype")
         if subtype and subtype != "file_share":
@@ -1065,9 +1100,8 @@ class SlackTransport(Transport):
             channel_id=channel_id,
             message_id=message_id,
             root_message_id=root_message_id,
-            transport_name=self.name,
+            transport_name=self.agent_name,
             is_private=(event.get("channel_type") == "im"),
-            was_mentioned=was_mentioned,
             attachments=attachments,
             created_at=_slack_ts_to_float(message_id),
         )
@@ -1075,7 +1109,6 @@ class SlackTransport(Transport):
 
 
 def create_slack_transport(
-    name: str,
     agent_name: str,
     env: dict[str, Any],
     settings: dict[str, Any],
@@ -1084,7 +1117,6 @@ def create_slack_transport(
     normalized_env = SlackTransportEnv(**env)
     normalized_settings = SlackTransportSettings(**settings)
     return SlackTransport(
-        name=name,
         agent_name=agent_name,
         bot_token=_resolve_env_var(normalized_env.bot_token, agent_name),
         app_token=_resolve_env_var(normalized_env.app_token, agent_name),

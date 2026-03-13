@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 @dataclass(frozen=True)
 class TransportDefinition:
     type_name: str
-    create_transport: Callable[[str, str, dict[str, Any], dict[str, Any], Store], Transport]
+    create_transport: Callable[[str, dict[str, Any], dict[str, Any], Store], Transport]
     normalize_config: Callable[
         [dict[str, Any], dict[str, Any]],
         tuple[dict[str, Any], dict[str, Any]],
@@ -58,7 +58,6 @@ def normalize_transport_config(
 def create_transport(
     *,
     type_name: str,
-    name: str,
     agent_name: str,
     env: dict[str, Any],
     settings: dict[str, Any],
@@ -67,7 +66,7 @@ def create_transport(
     definition = get_transport_definition(type_name)
     if definition is None:
         raise ValueError(f"Unsupported transport type: {type_name!r}")
-    return definition.create_transport(name, agent_name, env, settings, store)
+    return definition.create_transport(agent_name, env, settings, store)
 
 
 def transport_secret_env_vars(

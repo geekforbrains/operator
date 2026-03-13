@@ -43,8 +43,7 @@ def test_init_creates_full_scaffold_and_points_user_to_manual_edits(tmp_path: Pa
     assert "Edit" in normalized_output
     assert "operator.yaml" in normalized_output
     assert (
-        "operator user add <username> --role admin slack <YOUR_SLACK_USER_ID>"
-        in normalized_output
+        "operator user add <username> --role admin slack <YOUR_SLACK_USER_ID>" in normalized_output
     )
 
     config_file = op_dir / "operator.yaml"
@@ -239,7 +238,9 @@ def test_init_prompts_before_overwriting_existing_config(tmp_path: Path) -> None
     assert config_file.read_text() == "defaults:\n  models:\n    - custom/model\n"
 
 
-def test_init_overwrites_existing_config_when_confirmed_and_preserves_agent_prompt(tmp_path: Path) -> None:
+def test_init_overwrites_existing_config_when_confirmed_and_preserves_agent_prompt(
+    tmp_path: Path,
+) -> None:
     op_dir = tmp_path / ".operator"
     agent_md = op_dir / "agents" / "operator" / "AGENT.md"
     agent_md.parent.mkdir(parents=True, exist_ok=True)

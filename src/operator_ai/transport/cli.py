@@ -14,7 +14,6 @@ class CliTransport(Transport):
     platform = "cli"
 
     def __init__(self, agent_name: str) -> None:
-        self.name = agent_name
         self.agent_name = agent_name
         self._counter = 0
 
@@ -40,6 +39,3 @@ class CliTransport(Transport):
             user_id="cli",
             user_name="cli",
         )
-
-    async def resolve_channel_id(self, channel: str) -> str | None:
-        return channel

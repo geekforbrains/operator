@@ -21,6 +21,7 @@ logger = logging.getLogger("operator.subagent")
 
 MAX_SUBAGENT_DEPTH = 3
 
+
 @dataclass
 class SubagentContext:
     models: list[str]
