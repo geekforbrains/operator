@@ -76,8 +76,8 @@ def test_transport_send_file_raises():
 # --- Slack attachment extraction ---
 
 
-def test_slack_extract_attachments():
-    from operator_ai.transport.slack import _extract_attachments
+def test_slackextract_attachments():
+    from operator_ai.transport.slack import extract_attachments
 
     event = {
         "files": [
@@ -97,7 +97,7 @@ def test_slack_extract_attachments():
             },
         ]
     }
-    attachments = _extract_attachments(event)
+    attachments = extract_attachments(event)
     assert len(attachments) == 2
     assert attachments[0].filename == "photo.png"
     assert attachments[0].content_type == "image/png"
@@ -105,18 +105,18 @@ def test_slack_extract_attachments():
     assert attachments[1].filename == "doc.pdf"
 
 
-def test_slack_extract_attachments_no_files():
-    from operator_ai.transport.slack import _extract_attachments
+def test_slackextract_attachments_no_files():
+    from operator_ai.transport.slack import extract_attachments
 
-    assert _extract_attachments({}) == []
-    assert _extract_attachments({"files": []}) == []
+    assert extract_attachments({}) == []
+    assert extract_attachments({"files": []}) == []
 
 
-def test_slack_extract_attachments_skips_no_url():
-    from operator_ai.transport.slack import _extract_attachments
+def test_slackextract_attachments_skips_no_url():
+    from operator_ai.transport.slack import extract_attachments
 
     event = {"files": [{"id": "F1", "name": "broken.txt", "mimetype": "text/plain", "size": 10}]}
-    assert _extract_attachments(event) == []
+    assert extract_attachments(event) == []
 
 
 # --- process_attachments ---

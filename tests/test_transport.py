@@ -197,13 +197,13 @@ def test_slack_channel_snapshot_refresh_replaces_old_names(monkeypatch) -> None:
         async def _passthrough_api_call(operation: str, call) -> dict:  # noqa: ARG001
             return await call()
 
-        monkeypatch.setattr(transport, "_api_call", _passthrough_api_call)
+        monkeypatch.setattr("operator_ai.transport.slack.api.api_call", _passthrough_api_call)
 
-        await transport._fetch_all_channels()
+        await transport._refresh_channels()
         assert await transport.resolve_channel_id("#general") == "C1"
         assert transport._format_channel_list() == ["- <#C1> #general"]
 
-        await transport._fetch_all_channels()
+        await transport._refresh_channels()
         assert await transport.resolve_channel_id("#general") is None
         assert await transport.resolve_channel_id("#eng") == "C1"
         assert transport._format_channel_list() == ["- <#C1> #eng"]
@@ -242,8 +242,10 @@ def test_slack_channel_events_refresh_full_snapshot(monkeypatch) -> None:
             async def close_async(self) -> None:
                 return None
 
-        monkeypatch.setattr("operator_ai.transport.slack.AsyncApp", _FakeApp)
-        monkeypatch.setattr("operator_ai.transport.slack.AsyncSocketModeHandler", _FakeHandler)
+        monkeypatch.setattr("operator_ai.transport.slack.transport.AsyncApp", _FakeApp)
+        monkeypatch.setattr(
+            "operator_ai.transport.slack.transport.AsyncSocketModeHandler", _FakeHandler
+        )
 
         transport = SlackTransport(
             agent_name="operator",
@@ -258,15 +260,18 @@ def test_slack_channel_events_refresh_full_snapshot(monkeypatch) -> None:
 
         refresh_calls: list[str] = []
 
-        async def _refresh_channels() -> None:
+        async def _tracking_refresh() -> None:
             refresh_calls.append("refresh")
 
         async def _noop() -> None:
             return None
 
         monkeypatch.setattr(transport, "_api_call", _fake_api_call)
-        monkeypatch.setattr(transport, "_fetch_all_users", _noop)
-        monkeypatch.setattr(transport, "_fetch_all_channels", _refresh_channels)
+        monkeypatch.setattr(
+            "operator_ai.transport.slack.api.fetch_all_users",
+            lambda *_a, **_kw: _noop(),
+        )
+        monkeypatch.setattr(transport, "_refresh_channels", _tracking_refresh)
 
         async def _on_message(msg: IncomingMessage) -> None:  # noqa: ARG001
             return None
@@ -325,8 +330,10 @@ def test_slack_channel_replies_require_mentions(monkeypatch) -> None:
             async def close_async(self) -> None:
                 return None
 
-        monkeypatch.setattr("operator_ai.transport.slack.AsyncApp", _FakeApp)
-        monkeypatch.setattr("operator_ai.transport.slack.AsyncSocketModeHandler", _FakeHandler)
+        monkeypatch.setattr("operator_ai.transport.slack.transport.AsyncApp", _FakeApp)
+        monkeypatch.setattr(
+            "operator_ai.transport.slack.transport.AsyncSocketModeHandler", _FakeHandler
+        )
 
         transport = SlackTransport(
             agent_name="operator",
@@ -343,8 +350,11 @@ def test_slack_channel_replies_require_mentions(monkeypatch) -> None:
             return None
 
         monkeypatch.setattr(transport, "_api_call", _fake_api_call)
-        monkeypatch.setattr(transport, "_fetch_all_users", _noop)
-        monkeypatch.setattr(transport, "_fetch_all_channels", _noop)
+        monkeypatch.setattr(
+            "operator_ai.transport.slack.api.fetch_all_users",
+            lambda *_a, **_kw: _noop(),
+        )
+        monkeypatch.setattr(transport, "_refresh_channels", _noop)
 
         seen: list[IncomingMessage] = []
 
