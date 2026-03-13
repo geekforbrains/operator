@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Awaitable, Callable
 
-from operator_ai.transport.slack.config import (
-    CHANNEL_MENTION_RE,
-    USER_MENTION_RE,
-    SlackUserProfile,
-)
+from operator_ai.transport.slack.config import SlackUserProfile
 
+USER_MENTION_RE = re.compile(r"<@([A-Z0-9]+)>")
+CHANNEL_MENTION_RE = re.compile(r"<#([A-Z0-9]+)\|([^>]+)>")
 _CODE_BLOCK_RE = re.compile(r"(```[\s\S]*?```|`[^`\n]+`)")
 
 
@@ -72,7 +71,7 @@ def format_channel_reference(channel_id: str, label: str) -> str:
     return f"<#{channel_id}>"
 
 
-async def render_slack_text(text: str, resolve_user: callable) -> str:
+async def render_slack_text(text: str, resolve_user: Callable[[str], Awaitable[str]]) -> str:
     """Resolve Slack mention markup to human-readable form."""
     text = CHANNEL_MENTION_RE.sub(
         lambda match: format_channel_reference(match.group(1), match.group(2)),

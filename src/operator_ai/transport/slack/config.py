@@ -1,17 +1,12 @@
 from __future__ import annotations
 
 import os
-import re
 from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict
 
-USER_MENTION_RE = re.compile(r"<@([A-Z0-9]+)>")
-CHANNEL_MENTION_RE = re.compile(r"<#([A-Z0-9]+)\|([^>]+)>")
-
-MAX_API_ATTEMPTS = 3
-BASE_RETRY_SECONDS = 1.0
+from operator_ai.transport.base import Attachment
 
 
 @dataclass(frozen=True)
@@ -94,10 +89,8 @@ def slack_ts_to_float(value: str) -> float | None:
         return None
 
 
-def extract_attachments(event: dict) -> list:
+def extract_attachments(event: dict) -> list[Attachment]:
     """Extract file attachments from a Slack event."""
-    from operator_ai.transport.base import Attachment
-
     attachments: list[Attachment] = []
     for f in event.get("files", []):
         url = f.get("url_private", "")

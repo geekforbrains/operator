@@ -7,12 +7,10 @@ from typing import Any
 
 from slack_sdk.errors import SlackApiError
 
-from operator_ai.transport.slack.config import (
-    BASE_RETRY_SECONDS,
-    MAX_API_ATTEMPTS,
-    SlackUserProfile,
-    parse_user_profile,
-)
+from operator_ai.transport.slack.config import SlackUserProfile, parse_user_profile
+
+MAX_API_ATTEMPTS = 3
+BASE_RETRY_SECONDS = 1.0
 
 logger = logging.getLogger("operator.transport.slack")
 
