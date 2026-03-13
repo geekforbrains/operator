@@ -400,7 +400,7 @@ def test_execute_job_configures_memory_and_skill_filter(monkeypatch, tmp_path: P
 
 def test_create_job_writes_directory(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
-    monkeypatch.setattr("operator_ai.tools.jobs.get_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("operator_ai.tools.jobs.resolve_dir", lambda name: tmp_path / name)
     monkeypatch.setattr("operator_ai.tools.jobs.load_config", lambda: _config())
 
     from operator_ai.tools.jobs import create_job
@@ -429,7 +429,7 @@ def test_create_job_writes_directory(monkeypatch, tmp_path: Path) -> None:
 def test_create_job_rejects_duplicate(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     _write_job(jobs_dir, "daily-digest", JOB_MD)
-    monkeypatch.setattr("operator_ai.tools.jobs.get_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("operator_ai.tools.jobs.resolve_dir", lambda name: tmp_path / name)
     monkeypatch.setattr("operator_ai.tools.jobs.load_config", lambda: _config())
 
     from operator_ai.tools.jobs import create_job
@@ -439,7 +439,7 @@ def test_create_job_rejects_duplicate(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_create_job_rejects_missing_schedule(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("operator_ai.tools.jobs.get_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("operator_ai.tools.jobs.resolve_dir", lambda name: tmp_path / name)
 
     from operator_ai.tools.jobs import create_job
 
@@ -448,7 +448,7 @@ def test_create_job_rejects_missing_schedule(monkeypatch, tmp_path: Path) -> Non
 
 
 def test_create_job_rejects_invalid_cron(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("operator_ai.tools.jobs.get_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("operator_ai.tools.jobs.resolve_dir", lambda name: tmp_path / name)
 
     from operator_ai.tools.jobs import create_job
 
@@ -457,7 +457,7 @@ def test_create_job_rejects_invalid_cron(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_create_job_rejects_unknown_agent(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("operator_ai.tools.jobs.get_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("operator_ai.tools.jobs.resolve_dir", lambda name: tmp_path / name)
     monkeypatch.setattr("operator_ai.tools.jobs.load_config", lambda: _config())
 
     from operator_ai.tools.jobs import create_job
@@ -469,7 +469,7 @@ def test_create_job_rejects_unknown_agent(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_create_job_rejects_missing_prompt(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("operator_ai.tools.jobs.get_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("operator_ai.tools.jobs.resolve_dir", lambda name: tmp_path / name)
 
     from operator_ai.tools.jobs import create_job
 
@@ -480,7 +480,7 @@ def test_create_job_rejects_missing_prompt(monkeypatch, tmp_path: Path) -> None:
 def test_update_job_overwrites_file(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     _write_job(jobs_dir, "daily-digest", JOB_MD)
-    monkeypatch.setattr("operator_ai.tools.jobs.get_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("operator_ai.tools.jobs.resolve_dir", lambda name: tmp_path / name)
     monkeypatch.setattr("operator_ai.tools.jobs.load_config", lambda: _config())
 
     from operator_ai.tools.jobs import update_job
@@ -504,7 +504,7 @@ def test_update_job_overwrites_file(monkeypatch, tmp_path: Path) -> None:
 def test_update_job_not_found(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     jobs_dir.mkdir()
-    monkeypatch.setattr("operator_ai.tools.jobs.get_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("operator_ai.tools.jobs.resolve_dir", lambda name: tmp_path / name)
 
     from operator_ai.tools.jobs import update_job
 
@@ -515,7 +515,7 @@ def test_update_job_not_found(monkeypatch, tmp_path: Path) -> None:
 def test_delete_job_removes_directory(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     _write_job(jobs_dir, "daily-digest", JOB_MD)
-    monkeypatch.setattr("operator_ai.tools.jobs.get_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("operator_ai.tools.jobs.resolve_dir", lambda name: tmp_path / name)
 
     from operator_ai.tools.jobs import delete_job
 
@@ -527,7 +527,7 @@ def test_delete_job_removes_directory(monkeypatch, tmp_path: Path) -> None:
 def test_delete_job_not_found(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     jobs_dir.mkdir()
-    monkeypatch.setattr("operator_ai.tools.jobs.get_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("operator_ai.tools.jobs.resolve_dir", lambda name: tmp_path / name)
 
     from operator_ai.tools.jobs import delete_job
 
@@ -538,7 +538,7 @@ def test_delete_job_not_found(monkeypatch, tmp_path: Path) -> None:
 def test_enable_disable_job(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
     _write_job(jobs_dir, "daily-digest", JOB_MD)
-    monkeypatch.setattr("operator_ai.tools.jobs.get_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("operator_ai.tools.jobs.resolve_dir", lambda name: tmp_path / name)
 
     from operator_ai.tools.jobs import disable_job, enable_job
 
@@ -564,7 +564,7 @@ def test_enable_disable_job(monkeypatch, tmp_path: Path) -> None:
 
 def test_create_job_with_hooks_creates_scripts(monkeypatch, tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"
-    monkeypatch.setattr("operator_ai.tools.jobs.get_base_dir", lambda: tmp_path)
+    monkeypatch.setattr("operator_ai.tools.jobs.resolve_dir", lambda name: tmp_path / name)
     monkeypatch.setattr("operator_ai.tools.jobs.load_config", lambda: _config())
 
     from operator_ai.tools.jobs import create_job

@@ -54,3 +54,10 @@ def set_base_dir(path: Path) -> None:
 
 def get_base_dir() -> Path | None:
     return _base_dir_var.get()
+
+
+def resolve_dir(name: str) -> Path:
+    """Return base_dir / name, falling back to OPERATOR_DIR."""
+    from operator_ai.config import OPERATOR_DIR
+
+    return (get_base_dir() or OPERATOR_DIR) / name

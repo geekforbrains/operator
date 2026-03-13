@@ -9,8 +9,6 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from operator_ai.utils import truncate
-
 if TYPE_CHECKING:
     from operator_ai.transport.base import Transport
 
@@ -35,58 +33,48 @@ IDLE_MESSAGES = [
 ]
 
 
-# Tool name -> formatter that takes args dict and returns display label
-def _label_read_file(a: dict) -> str:
-    return f"Reading `{_basename(a.get('path', ''))}`"
-
-
-def _label_write_file(a: dict) -> str:
-    return f"Writing `{_basename(a.get('path', ''))}`"
-
-
-def _label_web_fetch(a: dict) -> str:
-    return f"Fetching {truncate(a.get('url', ''), 50)}"
-
-
-def _label_static(text: str) -> Callable[[dict], str]:
-    def _fmt(_a: dict) -> str:
-        return text
-
-    return _fmt
-
-
-TOOL_LABELS: dict[str, Callable[[dict], str]] = {
-    "read_file": _label_read_file,
-    "write_file": _label_write_file,
-    "list_files": _label_static("Listing files..."),
-    "run_shell": _label_static("Running command..."),
-    "web_fetch": _label_web_fetch,
-    "send_message": _label_static("Sending message..."),
-    "spawn_agent": _label_static("Spawning sub-agent..."),
-    "save_rule": _label_static("Saving rule..."),
-    "save_note": _label_static("Saving note..."),
-    "search_notes": _label_static("Searching notes..."),
-    "forget_rule": _label_static("Forgetting rule..."),
-    "forget_note": _label_static("Forgetting note..."),
-    "list_rules": _label_static("Listing rules..."),
-    "list_notes": _label_static("Listing notes..."),
-    "create_job": _label_static("Creating job..."),
-    "update_job": _label_static("Updating job..."),
-    "delete_job": _label_static("Deleting job..."),
-    "enable_job": _label_static("Enabling job..."),
-    "disable_job": _label_static("Disabling job..."),
-    "list_jobs": _label_static("Listing jobs..."),
-    "get_state": _label_static("Reading state..."),
-    "set_state": _label_static("Saving state..."),
-    "append_state": _label_static("Appending state..."),
-    "pop_state": _label_static("Popping state..."),
-    "delete_state": _label_static("Deleting state..."),
-    "list_state": _label_static("Listing state..."),
+# Static tool labels — tool name -> display text (no args needed)
+_STATIC_LABELS: dict[str, str] = {
+    "list_files": "Listing files...",
+    "run_shell": "Running command...",
+    "send_message": "Sending message...",
+    "spawn_agent": "Spawning sub-agent...",
+    "save_rule": "Saving rule...",
+    "save_note": "Saving note...",
+    "search_notes": "Searching notes...",
+    "forget_rule": "Forgetting rule...",
+    "forget_note": "Forgetting note...",
+    "list_rules": "Listing rules...",
+    "list_notes": "Listing notes...",
+    "create_job": "Creating job...",
+    "update_job": "Updating job...",
+    "delete_job": "Deleting job...",
+    "enable_job": "Enabling job...",
+    "disable_job": "Disabling job...",
+    "list_jobs": "Listing jobs...",
+    "get_state": "Reading state...",
+    "set_state": "Saving state...",
+    "append_state": "Appending state...",
+    "pop_state": "Popping state...",
+    "delete_state": "Deleting state...",
+    "list_state": "Listing state...",
 }
 
 
 def _basename(path: str) -> str:
     return path.rsplit("/", 1)[-1] if path else "..."
+
+
+def _truncate_url(url: str, max_len: int = 50) -> str:
+    return url[:max_len] + "..." if len(url) > max_len else url
+
+
+# Dynamic tool labels — tool name -> formatter(args) -> display text
+TOOL_LABELS: dict[str, Callable[[dict], str]] = {
+    "read_file": lambda a: f"Reading `{_basename(a.get('path', ''))}`",
+    "write_file": lambda a: f"Writing `{_basename(a.get('path', ''))}`",
+    "web_fetch": lambda a: f"Fetching {_truncate_url(a.get('url', ''))}",
+}
 
 
 def _humanize(name: str) -> str:
@@ -135,6 +123,8 @@ class StatusIndicator:
         formatter = self._tool_labels.get(name) or TOOL_LABELS.get(name)
         if formatter:
             self._tool_label = formatter(args)
+        elif name in _STATIC_LABELS:
+            self._tool_label = _STATIC_LABELS[name]
         else:
             self._tool_label = _humanize(name)
 

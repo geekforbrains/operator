@@ -64,6 +64,15 @@ def _resolve_scope(
     raise ValueError(f"Invalid scope: {scope!r} (expected 'agent', 'user', or 'global')")
 
 
+def _ctx_and_scope(scope: str) -> tuple[MemoryStore, str]:
+    """Return (memory_store, resolved_scope). Raises ValueError on bad scope."""
+    store, agent_name, username, allow_user_scope = _get_context()
+    resolved = _resolve_scope(
+        scope, agent_name=agent_name, username=username, allow_user_scope=allow_user_scope
+    )
+    return store, resolved
+
+
 def _format_timestamp(value: datetime | None) -> str:
     if value is None:
         return ""
@@ -88,16 +97,9 @@ async def save_rule(key: str, content: str, scope: MemoryScope = "agent") -> str
         content: The rule text.
         scope: One of "agent", "user", or "global".
     """
-    memory_store, agent_name, username, allow_user_scope = _get_context()
-
     try:
-        resolved = _resolve_scope(
-            scope,
-            agent_name=agent_name,
-            username=username,
-            allow_user_scope=allow_user_scope,
-        )
-        memory_store.upsert_rule(resolved, key, content)
+        store, resolved = _ctx_and_scope(scope)
+        store.upsert_rule(resolved, key, content)
     except ValueError as e:
         return f"[error: {e}]"
 
@@ -117,16 +119,9 @@ async def save_note(key: str, content: str, scope: MemoryScope = "agent", ttl: s
         scope: One of "agent", "user", or "global".
         ttl: Optional time-to-live (e.g. "3d", "2w", "1h", "30m"). Empty for no expiry.
     """
-    memory_store, agent_name, username, allow_user_scope = _get_context()
-
     try:
-        resolved = _resolve_scope(
-            scope,
-            agent_name=agent_name,
-            username=username,
-            allow_user_scope=allow_user_scope,
-        )
-        memory_store.upsert_note(resolved, key, content, ttl=ttl or None)
+        store, resolved = _ctx_and_scope(scope)
+        store.upsert_note(resolved, key, content, ttl=ttl or None)
     except ValueError as e:
         return f"[error: {e}]"
 
@@ -145,23 +140,16 @@ async def search_notes(query: str, scope: MemoryScope = "agent") -> str:
         query: Search query string.
         scope: One of "agent", "user", or "global".
     """
-    memory_store, agent_name, username, allow_user_scope = _get_context()
-
     try:
-        resolved = _resolve_scope(
-            scope,
-            agent_name=agent_name,
-            username=username,
-            allow_user_scope=allow_user_scope,
-        )
+        store, resolved = _ctx_and_scope(scope)
     except ValueError as e:
         return f"[error: {e}]"
 
-    if not memory_store.has_index:
+    if not store.has_index:
         return (
             "[error: Memory search index not available. Run `operator memory index` to build it.]"
         )
-    results = memory_store.search_notes(resolved, query)
+    results = store.search_notes(resolved, query)
     if not results:
         return "No matching notes found."
 
@@ -177,19 +165,12 @@ async def list_rules(scope: MemoryScope = "agent") -> str:
     Args:
         scope: One of "agent", "user", or "global".
     """
-    memory_store, agent_name, username, allow_user_scope = _get_context()
-
     try:
-        resolved = _resolve_scope(
-            scope,
-            agent_name=agent_name,
-            username=username,
-            allow_user_scope=allow_user_scope,
-        )
+        store, resolved = _ctx_and_scope(scope)
     except ValueError as e:
         return f"[error: {e}]"
 
-    results = memory_store.list_rules(resolved)
+    results = store.list_rules(resolved)
     if not results:
         return "No rules found."
 
@@ -207,19 +188,12 @@ async def list_notes(scope: MemoryScope = "agent", limit: int = 50, offset: int 
         limit: Maximum number of notes to return (default 50).
         offset: Number of notes to skip for pagination (default 0).
     """
-    memory_store, agent_name, username, allow_user_scope = _get_context()
-
     try:
-        resolved = _resolve_scope(
-            scope,
-            agent_name=agent_name,
-            username=username,
-            allow_user_scope=allow_user_scope,
-        )
+        store, resolved = _ctx_and_scope(scope)
     except ValueError as e:
         return f"[error: {e}]"
 
-    all_notes = memory_store.list_notes(resolved)
+    all_notes = store.list_notes(resolved)
     total = len(all_notes)
     if total == 0:
         return "No notes found."
@@ -246,19 +220,12 @@ async def read_note(key: str, scope: MemoryScope = "agent") -> str:
         key: The deterministic key of the note.
         scope: One of "agent", "user", or "global".
     """
-    memory_store, agent_name, username, allow_user_scope = _get_context()
-
     try:
-        resolved = _resolve_scope(
-            scope,
-            agent_name=agent_name,
-            username=username,
-            allow_user_scope=allow_user_scope,
-        )
+        store, resolved = _ctx_and_scope(scope)
     except ValueError as e:
         return f"[error: {e}]"
 
-    mf = memory_store.get_note(resolved, key)
+    mf = store.get_note(resolved, key)
     if mf is None:
         return f"Note '{key}' not found in {scope} scope."
 
@@ -279,19 +246,12 @@ async def forget_rule(key: str, scope: MemoryScope = "agent") -> str:
         key: Short stable identifier of the rule to forget.
         scope: One of "agent", "user", or "global".
     """
-    memory_store, agent_name, username, allow_user_scope = _get_context()
-
     try:
-        resolved = _resolve_scope(
-            scope,
-            agent_name=agent_name,
-            username=username,
-            allow_user_scope=allow_user_scope,
-        )
+        store, resolved = _ctx_and_scope(scope)
     except ValueError as e:
         return f"[error: {e}]"
 
-    if memory_store.forget_rule(resolved, key):
+    if store.forget_rule(resolved, key):
         logger.info("forget_rule: %s (scope=%s)", key, scope)
         return f"Moved rule '{key}' to trash in {scope} scope."
     return f"Rule not found: {key}"
@@ -307,19 +267,12 @@ async def forget_note(key: str, scope: MemoryScope = "agent") -> str:
         key: Short stable identifier of the note to forget.
         scope: One of "agent", "user", or "global".
     """
-    memory_store, agent_name, username, allow_user_scope = _get_context()
-
     try:
-        resolved = _resolve_scope(
-            scope,
-            agent_name=agent_name,
-            username=username,
-            allow_user_scope=allow_user_scope,
-        )
+        store, resolved = _ctx_and_scope(scope)
     except ValueError as e:
         return f"[error: {e}]"
 
-    if memory_store.forget_note(resolved, key):
+    if store.forget_note(resolved, key):
         logger.info("forget_note: %s (scope=%s)", key, scope)
         return f"Moved note '{key}' to trash in {scope} scope."
     return f"Note not found: {key}"

@@ -7,8 +7,8 @@ import re
 import shlex
 from pathlib import Path
 
-from operator_ai.config import OPERATOR_DIR, ConfigError, load_config
-from operator_ai.tools.context import get_base_dir, get_skill_filter
+from operator_ai.config import ConfigError, load_config
+from operator_ai.tools.context import get_skill_filter, resolve_dir
 from operator_ai.tools.registry import MAX_OUTPUT, format_process_output, safe_name, tool
 from operator_ai.tools.workspace import get_workspace
 from operator_ai.transport.registry import transport_secret_env_vars
@@ -20,9 +20,7 @@ _ALLOWED_OPERATOR_ENV = {"OPERATOR_HOME"}
 
 
 def _skills_dir() -> Path:
-    """Return the resolved skills directory from tool context or fallback."""
-    base = get_base_dir()
-    return (base or OPERATOR_DIR) / "skills"
+    return resolve_dir("skills")
 
 
 def _expand_env_refs(value: str, env: dict[str, str]) -> str:

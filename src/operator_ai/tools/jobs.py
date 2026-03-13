@@ -16,12 +16,12 @@ from pathlib import Path
 import yaml
 from croniter import croniter
 
-from operator_ai.config import OPERATOR_DIR, ConfigError, load_config
+from operator_ai.config import ConfigError, load_config
 from operator_ai.frontmatter import rewrite_frontmatter
 from operator_ai.job.spec import scan_jobs
 from operator_ai.message_timestamps import format_ts
 from operator_ai.store import get_store
-from operator_ai.tools.context import get_base_dir
+from operator_ai.tools.context import resolve_dir
 from operator_ai.tools.registry import safe_name, tool
 
 # ---------------------------------------------------------------------------
@@ -109,9 +109,7 @@ def _build_job_file(
 
 
 def _jobs_dir() -> Path:
-    """Return the resolved jobs directory from tool context or fallback."""
-    base = get_base_dir()
-    return (base or OPERATOR_DIR) / "jobs"
+    return resolve_dir("jobs")
 
 
 def _job_dir(name: str) -> tuple[Path, str | None]:

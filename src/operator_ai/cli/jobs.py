@@ -24,6 +24,9 @@ console = Console()
 job_app = typer.Typer(help="Job inspection and management.")
 
 
+_JOBS_DIR = OPERATOR_DIR / "jobs"
+
+
 def _setup_cli_logging() -> None:
     """Set up logging for CLI commands — writes to the shared log file + stderr."""
     setup_logging(
@@ -33,18 +36,10 @@ def _setup_cli_logging() -> None:
     )
 
 
-def _scan_jobs():
-    return scan_jobs(OPERATOR_DIR / "jobs")
-
-
-def _find_job(name: str):
-    return find_job(name, OPERATOR_DIR / "jobs")
-
-
 @job_app.command("list")
 def job_list() -> None:
     """List all jobs with status."""
-    jobs = _scan_jobs()
+    jobs = scan_jobs(_JOBS_DIR)
     if not jobs:
         console.print("No jobs found.")
         raise typer.Exit()
@@ -101,7 +96,7 @@ def job_info(
     name: str = typer.Argument(help="Job name."),
 ) -> None:
     """Show job configuration and runtime state."""
-    job = _find_job(name)
+    job = find_job(name, _JOBS_DIR)
     if not job:
         console.print(f"Job '{name}' not found.", style="red")
         raise typer.Exit(code=1)
@@ -156,7 +151,7 @@ def job_run(
     store = get_store()
     memory_store = MemoryStore(base_dir=OPERATOR_DIR)
 
-    job = next((job for job in _scan_jobs() if job.name == name), None)
+    job = find_job(name, _JOBS_DIR)
     if not job:
         print(f"Job '{name}' not found.")
         raise typer.Exit(code=1)
@@ -207,7 +202,7 @@ def job_disable(
 
 
 def _toggle_job(name: str, *, enabled: bool) -> None:
-    job = _find_job(name)
+    job = find_job(name, _JOBS_DIR)
     if not job:
         print(f"Job '{name}' not found.")
         raise typer.Exit(code=1)

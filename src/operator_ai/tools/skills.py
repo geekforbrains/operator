@@ -9,20 +9,13 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from operator_ai.config import OPERATOR_DIR
 from operator_ai.skills import build_skill_file, scan_skills, validate_skill_name
-from operator_ai.tools.context import get_base_dir, get_skill_filter
+from operator_ai.tools.context import get_skill_filter, resolve_dir
 from operator_ai.tools.registry import safe_name, tool
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _skills_dir() -> Path:
-    """Return the resolved skills directory from tool context or fallback."""
-    base = get_base_dir()
-    return (base or OPERATOR_DIR) / "skills"
+    return resolve_dir("skills")
 
 
 def _parse_env(env: str) -> list[str]:

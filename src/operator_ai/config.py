@@ -132,35 +132,29 @@ class Config(StrictConfigModel):
         os.environ["OPERATOR_HOME"] = str(self._base_dir)
         return self
 
-    def agent_models(self, agent_name: str) -> list[str]:
+    def _agent_setting(self, agent_name: str, field: str) -> Any:
+        """Return agent-level override for *field*, falling back to defaults."""
         agent = self.agents.get(agent_name)
-        if agent and agent.models:
-            return agent.models
-        return self.defaults.models
+        if agent:
+            value = getattr(agent, field, None)
+            if value is not None:
+                return value
+        return getattr(self.defaults, field)
+
+    def agent_models(self, agent_name: str) -> list[str]:
+        return self._agent_setting(agent_name, "models")
 
     def agent_max_iterations(self, agent_name: str) -> int:
-        agent = self.agents.get(agent_name)
-        if agent and agent.max_iterations is not None:
-            return agent.max_iterations
-        return self.defaults.max_iterations
+        return self._agent_setting(agent_name, "max_iterations")
 
     def agent_thinking(self, agent_name: str) -> ThinkingLevel:
-        agent = self.agents.get(agent_name)
-        if agent and agent.thinking is not None:
-            return agent.thinking
-        return self.defaults.thinking
+        return self._agent_setting(agent_name, "thinking")
 
     def agent_context_ratio(self, agent_name: str) -> float:
-        agent = self.agents.get(agent_name)
-        if agent and agent.context_ratio is not None:
-            return agent.context_ratio
-        return self.defaults.context_ratio
+        return self._agent_setting(agent_name, "context_ratio")
 
     def agent_max_output_tokens(self, agent_name: str) -> int | None:
-        agent = self.agents.get(agent_name)
-        if agent and agent.max_output_tokens is not None:
-            return agent.max_output_tokens
-        return self.defaults.max_output_tokens
+        return self._agent_setting(agent_name, "max_output_tokens")
 
     def agent_sandbox(self, agent_name: str) -> bool:
         agent = self.agents.get(agent_name)
@@ -229,39 +223,28 @@ class Config(StrictConfigModel):
                 expanded.add(item)
         return expanded
 
-    def agent_tool_filter(self, agent_name: str) -> Callable[[str], bool]:
-        """Return a predicate that returns True if a tool name is allowed.
+    def _permission_filter(self, agent_name: str, kind: str) -> Callable[[str], bool]:
+        """Return a predicate for whether a tool/skill name is allowed.
 
         Closed-by-default: no agent config, no permissions block, or
-        tools=None means nothing is allowed.  '*' means everything is allowed.
+        value=None means nothing is allowed.  '*' means everything is allowed.
         """
         agent = self.agents.get(agent_name)
         if not agent or not agent.permissions:
             return lambda _name: False
-        tools = agent.permissions.tools
-        if tools is None:
+        value = getattr(agent.permissions, kind, None)
+        if value is None:
             return lambda _name: False
-        if tools == "*":
+        if value == "*":
             return lambda _name: True
-        allowed = self._expand_permission_list(list(tools), kind="tools")
+        allowed = self._expand_permission_list(list(value), kind=kind)
         return lambda name: name in allowed
+
+    def agent_tool_filter(self, agent_name: str) -> Callable[[str], bool]:
+        return self._permission_filter(agent_name, "tools")
 
     def agent_skill_filter(self, agent_name: str) -> Callable[[str], bool]:
-        """Return a predicate that returns True if a skill name is allowed.
-
-        Closed-by-default: no agent config, no permissions block, or
-        skills=None means nothing is allowed.  '*' means everything is allowed.
-        """
-        agent = self.agents.get(agent_name)
-        if not agent or not agent.permissions:
-            return lambda _name: False
-        skills = agent.permissions.skills
-        if skills is None:
-            return lambda _name: False
-        if skills == "*":
-            return lambda _name: True
-        allowed = self._expand_permission_list(list(skills), kind="skills")
-        return lambda name: name in allowed
+        return self._permission_filter(agent_name, "skills")
 
 
 def ensure_shared_symlink(workspace: Path, shared: Path) -> None:

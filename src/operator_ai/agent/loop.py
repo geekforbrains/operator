@@ -19,7 +19,6 @@ from operator_ai.tools import subagent
 from operator_ai.tools.context import get_user_context
 from operator_ai.tools.subagent import RunConfig
 from operator_ai.tools.workspace import set_workspace
-from operator_ai.utils import truncate
 
 logger = logging.getLogger("operator.agent")
 
@@ -394,7 +393,13 @@ async def run_agent(
                 result = f"[error: unknown tool '{func_name}']"
                 logger.warning("%s unknown tool: %s", step, func_name)
             else:
-                logger.info("%s tool %s(%s)", step, func_name, truncate(str(args), 150))
+                args_str = str(args)
+                logger.info(
+                    "%s tool %s(%s)",
+                    step,
+                    func_name,
+                    args_str[:150] + "..." if len(args_str) > 150 else args_str,
+                )
                 try:
                     raw_result = await tool_def.func(**args)
                 except asyncio.CancelledError:
