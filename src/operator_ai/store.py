@@ -375,35 +375,27 @@ class Store:
 
     def list_users(self) -> list[User]:
         rows = self._conn.execute(
-            "SELECT username, created_at, timezone FROM users ORDER BY username"
+            """
+            SELECT u.username, u.created_at, u.timezone,
+                   GROUP_CONCAT(DISTINCT ui.platform_id) AS identities,
+                   GROUP_CONCAT(DISTINCT ur.role) AS roles
+            FROM users u
+            LEFT JOIN user_identities ui ON u.username = ui.username
+            LEFT JOIN user_roles ur ON u.username = ur.username
+            GROUP BY u.username
+            ORDER BY u.username
+            """
         ).fetchall()
-        users: list[User] = []
-        for row in rows:
-            uname = row["username"]
-            identities = [
-                r["platform_id"]
-                for r in self._conn.execute(
-                    "SELECT platform_id FROM user_identities WHERE username = ?",
-                    (uname,),
-                ).fetchall()
-            ]
-            roles = [
-                r["role"]
-                for r in self._conn.execute(
-                    "SELECT role FROM user_roles WHERE username = ?",
-                    (uname,),
-                ).fetchall()
-            ]
-            users.append(
-                User(
-                    username=uname,
-                    created_at=row["created_at"],
-                    identities=identities,
-                    roles=roles,
-                    timezone=row["timezone"],
-                )
+        return [
+            User(
+                username=row["username"],
+                created_at=row["created_at"],
+                identities=row["identities"].split(",") if row["identities"] else [],
+                roles=row["roles"].split(",") if row["roles"] else [],
+                timezone=row["timezone"],
             )
-        return users
+            for row in rows
+        ]
 
     # ── Timezone ──────────────────────────────────────────────────
 

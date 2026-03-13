@@ -4,7 +4,6 @@ import asyncio
 import logging
 import re
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
 
 import aiohttp
 from markdown_to_mrkdwn import SlackMarkdownConverter
@@ -21,6 +20,11 @@ from operator_ai.transport.slack.config import (
     extract_attachments,
     parse_user_profile,
     slack_ts_to_float,
+)
+from operator_ai.transport.slack.formatting import (
+    build_slack_prompt_extra,
+    format_channel_list,
+    format_slack_messages,
 )
 from operator_ai.transport.slack.mentions import (
     build_channel_mention_patterns,
@@ -473,93 +477,26 @@ class SlackTransport(Transport):
     # --- Prompt injection ---
 
     def format_channel_list(self, query: str = "") -> list[str]:
-        lines: list[str] = []
-        query_text = query.strip().casefold()
-        for ch_id, ch_name in sorted(self._channels.items(), key=lambda x: x[1]):
-            info = self._channel_info.get(ch_id, "")
-            haystack = f"{ch_name} {ch_id} {info}".casefold()
-            if query_text and query_text not in haystack:
-                continue
-            suffix = f" — {info}" if info else ""
-            lines.append(f"- <#{ch_id}> {ch_name}{suffix}")
-        return lines
+        return format_channel_list(self._channels, self._channel_info, query)
 
     @override
     def get_prompt_extra(self) -> str:
-        lines = [
-            "# Messaging",
-            "",
-            "Slack sessions are thread-scoped.",
-            "Every message addressed to you starts a new session thread or continues the current one.",
-            "In channels, only messages that mention you are addressed to you; unmentioned thread chatter is ambient context unless you inspect it deliberately.",
-            "Stay focused on the current thread unless you intentionally use Slack tools to inspect outside context.",
-            "",
-            "Use `send_message` with a channel name (e.g. `#general`) or channel ID.",
-            "It returns a Slack message timestamp you can pass as `thread_id` to reply in a thread.",
-            "Use `slack_read_channel` or `slack_read_thread` when you need context outside the current thread.",
-            "Use `slack_list_channels` if you need to inspect Slack destinations first.",
-            "Use `slack_find_users` to resolve people by name, Slack ID, or linked Operator username.",
-            "Use `@Name` only when the display name is unambiguous; otherwise call `slack_find_users` and use the returned `<@UID>` mention.",
-            "Use `#channel` for channels. Explicit `<@UID>` and `<#CID>` syntax also works.",
-            "",
-            "## Reactions",
-            "",
-            "Use `slack_add_reaction` and `slack_remove_reaction` to add/remove emoji reactions.",
-            "Emoji names are without colons (e.g. `thumbsup`, `eyes`, `white_check_mark`).",
-            "When others react to messages, you'll see those as context in your next interaction.",
-        ]
-        if self._inject_users_into_prompt:
-            if self.user_directory:
-                lines += ["", "## Workspace Members", ""]
-                visible = [p for p in self.user_directory.values() if not p.is_deleted]
-                visible.sort(key=lambda p: p.display_name.casefold())
-                for profile in visible:
-                    suffix = " (bot)" if profile.is_bot else ""
-                    lines.append(f"- <@{profile.user_id}> {profile.display_name}{suffix}")
-            else:
-                lines += [
-                    "",
-                    "User list not cached yet. Call `slack_find_users` if needed.",
-                ]
-        if self._inject_channels_into_prompt:
-            if self._channels:
-                lines += ["", "## Channels", ""]
-                lines += self.format_channel_list()
-            else:
-                lines += [
-                    "",
-                    "Channel names are not cached yet. Call `slack_list_channels` if needed.",
-                ]
-        return "\n".join(lines)
+        return build_slack_prompt_extra(
+            user_directory=self.user_directory,
+            channels=self._channels,
+            channel_info=self._channel_info,
+            inject_users=self._inject_users_into_prompt,
+            inject_channels=self._inject_channels_into_prompt,
+        )
 
     # --- Message formatting ---
 
     async def format_messages(self, messages: list[dict]) -> str:
-        lines: list[str] = []
-        for m in messages:
-            user_id = m.get("user", "")
-            if user_id:
-                name = await self._resolve_user(user_id)
-            elif m.get("bot_id"):
-                name = m.get("username") or m.get("bot_id", "bot")
-            else:
-                name = "unknown"
-            try:
-                ts = float(m.get("ts", "0"))
-                dt = datetime.fromtimestamp(ts, tz=UTC)
-                time_str = dt.strftime("%I:%M %p").lstrip("0")
-            except (TypeError, ValueError):
-                time_str = "unknown time"
-            text = await self._render_slack_text(m.get("text", ""))
-            files = m.get("files", [])
-            if files:
-                file_names = [f.get("name", "file") for f in files]
-                text += f" [attached: {', '.join(file_names)}]"
-            thread_ts = m.get("thread_ts")
-            reply_count = m.get("reply_count", 0)
-            suffix = f" (thread: {thread_ts}, {reply_count} replies)" if reply_count else ""
-            lines.append(f"[{name}] {time_str}: {text}{suffix}")
-        return "\n".join(lines)
+        return await format_slack_messages(
+            messages,
+            resolve_user=self._resolve_user,
+            render_text=self._render_slack_text,
+        )
 
     # --- Reaction handling ---
 

@@ -154,7 +154,7 @@ def test_run_agent_maps_thinking_to_reasoning_effort_when_supported(
         captured.update(kwargs)
         return _FakeResponse("done")
 
-    agent_module._supports_reasoning_effort.cache_clear()
+    agent_module._reasoning_cache.clear()
     monkeypatch.setattr("operator_ai.agent.loop.tool_registry.get_tools", lambda: [])
     monkeypatch.setattr("operator_ai.agent.loop.litellm.acompletion", fake_acompletion)
     monkeypatch.setattr(
@@ -196,7 +196,7 @@ def test_run_agent_omits_reasoning_effort_for_anthropic_when_thinking_off(
         captured.update(kwargs)
         return _FakeResponse("done")
 
-    agent_module._supports_reasoning_effort.cache_clear()
+    agent_module._reasoning_cache.clear()
     monkeypatch.setattr("operator_ai.agent.loop.tool_registry.get_tools", lambda: [])
     monkeypatch.setattr("operator_ai.agent.loop.litellm.acompletion", fake_acompletion)
     monkeypatch.setattr(
@@ -238,8 +238,8 @@ def test_run_agent_routes_openai_tool_reasoning_calls_through_responses_bridge(
         captured.update(kwargs)
         return _FakeResponse("done")
 
-    agent_module._supports_reasoning_effort.cache_clear()
-    agent_module._get_llm_provider.cache_clear()
+    agent_module._reasoning_cache.clear()
+    agent_module._provider_cache.clear()
     monkeypatch.setattr(
         "operator_ai.agent.loop.tool_registry.get_tools",
         lambda: [ToolDef(_fake_tool, "Echo the query back")],
@@ -297,7 +297,7 @@ def test_run_agent_fallback_omits_reasoning_effort_and_sanitizes_history(
             return ["reasoning_effort"]
         return ["max_tokens"]
 
-    agent_module._supports_reasoning_effort.cache_clear()
+    agent_module._reasoning_cache.clear()
     monkeypatch.setattr("operator_ai.agent.loop.tool_registry.get_tools", lambda: [])
     monkeypatch.setattr("operator_ai.agent.loop.litellm.acompletion", fake_acompletion)
     monkeypatch.setattr(

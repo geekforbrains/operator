@@ -115,8 +115,6 @@ async def fetch_all_channels(
             lambda rp=request_params: client.conversations_list(**rp),
         )
         for ch in resp.get("channels", []):
-            if not include_archived and ch.get("is_archived"):
-                continue
             ch_id = ch.get("id", "")
             ch_name = ch.get("name", "")
             if not ch_id or not ch_name:

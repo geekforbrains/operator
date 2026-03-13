@@ -124,6 +124,56 @@ def _job_dir(name: str) -> tuple[Path, str | None]:
     return jobs_dir / slug, None
 
 
+def _validate_job_inputs(name: str, schedule: str, prompt: str, agent: str) -> str | None:
+    """Shared validation for create/update. Returns error string or None."""
+    if not name:
+        return "[error: name is required]"
+    if not schedule:
+        return "[error: schedule is required]"
+    if not prompt:
+        return "[error: prompt is required]"
+    if not croniter.is_valid(schedule):
+        return f"[error: invalid cron schedule: {schedule!r}]"
+    return _validate_agent(agent)
+
+
+def _write_job_file(
+    job_dir: Path,
+    *,
+    name: str,
+    schedule: str,
+    prompt: str,
+    description: str,
+    agent: str,
+    model: str,
+    max_iterations: int,
+    enabled: bool,
+    prerun: bool,
+    postrun: bool,
+) -> None:
+    """Build and write JOB.md plus placeholder hook scripts."""
+    prerun_path = DEFAULT_PRERUN if prerun else ""
+    postrun_path = DEFAULT_POSTRUN if postrun else ""
+
+    content = _build_job_file(
+        name=name,
+        schedule=schedule,
+        prompt=prompt,
+        description=description,
+        agent=agent,
+        model=model,
+        max_iterations=max_iterations,
+        enabled=enabled,
+        prerun=prerun_path,
+        postrun=postrun_path,
+    )
+
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "JOB.md").write_text(content)
+    _ensure_hook_script(job_dir, prerun_path, "prerun", name)
+    _ensure_hook_script(job_dir, postrun_path, "postrun", name)
+
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
@@ -160,15 +210,9 @@ async def create_job(
         prerun: Create a prerun gate script at scripts/prerun.sh. Non-zero exit skips the run. Stdout is injected into the prompt as context.
         postrun: Create a postrun script at scripts/postrun.sh. Receives agent output on stdin. Non-zero exit marks the run failed.
     """
-    if not name:
-        return "[error: name is required]"
-    if not schedule:
-        return "[error: schedule is required]"
-    if not prompt:
-        return "[error: prompt is required]"
-
-    if not croniter.is_valid(schedule):
-        return f"[error: invalid cron schedule: {schedule!r}]"
+    err = _validate_job_inputs(name, schedule, prompt, agent)
+    if err:
+        return err
 
     job_dir, err = _job_dir(name)
     if err:
@@ -176,14 +220,8 @@ async def create_job(
     if job_dir.exists():
         return f"[error: job '{name}' already exists. Use update_job to modify.]"
 
-    err = _validate_agent(agent)
-    if err:
-        return err
-
-    prerun_path = DEFAULT_PRERUN if prerun else ""
-    postrun_path = DEFAULT_POSTRUN if postrun else ""
-
-    content = _build_job_file(
+    _write_job_file(
+        job_dir,
         name=name,
         schedule=schedule,
         prompt=prompt,
@@ -192,17 +230,9 @@ async def create_job(
         model=model,
         max_iterations=max_iterations,
         enabled=enabled,
-        prerun=prerun_path,
-        postrun=postrun_path,
+        prerun=prerun,
+        postrun=postrun,
     )
-
-    job_dir.mkdir(parents=True, exist_ok=True)
-    (job_dir / "JOB.md").write_text(content)
-
-    # Create placeholder hook scripts inside the job directory
-    _ensure_hook_script(job_dir, prerun_path, "prerun", name)
-    _ensure_hook_script(job_dir, postrun_path, "postrun", name)
-
     return f"Created job '{name}' at {job_dir}"
 
 
@@ -238,15 +268,9 @@ async def update_job(
         prerun: Enable a prerun gate script at scripts/prerun.sh.
         postrun: Enable a postrun script at scripts/postrun.sh.
     """
-    if not name:
-        return "[error: name is required]"
-    if not schedule:
-        return "[error: schedule is required]"
-    if not prompt:
-        return "[error: prompt is required]"
-
-    if not croniter.is_valid(schedule):
-        return f"[error: invalid cron schedule: {schedule!r}]"
+    err = _validate_job_inputs(name, schedule, prompt, agent)
+    if err:
+        return err
 
     job_dir, err = _job_dir(name)
     if err:
@@ -254,14 +278,8 @@ async def update_job(
     if not job_dir.exists():
         return f"[error: job '{name}' not found]"
 
-    err = _validate_agent(agent)
-    if err:
-        return err
-
-    prerun_path = DEFAULT_PRERUN if prerun else ""
-    postrun_path = DEFAULT_POSTRUN if postrun else ""
-
-    content = _build_job_file(
+    _write_job_file(
+        job_dir,
         name=name,
         schedule=schedule,
         prompt=prompt,
@@ -270,16 +288,9 @@ async def update_job(
         model=model,
         max_iterations=max_iterations,
         enabled=enabled,
-        prerun=prerun_path,
-        postrun=postrun_path,
+        prerun=prerun,
+        postrun=postrun,
     )
-
-    (job_dir / "JOB.md").write_text(content)
-
-    # Create placeholder hook scripts if newly added
-    _ensure_hook_script(job_dir, prerun_path, "prerun", name)
-    _ensure_hook_script(job_dir, postrun_path, "postrun", name)
-
     return f"Updated job '{name}'"
 
 

@@ -157,6 +157,10 @@ async def search_notes(query: str, scope: MemoryScope = "agent") -> str:
     except ValueError as e:
         return f"[error: {e}]"
 
+    if not memory_store.has_index:
+        return (
+            "[error: Memory search index not available. Run `operator memory index` to build it.]"
+        )
     results = memory_store.search_notes(resolved, query)
     if not results:
         return "No matching notes found."

@@ -5,7 +5,6 @@ import contextlib
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from functools import lru_cache
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -40,8 +39,12 @@ def _validate_model_response(response: Any) -> None:
         raise RuntimeError("model returned choice without message")
 
 
-@lru_cache(maxsize=256)
+_reasoning_cache: dict[str, bool] = {}
+
+
 def _supports_reasoning_effort(model: str) -> bool | None:
+    if model in _reasoning_cache:
+        return _reasoning_cache[model]
     try:
         supported_params = litellm.get_supported_openai_params(model=model) or []
     except Exception:
@@ -49,16 +52,23 @@ def _supports_reasoning_effort(model: str) -> bool | None:
             "capabilities: get_supported_openai_params failed for %s", model, exc_info=True
         )
         return None
-    return "reasoning_effort" in supported_params
+    result = "reasoning_effort" in supported_params
+    _reasoning_cache[model] = result
+    return result
 
 
-@lru_cache(maxsize=256)
+_provider_cache: dict[str, str] = {}
+
+
 def _get_llm_provider(model: str) -> str | None:
+    if model in _provider_cache:
+        return _provider_cache[model]
     try:
         _, provider, _, _ = litellm.get_llm_provider(model=model)
     except Exception:
         logger.warning("capabilities: get_llm_provider failed for %s", model, exc_info=True)
         return None
+    _provider_cache[model] = provider
     return provider
 
 

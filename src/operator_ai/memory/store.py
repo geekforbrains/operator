@@ -282,8 +282,16 @@ class MemoryStore:
 
     # ── Search ───────────────────────────────────────────────────
 
+    @property
+    def has_index(self) -> bool:
+        return self._index is not None
+
     def search_notes(self, scope: str, query: str) -> list[MemoryFile]:
-        """Search notes using the FTS5 index."""
+        """Search notes using the FTS5 index.
+
+        Returns empty when no index is configured. Callers should check
+        ``has_index`` to distinguish "no results" from "no index".
+        """
         if self._index:
             return self._search_notes_indexed(scope, query)
         logger.warning("search_notes called without index; returning empty")

@@ -6,10 +6,13 @@ Used by skills, jobs, and agents to parse and manipulate files with
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+logger = logging.getLogger("operator.frontmatter")
 
 
 def parse_frontmatter(text: str) -> dict[str, Any] | None:
@@ -20,9 +23,11 @@ def parse_frontmatter(text: str) -> dict[str, Any] | None:
     frontmatter_text, _ = split
     try:
         parsed = yaml.safe_load(frontmatter_text)
-    except yaml.YAMLError:
+    except yaml.YAMLError as e:
+        logger.warning("Malformed YAML frontmatter: %s", e)
         return None
     if not isinstance(parsed, dict):
+        logger.warning("YAML frontmatter is not a mapping (got %s)", type(parsed).__name__)
         return None
     return parsed
 
