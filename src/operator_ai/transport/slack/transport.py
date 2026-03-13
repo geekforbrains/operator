@@ -73,6 +73,9 @@ class SlackTransport(Transport):
         self._user_mention_patterns: list[tuple[re.Pattern[str], str]] | None = None
         self._channel_mention_patterns: list[tuple[re.Pattern[str], str]] | None = None
 
+        # Cached linked operator usernames (slack_id -> operator username)
+        self._linked_operator_usernames: dict[str, str] | None = None
+
         # Shared HTTP session for file downloads
         self._http_session: aiohttp.ClientSession | None = None
 
@@ -167,7 +170,12 @@ class SlackTransport(Transport):
     def _create_task(self, coro: Awaitable[None]) -> None:
         task = asyncio.create_task(coro)
         self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
+        task.add_done_callback(self._task_done)
+
+    def _task_done(self, task: asyncio.Task) -> None:
+        self._background_tasks.discard(task)
+        if not task.cancelled() and (exc := task.exception()):
+            logger.error("Background task failed", exc_info=exc)
 
     def _get_http_session(self) -> aiohttp.ClientSession:
         if self._http_session is None or self._http_session.closed:
@@ -212,6 +220,8 @@ class SlackTransport(Transport):
             self._user_mention_patterns = None
 
     def linked_operator_usernames(self) -> dict[str, str]:
+        if self._linked_operator_usernames is not None:
+            return self._linked_operator_usernames
         if self._store is None:
             return {}
         linked: dict[str, str] = {}
@@ -219,7 +229,12 @@ class SlackTransport(Transport):
             for identity in user.identities:
                 if identity.startswith("slack:"):
                     linked[identity.removeprefix("slack:")] = user.username
+        self._linked_operator_usernames = linked
         return linked
+
+    def invalidate_linked_usernames(self) -> None:
+        """Invalidate the cached linked operator usernames."""
+        self._linked_operator_usernames = None
 
     # --- Mention resolution ---
 
@@ -272,10 +287,11 @@ class SlackTransport(Transport):
                 lambda: app.client.conversations_info(channel=channel_id),
             )
             channel = resp.get("channel", {})
-            name = channel.get("name") or channel_id
-            if not name.startswith("#"):
-                name = f"#{name}"
+            raw_name = channel.get("name") or ""
+            name = f"#{raw_name}" if raw_name else channel_id
             self._channels[channel_id] = name
+            if raw_name:
+                self._channel_ids[raw_name] = channel_id
             return name
         except Exception:
             logger.warning("Failed to resolve Slack channel %s, using raw ID", channel_id)
