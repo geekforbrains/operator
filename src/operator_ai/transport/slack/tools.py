@@ -3,8 +3,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from operator_ai.tools.registry import ToolDef
+from operator_ai.transport.slack.api import api_call
 
 if TYPE_CHECKING:
+    from operator_ai.transport.slack.config import SlackUserProfile
     from operator_ai.transport.slack.transport import SlackTransport
 
 
@@ -21,9 +23,9 @@ def get_slack_tools(transport: SlackTransport) -> list[ToolDef]:
         """
         query_text = query.strip().casefold()
         limit = max(1, min(limit, 50))
-        operator_usernames = transport._linked_operator_usernames()
-        matches: list[tuple] = []
-        for profile in transport._user_directory.values():
+        operator_usernames = transport.linked_operator_usernames()
+        matches: list[tuple[SlackUserProfile, str]] = []
+        for profile in transport.user_directory.values():
             if profile.is_bot or profile.is_deleted:
                 continue
             operator_username = operator_usernames.get(profile.user_id, "")
@@ -73,7 +75,7 @@ def get_slack_tools(transport: SlackTransport) -> list[ToolDef]:
 
     async def slack_list_channels(query: str = "") -> str:
         """List available Slack channels the bot can post to."""
-        lines = transport._format_channel_list(query=query)
+        lines = transport.format_channel_list(query=query)
         if lines:
             return "\n".join(lines)
         return "No matching channels found." if query.strip() else "No channels available."
@@ -88,10 +90,10 @@ def get_slack_tools(transport: SlackTransport) -> list[ToolDef]:
         channel_id = await transport.resolve_channel_id(channel)
         if channel_id is None:
             return f"[error: could not resolve channel '{channel}']"
-        app = transport._require_app()
+        app = transport.require_app()
         count = max(1, min(count, 100))
         try:
-            resp = await transport._api_call(
+            resp = await api_call(
                 "conversations.history",
                 lambda: app.client.conversations_history(channel=channel_id, limit=count),
             )
@@ -100,7 +102,7 @@ def get_slack_tools(transport: SlackTransport) -> list[ToolDef]:
         messages = resp.get("messages", [])
         if not messages:
             return "No messages found."
-        return await transport._format_messages(messages)
+        return await transport.format_messages(messages)
 
     async def slack_read_thread(channel: str, thread_id: str, count: int = 50) -> str:
         """Read messages from a Slack thread.
@@ -113,10 +115,10 @@ def get_slack_tools(transport: SlackTransport) -> list[ToolDef]:
         channel_id = await transport.resolve_channel_id(channel)
         if channel_id is None:
             return f"[error: could not resolve channel '{channel}']"
-        app = transport._require_app()
+        app = transport.require_app()
         count = max(1, min(count, 100))
         try:
-            resp = await transport._api_call(
+            resp = await api_call(
                 "conversations.replies",
                 lambda: app.client.conversations_replies(
                     channel=channel_id, ts=thread_id, limit=count
@@ -127,7 +129,7 @@ def get_slack_tools(transport: SlackTransport) -> list[ToolDef]:
         messages = resp.get("messages", [])
         if not messages:
             return "No messages found in thread."
-        return await transport._format_messages(messages)
+        return await transport.format_messages(messages)
 
     async def slack_add_reaction(channel: str, message_id: str, emoji: str) -> str:
         """Add an emoji reaction to a Slack message.
@@ -140,9 +142,9 @@ def get_slack_tools(transport: SlackTransport) -> list[ToolDef]:
         channel_id = await transport.resolve_channel_id(channel)
         if channel_id is None:
             return f"[error: could not resolve channel '{channel}']"
-        app = transport._require_app()
+        app = transport.require_app()
         try:
-            await transport._api_call(
+            await api_call(
                 "reactions.add",
                 lambda: app.client.reactions_add(
                     channel=channel_id, timestamp=message_id, name=emoji
@@ -163,9 +165,9 @@ def get_slack_tools(transport: SlackTransport) -> list[ToolDef]:
         channel_id = await transport.resolve_channel_id(channel)
         if channel_id is None:
             return f"[error: could not resolve channel '{channel}']"
-        app = transport._require_app()
+        app = transport.require_app()
         try:
-            await transport._api_call(
+            await api_call(
                 "reactions.remove",
                 lambda: app.client.reactions_remove(
                     channel=channel_id, timestamp=message_id, name=emoji

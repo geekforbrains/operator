@@ -20,7 +20,7 @@ def test_slack_message_formatting_uses_utc() -> None:
     transport._resolve_user = _resolve_user  # type: ignore[method-assign]
 
     formatted = asyncio.run(
-        transport._format_messages(
+        transport.format_messages(
             [
                 {
                     "user": "U123",
@@ -96,7 +96,7 @@ def test_slack_outbound_mentions_expand_unique_display_names() -> None:
         bot_token="xoxb-test",
         app_token="xapp-test",
     )
-    transport._user_directory = {
+    transport.user_directory = {
         "U123": SlackUserProfile(
             user_id="U123",
             slack_name="alice",
@@ -117,7 +117,7 @@ def test_slack_outbound_mentions_skip_ambiguous_display_names() -> None:
         bot_token="xoxb-test",
         app_token="xapp-test",
     )
-    transport._user_directory = {
+    transport.user_directory = {
         "U123": SlackUserProfile(
             user_id="U123",
             slack_name="alex.one",
@@ -201,12 +201,12 @@ def test_slack_channel_snapshot_refresh_replaces_old_names(monkeypatch) -> None:
 
         await transport._refresh_channels()
         assert await transport.resolve_channel_id("#general") == "C1"
-        assert transport._format_channel_list() == ["- <#C1> #general"]
+        assert transport.format_channel_list() == ["- <#C1> #general"]
 
         await transport._refresh_channels()
         assert await transport.resolve_channel_id("#general") is None
         assert await transport.resolve_channel_id("#eng") == "C1"
-        assert transport._format_channel_list() == ["- <#C1> #eng"]
+        assert transport.format_channel_list() == ["- <#C1> #eng"]
 
     asyncio.run(_run())
 
@@ -266,7 +266,7 @@ def test_slack_channel_events_refresh_full_snapshot(monkeypatch) -> None:
         async def _noop() -> None:
             return None
 
-        monkeypatch.setattr(transport, "_api_call", _fake_api_call)
+        monkeypatch.setattr("operator_ai.transport.slack.transport.api_call", _fake_api_call)
         monkeypatch.setattr(
             "operator_ai.transport.slack.api.fetch_all_users",
             lambda *_a, **_kw: _noop(),
@@ -349,7 +349,7 @@ def test_slack_channel_replies_require_mentions(monkeypatch) -> None:
         async def _noop() -> None:
             return None
 
-        monkeypatch.setattr(transport, "_api_call", _fake_api_call)
+        monkeypatch.setattr("operator_ai.transport.slack.transport.api_call", _fake_api_call)
         monkeypatch.setattr(
             "operator_ai.transport.slack.api.fetch_all_users",
             lambda *_a, **_kw: _noop(),

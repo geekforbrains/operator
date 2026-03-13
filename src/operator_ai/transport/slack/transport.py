@@ -64,7 +64,7 @@ class SlackTransport(Transport):
         self._channel_refresh_handle: asyncio.TimerHandle | None = None
 
         # In-memory caches
-        self._user_directory: dict[str, SlackUserProfile] = {}
+        self.user_directory: dict[str, SlackUserProfile] = {}
         self._channels: dict[str, str] = {}
         self._channel_ids: dict[str, str] = {}
         self._channel_info: dict[str, str] = {}
@@ -72,6 +72,9 @@ class SlackTransport(Transport):
         # Pre-compiled mention patterns, invalidated on cache changes
         self._user_mention_patterns: list[tuple[re.Pattern[str], str]] | None = None
         self._channel_mention_patterns: list[tuple[re.Pattern[str], str]] | None = None
+
+        # Shared HTTP session for file downloads
+        self._http_session: aiohttp.ClientSession | None = None
 
     # --- Lifecycle ---
 
@@ -124,14 +127,14 @@ class SlackTransport(Transport):
 
         self._handler = AsyncSocketModeHandler(self._app, self._app_token)
         try:
-            auth_resp = await self._api_call("auth.test", self._app.client.auth_test)
+            auth_resp = await api_call("auth.test", self._app.client.auth_test)
             self._bot_user_id = auth_resp.get("user_id", "")
             logger.debug("Bot user ID: %s", self._bot_user_id)
         except Exception:
             logger.warning("Failed to resolve bot user ID via auth.test", exc_info=True)
         try:
-            self._user_directory = await fetch_all_users(self._app.client)
-            logger.debug("Loaded %d Slack users", len(self._user_directory))
+            self.user_directory = await fetch_all_users(self._app.client)
+            logger.debug("Loaded %d Slack users", len(self.user_directory))
         except Exception:
             logger.warning("Failed to load Slack users on startup", exc_info=True)
         try:
@@ -152,6 +155,9 @@ class SlackTransport(Transport):
                 task.cancel()
             await asyncio.gather(*self._background_tasks, return_exceptions=True)
             self._background_tasks.clear()
+        if self._http_session and not self._http_session.closed:
+            await self._http_session.close()
+            self._http_session = None
         if self._handler:
             await self._handler.close_async()
             logger.info("Stopped Slack transport '%s'", self.agent_name)
@@ -163,19 +169,22 @@ class SlackTransport(Transport):
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
+    def _get_http_session(self) -> aiohttp.ClientSession:
+        if self._http_session is None or self._http_session.closed:
+            self._http_session = aiohttp.ClientSession()
+        return self._http_session
+
     # --- API helpers ---
 
-    def _require_app(self) -> AsyncApp:
+    def require_app(self) -> AsyncApp:
         if self._app is None:
             raise RuntimeError("Transport not started")
         return self._app
 
-    async def _api_call(self, operation: str, call: Callable[[], Awaitable[dict]]) -> dict:
-        return await api_call(operation, call)
-
     # --- Cache management ---
 
     _CHANNEL_REFRESH_DELAY = 2.0
+    _MAX_THREAD_MESSAGES = 50
 
     def _schedule_channel_refresh(self) -> None:
         if self._channel_refresh_handle is not None:
@@ -187,7 +196,7 @@ class SlackTransport(Transport):
         )
 
     async def _refresh_channels(self) -> None:
-        app = self._require_app()
+        app = self.require_app()
         channels, channel_ids, channel_info = await fetch_all_channels(
             app.client, include_archived=self._include_archived_channels
         )
@@ -199,10 +208,10 @@ class SlackTransport(Transport):
     def _upsert_user(self, raw_user: dict) -> None:
         profile = parse_user_profile(raw_user)
         if profile:
-            self._user_directory[profile.user_id] = profile
+            self.user_directory[profile.user_id] = profile
             self._user_mention_patterns = None
 
-    def _linked_operator_usernames(self) -> dict[str, str]:
+    def linked_operator_usernames(self) -> dict[str, str]:
         if self._store is None:
             return {}
         linked: dict[str, str] = {}
@@ -216,7 +225,7 @@ class SlackTransport(Transport):
 
     def _get_user_mention_patterns(self) -> list[tuple[re.Pattern[str], str]]:
         if self._user_mention_patterns is None:
-            self._user_mention_patterns = build_user_mention_patterns(self._user_directory)
+            self._user_mention_patterns = build_user_mention_patterns(self.user_directory)
         return self._user_mention_patterns
 
     def _get_channel_mention_patterns(self) -> list[tuple[re.Pattern[str], str]]:
@@ -227,7 +236,7 @@ class SlackTransport(Transport):
     def _resolve_outbound_mentions(self, text: str) -> str:
         if not self._expand_mentions:
             return text
-        if not self._user_directory and not self._channel_ids:
+        if not self.user_directory and not self._channel_ids:
             return text
         return expand_mentions(
             text,
@@ -236,14 +245,14 @@ class SlackTransport(Transport):
         )
 
     async def _resolve_user(self, user_id: str) -> str:
-        profile = self._user_directory.get(user_id)
+        profile = self.user_directory.get(user_id)
         if profile:
             return profile.display_name
-        app = self._require_app()
+        app = self.require_app()
         try:
-            resp = await self._api_call("users.info", lambda: app.client.users_info(user=user_id))
+            resp = await api_call("users.info", lambda: app.client.users_info(user=user_id))
             self._upsert_user(resp.get("user", {}))
-            profile = self._user_directory.get(user_id)
+            profile = self.user_directory.get(user_id)
             if profile:
                 return profile.display_name
         except Exception:
@@ -256,9 +265,9 @@ class SlackTransport(Transport):
             return cached
         if channel_id.startswith("D"):
             return "DM"
-        app = self._require_app()
+        app = self.require_app()
         try:
-            resp = await self._api_call(
+            resp = await api_call(
                 "conversations.info",
                 lambda: app.client.conversations_info(channel=channel_id),
             )
@@ -286,12 +295,12 @@ class SlackTransport(Transport):
 
     @override
     async def send(self, channel_id: str, text: str, thread_id: str | None = None) -> str:
-        app = self._require_app()
+        app = self.require_app()
         text = self._resolve_outbound_mentions(text)
         kwargs = {"channel": channel_id, "text": _mrkdwn.convert(text)}
         if thread_id:
             kwargs["thread_ts"] = thread_id
-        resp = await self._api_call(
+        resp = await api_call(
             "chat.postMessage",
             lambda: app.client.chat_postMessage(**kwargs),
         )
@@ -299,9 +308,9 @@ class SlackTransport(Transport):
 
     @override
     async def update(self, channel_id: str, message_id: str, text: str) -> None:
-        app = self._require_app()
+        app = self.require_app()
         text = self._resolve_outbound_mentions(text)
-        await self._api_call(
+        await api_call(
             "chat.update",
             lambda: app.client.chat_update(
                 channel=channel_id, ts=message_id, text=_mrkdwn.convert(text)
@@ -310,8 +319,8 @@ class SlackTransport(Transport):
 
     @override
     async def delete(self, channel_id: str, message_id: str) -> None:
-        app = self._require_app()
-        await self._api_call(
+        app = self.require_app()
+        await api_call(
             "chat.delete",
             lambda: app.client.chat_delete(channel=channel_id, ts=message_id),
         )
@@ -322,25 +331,25 @@ class SlackTransport(Transport):
 
     @override
     async def download_file(self, attachment: Attachment) -> bytes:
-        async with aiohttp.ClientSession() as session:
-            headers = {"Authorization": f"Bearer {self._bot_token}"}
-            async with session.get(attachment.url, headers=headers) as resp:
-                resp.raise_for_status()
-                length = resp.content_length
-                if length is not None and length > self._MAX_DOWNLOAD:
-                    raise ValueError(f"File too large: {length} bytes (limit {self._MAX_DOWNLOAD})")
-                if length is not None:
-                    return await resp.read()
-                chunks: list[bytes] = []
-                total = 0
-                async for chunk in resp.content.iter_chunked(1024 * 1024):
-                    total += len(chunk)
-                    if total > self._MAX_DOWNLOAD:
-                        raise ValueError(
-                            f"File too large: >{self._MAX_DOWNLOAD} bytes (limit {self._MAX_DOWNLOAD})"
-                        )
-                    chunks.append(chunk)
-                return b"".join(chunks)
+        session = self._get_http_session()
+        headers = {"Authorization": f"Bearer {self._bot_token}"}
+        async with session.get(attachment.url, headers=headers) as resp:
+            resp.raise_for_status()
+            length = resp.content_length
+            if length is not None and length > self._MAX_DOWNLOAD:
+                raise ValueError(f"File too large: {length} bytes (limit {self._MAX_DOWNLOAD})")
+            if length is not None:
+                return await resp.read()
+            chunks: list[bytes] = []
+            total = 0
+            async for chunk in resp.content.iter_chunked(1024 * 1024):
+                total += len(chunk)
+                if total > self._MAX_DOWNLOAD:
+                    raise ValueError(
+                        f"File too large: >{self._MAX_DOWNLOAD} bytes (limit {self._MAX_DOWNLOAD})"
+                    )
+                chunks.append(chunk)
+            return b"".join(chunks)
 
     @override
     async def send_file(
@@ -350,7 +359,7 @@ class SlackTransport(Transport):
         filename: str,
         thread_id: str | None = None,
     ) -> str:
-        app = self._require_app()
+        app = self.require_app()
         kwargs: dict = {
             "channel": channel_id,
             "content": file_data,
@@ -358,7 +367,7 @@ class SlackTransport(Transport):
         }
         if thread_id:
             kwargs["thread_ts"] = thread_id
-        resp = await self._api_call(
+        resp = await api_call(
             "files.upload_v2",
             lambda: app.client.files_upload_v2(**kwargs),
         )
@@ -368,6 +377,7 @@ class SlackTransport(Transport):
             for channel_shares in shares.get(share_type, {}).values():
                 if channel_shares:
                     return channel_shares[0].get("ts", "")
+        logger.warning("send_file: no message ts found in upload response for %s", filename)
         return ""
 
     # --- Context resolution ---
@@ -410,9 +420,9 @@ class SlackTransport(Transport):
 
     @override
     async def get_thread_context(self, msg: IncomingMessage) -> str | None:
-        app = self._require_app()
+        app = self.require_app()
         try:
-            resp = await self._api_call(
+            resp = await api_call(
                 "conversations.replies",
                 lambda: app.client.conversations_replies(
                     channel=msg.channel_id, ts=msg.root_message_id
@@ -428,11 +438,15 @@ class SlackTransport(Transport):
             return None
 
         total = len(replies)
-        if total > 50:
-            replies = replies[-50:]
+        if total > self._MAX_THREAD_MESSAGES:
+            replies = replies[-self._MAX_THREAD_MESSAGES :]
 
-        prefix = f"(showing last 50 of {total} messages)\n" if total > 50 else ""
-        return prefix + await self._format_messages(replies)
+        prefix = (
+            f"(showing last {self._MAX_THREAD_MESSAGES} of {total} messages)\n"
+            if total > self._MAX_THREAD_MESSAGES
+            else ""
+        )
+        return prefix + await self.format_messages(replies)
 
     # --- Tools ---
 
@@ -442,7 +456,7 @@ class SlackTransport(Transport):
 
     # --- Prompt injection ---
 
-    def _format_channel_list(self, query: str = "") -> list[str]:
+    def format_channel_list(self, query: str = "") -> list[str]:
         lines: list[str] = []
         query_text = query.strip().casefold()
         for ch_id, ch_name in sorted(self._channels.items(), key=lambda x: x[1]):
@@ -479,9 +493,9 @@ class SlackTransport(Transport):
             "When others react to messages, you'll see those as context in your next interaction.",
         ]
         if self._inject_users_into_prompt:
-            if self._user_directory:
+            if self.user_directory:
                 lines += ["", "## Workspace Members", ""]
-                visible = [p for p in self._user_directory.values() if not p.is_deleted]
+                visible = [p for p in self.user_directory.values() if not p.is_deleted]
                 visible.sort(key=lambda p: p.display_name.casefold())
                 for profile in visible:
                     suffix = " (bot)" if profile.is_bot else ""
@@ -494,7 +508,7 @@ class SlackTransport(Transport):
         if self._inject_channels_into_prompt:
             if self._channels:
                 lines += ["", "## Channels", ""]
-                lines += self._format_channel_list()
+                lines += self.format_channel_list()
             else:
                 lines += [
                     "",
@@ -504,15 +518,20 @@ class SlackTransport(Transport):
 
     # --- Message formatting ---
 
-    async def _format_messages(self, messages: list[dict]) -> str:
+    async def format_messages(self, messages: list[dict]) -> str:
         lines: list[str] = []
         for m in messages:
-            user_id = m.get("user", "unknown")
-            name = await self._resolve_user(user_id)
+            user_id = m.get("user", "")
+            if user_id:
+                name = await self._resolve_user(user_id)
+            elif m.get("bot_id"):
+                name = m.get("username") or m.get("bot_id", "bot")
+            else:
+                name = "unknown"
             try:
                 ts = float(m.get("ts", "0"))
                 dt = datetime.fromtimestamp(ts, tz=UTC)
-                time_str = dt.strftime("%-I:%M %p")
+                time_str = dt.strftime("%I:%M %p").lstrip("0")
             except (TypeError, ValueError):
                 time_str = "unknown time"
             text = await self._render_slack_text(m.get("text", ""))
@@ -535,7 +554,7 @@ class SlackTransport(Transport):
         channel_id = item.get("channel", "")
         message_ts = item.get("ts", "")
 
-        if not all([emoji, user_id, channel_id, message_ts]):
+        if not all((emoji, user_id, channel_id, message_ts)):
             return
         if user_id == self._bot_user_id:
             return
