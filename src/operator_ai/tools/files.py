@@ -4,7 +4,7 @@ import asyncio
 from pathlib import Path
 
 from operator_ai.tools.registry import MAX_OUTPUT, tool
-from operator_ai.tools.workspace import get_workspace
+from operator_ai.tools.workspace import get_workspace, is_sandboxed
 
 MAX_READ_BYTES = 1_000_000  # 1 MB
 
@@ -12,11 +12,20 @@ MAX_READ_BYTES = 1_000_000  # 1 MB
 def _resolve(path: str) -> Path:
     """Resolve a path relative to the agent workspace.
 
-    Allows absolute paths and paths outside the workspace.
+    When sandboxed (default), paths must resolve inside the workspace.
+    When not sandboxed, allows absolute paths and paths outside the workspace.
     """
     workspace = get_workspace().resolve()
     p = Path(path).expanduser()
-    return p.resolve() if p.is_absolute() else (workspace / p).resolve()
+    resolved = p.resolve() if p.is_absolute() else (workspace / p).resolve()
+
+    if is_sandboxed():
+        try:
+            resolved.relative_to(workspace)
+        except ValueError:
+            raise ValueError(f"path outside workspace: {path}") from None
+
+    return resolved
 
 
 @tool(description="Read the contents of a file.")
@@ -24,7 +33,7 @@ async def read_file(path: str) -> str:
     """Read a file.
 
     Args:
-        path: File path (relative to workspace, or absolute).
+        path: File path (relative to workspace, or absolute when unsandboxed).
     """
     try:
         p = _resolve(path)
@@ -58,7 +67,7 @@ async def write_file(path: str, content: str) -> str:
     """Write a file.
 
     Args:
-        path: File path (relative to workspace, or absolute).
+        path: File path (relative to workspace, or absolute when unsandboxed).
         content: The content to write.
     """
     try:

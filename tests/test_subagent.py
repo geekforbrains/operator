@@ -100,6 +100,9 @@ class FakeConfig:
             return lambda skill: skill == "research"
         return None
 
+    def agent_sandbox(self, name: str) -> bool:  # noqa: ARG002
+        return True
+
 
 def test_resolve_none_returns_current() -> None:
     current = SubagentContext(models=["m1"], max_iterations=5, workspace="/ws")

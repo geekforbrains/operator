@@ -103,6 +103,7 @@ class AgentConfig(StrictConfigModel):
     max_iterations: int | None = Field(default=None, gt=0)
     context_ratio: float | None = Field(default=None, gt=0.0, le=1.0)
     max_output_tokens: int | None = Field(default=None, gt=0)
+    sandbox: bool = True
     transport: TransportConfig | None = None
     permissions: PermissionsConfig | None = None
 
@@ -160,6 +161,12 @@ class Config(StrictConfigModel):
         if agent and agent.max_output_tokens is not None:
             return agent.max_output_tokens
         return self.defaults.max_output_tokens
+
+    def agent_sandbox(self, agent_name: str) -> bool:
+        agent = self.agents.get(agent_name)
+        if agent is not None:
+            return agent.sandbox
+        return True
 
     def agent_dir(self, agent_name: str) -> Path:
         return self.base_dir / "agents" / agent_name

@@ -214,20 +214,29 @@ pip install sqlite-vec
 
 Without embeddings, FTS5 handles all search. No external model dependency is required for core memory functionality.
 
-### Permissions
+### Permissions and sandbox
 
-Closed by default. A new agent with no `permissions` block has access to nothing — permissions are an allowlist. Use `"*"` to grant full access. Roles control which users can talk to which agents.
+Restrict by default. A new agent with no `permissions` block has access to nothing — permissions are an allowlist. Roles control which users can talk to which agents.
+
+Agents are also **sandboxed by default** — file tools (`read_file`, `write_file`, `list_files`) are confined to the agent's workspace. Set `sandbox: false` to unlock full filesystem access. `run_shell` is always unrestricted — granting it is the explicit trust signal for full machine access.
 
 ```yaml
 agents:
   operator:
+    sandbox: false  # full filesystem access
     permissions:
       tools: "*"
       skills: "*"
 
+  researcher:
+    # sandbox: true (default) — file tools confined to workspace
+    permissions:
+      tools: [read_file, write_file, list_files, web_fetch, search_notes]
+      skills: "*"
+
   public-bot:
     permissions:
-      tools: [read_file, web_fetch, search_notes]
+      tools: [web_fetch, search_notes]
       skills: [summarize]
 
 roles:

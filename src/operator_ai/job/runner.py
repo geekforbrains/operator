@@ -239,6 +239,7 @@ async def execute_job(
                 memory_store=memory_store,
                 base_dir=config.base_dir,
                 run_envelope=run_envelope,
+                sandbox=config.agent_sandbox(agent_name),
             ),
         )
 

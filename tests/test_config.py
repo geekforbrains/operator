@@ -15,6 +15,26 @@ from operator_ai.config import (
     load_config,
 )
 
+# ── Sandbox ──────────────────────────────────────────────────
+
+
+def test_agent_sandbox_defaults_to_true() -> None:
+    c = Config(defaults={"models": ["test/m"]}, agents={"a": {}})
+    assert c.agent_sandbox("a") is True
+
+
+def test_agent_sandbox_explicit_false() -> None:
+    c = Config(defaults={"models": ["test/m"]}, agents={"a": {"sandbox": False}})
+    assert c.agent_sandbox("a") is False
+
+
+def test_agent_sandbox_unknown_agent_defaults_true() -> None:
+    c = Config(defaults={"models": ["test/m"]})
+    assert c.agent_sandbox("nonexistent") is True
+
+
+# ── Thinking ─────────────────────────────────────────────────
+
 
 def test_agent_thinking_defaults_to_off() -> None:
     c = Config(defaults={"models": ["test/m"]})

@@ -300,6 +300,35 @@ duplicating them across agents.
 `AGENT.md` may extend the workspace conventions for a specific agent, but it
 should not redefine the base top-level workspace structure.
 
+### Workspace sandbox
+
+Agents are sandboxed to their workspace by default. File tools (`read_file`,
+`write_file`, `list_files`) reject paths that resolve outside the agent's
+workspace directory. This is the safe default — most agents have no reason to
+read or write files outside their own workspace, and the workspace layout
+provides standard directories for every common use case.
+
+The sandbox is controlled by a single `sandbox` flag on the agent config:
+
+- `sandbox: true` (default) — file tools are confined to the workspace.
+- `sandbox: false` — file tools can reach the full filesystem.
+
+`run_shell` is always unrestricted regardless of the sandbox flag. Shell
+execution is inherently unconstrained — granting it is the explicit signal
+that the operator trusts this agent with full machine access. This is why
+`run_shell` should be granted sparingly and only to agents that genuinely
+need it.
+
+Tools should not individually restrict their own reach. The two layers of
+control are **permissions** (which tools an agent has) and **sandbox**
+(whether file tools are confined to the workspace). Tools that are granted
+should work fully within their boundary — not be artificially limited in a
+way that makes them useless.
+
+The `shared/` symlink lives inside the workspace, so cross-agent file
+exchange works naturally within the sandbox. An agent can read from any
+agent's shared area and write to its own — no sandbox escape needed.
+
 ### Runtime state
 
 Operator has two kinds of non-memory state. They serve different purposes and
@@ -488,16 +517,37 @@ The skill tool surface:
 - `update_skill` — full replace with the same explicit fields
 - `delete_skill` / `list_skills`
 
-### Permissions and roles
+### Permissions, roles, and sandbox
 
-Access in Operator is closed by default. Agents, tools, and skills are not
-available to users unless explicitly granted.
+Operator's security model is restrict by default. Every layer starts closed
+and requires explicit grants to open.
 
-- Users have roles. Roles determine which agents a user can interact with.
-- Agents have permissions. Permissions determine which tools and skills an
-  agent can use.
-- A new agent with no permissions block has access to nothing. Access must be
-  explicitly opened.
+- **Users** have roles. Roles determine which agents a user can interact with.
+- **Agents** have permissions. Permissions determine which tools and skills
+  an agent can use.
+- **Sandbox** confines file tools to the workspace by default. Agents that
+  need broader filesystem access must be explicitly unsandboxed.
+
+A new agent with no permissions block has access to nothing. A new agent
+without a `sandbox` override is confined to its workspace. Forgetting to
+configure either should result in less access, not more.
+
+These are two orthogonal layers:
+
+1. **Permissions** control which tools exist in the agent's context. An agent
+   that does not have `run_shell` cannot execute shell commands, period.
+2. **Sandbox** controls what file tools can reach. When sandboxed, file tools
+   are confined to the workspace. When unsandboxed, file tools have full
+   filesystem access.
+
+Tools should not individually restrict their own reach beyond sandbox
+enforcement. A tool that is granted should work fully within its boundary.
+Artificially limiting granted tools makes them useless and pushes agents
+toward workarounds.
+
+`run_shell` is always unrestricted regardless of sandbox. Shell execution is
+inherently unconstrained — granting it is the explicit signal that the
+operator trusts this agent with full machine access.
 
 Permission groups allow clusters of related tools to be referenced by name
 using an `@group` prefix (e.g., `@memory`, `@files`). Groups are generated
@@ -513,15 +563,6 @@ Permissions are enforced at two layers. Only permitted tools and skills are
 injected into the agent's context, so the agent never sees what it cannot use.
 Additionally, tool calls are checked at runtime and rejected programmatically,
 so even if an agent is tricked into calling a tool by name, the call will fail.
-
-This is an allowlist model, not a denylist. In a team-facing system, the safe
-default is locked down. Forgetting to configure permissions should result in
-less access, not more.
-
-Agents should get the smallest tool and skill surface that still lets them do
-their job. High-impact capabilities such as arbitrary shell execution should be
-granted sparingly and only where they are clearly needed. The goal is to reduce
-unnecessary exposure to risky actions.
 
 The first admin user is created through the CLI after `operator init`, using
 `operator user add <username> --role admin slack <YOUR_SLACK_USER_ID>`. From

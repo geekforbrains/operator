@@ -44,6 +44,7 @@ class RunConfig:
     allowed_agents: set[str] | None = None
     base_dir: Path | None = None
     run_envelope: RunEnvelope | None = None
+    sandbox: bool = True
 
 
 SubagentContext = RunConfig
@@ -95,6 +96,7 @@ def _resolve_agent_context(agent_name: str | None, current: RunConfig) -> RunCon
         tool_filter=config.agent_tool_filter(agent_name),
         skill_filter=config.agent_skill_filter(agent_name),
         agent_name=agent_name,
+        sandbox=config.agent_sandbox(agent_name),
     )
 
 

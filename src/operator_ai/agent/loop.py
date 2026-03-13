@@ -186,7 +186,7 @@ async def run_agent(
     ws.mkdir(parents=True, exist_ok=True)
     if rc.shared_dir is not None:
         ensure_shared_symlink(ws, rc.shared_dir)
-    set_workspace(ws)
+    set_workspace(ws, sandbox=rc.sandbox)
 
     # Configure subagent tool with current context
     subagent.configure(
@@ -211,6 +211,7 @@ async def run_agent(
             allowed_agents=rc.allowed_agents,
             base_dir=resolve_base_dir(config=rc.config, base_dir=rc.base_dir),
             run_envelope=rc.run_envelope,
+            sandbox=rc.sandbox,
         )
     )
 

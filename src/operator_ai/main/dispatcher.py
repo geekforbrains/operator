@@ -378,6 +378,7 @@ class Dispatcher:
                     allowed_agents=allowed_agents,
                     base_dir=self.config.base_dir,
                     run_envelope=run_envelope,
+                    sandbox=self.config.agent_sandbox(agent_name),
                 ),
                 on_message=on_message,
                 check_cancelled=runtime.check_cancelled,
