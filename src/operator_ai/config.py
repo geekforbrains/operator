@@ -30,13 +30,6 @@ os.environ.setdefault("OPERATOR_HOME", str(OPERATOR_DIR))
 ThinkingLevel = Literal["off", "low", "medium", "high"]
 
 
-def _normalize_models(values: Any) -> Any:
-    """Allow singular 'model' key as alias for 'models' list."""
-    if isinstance(values, dict) and "model" in values and "models" not in values:
-        values["models"] = [values.pop("model")]
-    return values
-
-
 def _validate_timezone(value: str) -> str:
     try:
         ZoneInfo(value)
@@ -62,11 +55,6 @@ class DefaultsConfig(StrictConfigModel):
     max_output_tokens: int | None = Field(default=None, gt=0)
     hook_timeout: int = Field(default=30, gt=0)
     embeddings: EmbeddingConfig | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_models(cls, values: Any) -> Any:
-        return _normalize_models(values)
 
     @model_validator(mode="after")
     def validate_models_non_empty(self) -> DefaultsConfig:
@@ -117,11 +105,6 @@ class AgentConfig(StrictConfigModel):
     max_output_tokens: int | None = Field(default=None, gt=0)
     transport: TransportConfig | None = None
     permissions: PermissionsConfig | None = None
-
-    @model_validator(mode="before")
-    @classmethod
-    def normalize_models(cls, values: Any) -> Any:
-        return _normalize_models(values)
 
 
 class Config(StrictConfigModel):

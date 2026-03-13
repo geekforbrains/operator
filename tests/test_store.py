@@ -378,45 +378,6 @@ def test_save_job_state_upsert(store: Store) -> None:
     assert loaded.run_count == 2
 
 
-# ── Migration ───────────────────────────────────────────────
-
-
-def test_store_migrates_legacy_messages_table(tmp_path: Path) -> None:
-    db_path = tmp_path / "legacy.db"
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        """
-        CREATE TABLE conversations (
-            conversation_id TEXT PRIMARY KEY,
-            transport_name TEXT NOT NULL,
-            channel_id TEXT NOT NULL,
-            root_thread_id TEXT NOT NULL,
-            updated_at REAL NOT NULL,
-            metadata_json TEXT NOT NULL
-        )
-        """
-    )
-    conn.execute(
-        """
-        CREATE TABLE messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            conversation_id TEXT NOT NULL,
-            message_json TEXT NOT NULL
-        )
-        """
-    )
-    conn.commit()
-    conn.close()
-
-    migrated = Store(path=db_path)
-    migrated.ensure_conversation("conv-1")
-
-    columns = {
-        row["name"] for row in migrated._conn.execute("PRAGMA table_info(messages)").fetchall()
-    }
-    assert "created_at" in columns
-
-
 # ── No legacy tables ────────────────────────────────────────
 
 

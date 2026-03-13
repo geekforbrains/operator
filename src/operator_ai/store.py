@@ -56,7 +56,6 @@ class Store:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self._path, timeout=30.0)
         self._conn.row_factory = sqlite3.Row
-        self._legacy_conversations_schema = False
         self._init_db()
 
     def _init_db(self) -> None:
@@ -78,11 +77,11 @@ class Store:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 conversation_id TEXT NOT NULL,
                 message_json TEXT NOT NULL,
+                created_at REAL,
                 FOREIGN KEY(conversation_id) REFERENCES conversations(conversation_id)
             )
             """
         )
-        self._ensure_messages_created_at_column()
         self._conn.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_messages_conversation
@@ -121,7 +120,8 @@ class Store:
             """
             CREATE TABLE IF NOT EXISTS users (
                 username TEXT PRIMARY KEY,
-                created_at REAL NOT NULL DEFAULT 0
+                created_at REAL NOT NULL DEFAULT 0,
+                timezone TEXT
             )
             """
         )
@@ -145,28 +145,7 @@ class Store:
             """
         )
 
-        self._ensure_users_timezone_column()
-        self._legacy_conversations_schema = self._has_legacy_conversations_schema()
-
         self._conn.commit()
-
-    def _ensure_users_timezone_column(self) -> None:
-        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(users)").fetchall()}
-        if "timezone" not in columns:
-            self._conn.execute("ALTER TABLE users ADD COLUMN timezone TEXT")
-
-    def _ensure_messages_created_at_column(self) -> None:
-        columns = {
-            row["name"] for row in self._conn.execute("PRAGMA table_info(messages)").fetchall()
-        }
-        if "created_at" not in columns:
-            self._conn.execute("ALTER TABLE messages ADD COLUMN created_at REAL")
-
-    def _has_legacy_conversations_schema(self) -> bool:
-        columns = {
-            row["name"] for row in self._conn.execute("PRAGMA table_info(conversations)").fetchall()
-        }
-        return columns != {"conversation_id"}
 
     @property
     def path(self) -> Path:
@@ -184,24 +163,11 @@ class Store:
     # ── Conversations ────────────────────────────────────────────
 
     def ensure_conversation(self, conversation_id: str) -> None:
-        if self._legacy_conversations_schema:
-            self._conn.execute(
-                """
-                INSERT INTO conversations (
-                    conversation_id, transport_name, channel_id, root_thread_id,
-                    updated_at, metadata_json
-                )
-                VALUES (?, '', '', '', ?, '{}')
-                ON CONFLICT(conversation_id) DO NOTHING
-                """,
-                (conversation_id, time.time()),
-            )
-        else:
-            self._conn.execute(
-                "INSERT INTO conversations (conversation_id) VALUES (?) "
-                "ON CONFLICT(conversation_id) DO NOTHING",
-                (conversation_id,),
-            )
+        self._conn.execute(
+            "INSERT INTO conversations (conversation_id) VALUES (?) "
+            "ON CONFLICT(conversation_id) DO NOTHING",
+            (conversation_id,),
+        )
         self._conn.commit()
 
     def ensure_system_message(self, conversation_id: str, system_prompt: str) -> None:
