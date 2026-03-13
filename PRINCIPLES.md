@@ -151,7 +151,9 @@ Everything lives under `~/.operator/`:
         trash/
       state/
   jobs/
-    <name>.md
+    <name>/
+      JOB.md
+      scripts/
   skills/
     <name>/
       SKILL.md
@@ -375,7 +377,7 @@ freehand model date math.
 ### Jobs
 
 Jobs are scheduled tasks defined as markdown files with YAML frontmatter.
-They live at `~/.operator/jobs/<name>.md`. The frontmatter includes the
+They live at `~/.operator/jobs/<name>/JOB.md`. The frontmatter includes the
 schedule (cron expression), the target agent, and optional prerun gates and
 postrun hooks. The body is the prompt the agent receives when the job runs.
 
@@ -402,7 +404,9 @@ its output using ordinary shell scripts, keeping that logic out of the
 model and in version-controllable code.
 
 Hooks are specified as `prerun` and `postrun` parameters on the job tools,
-as paths relative to `~/.operator/`. Both are optional.
+as paths relative to the job directory. Both are optional. By convention,
+hook scripts live at `scripts/prerun.sh` and `scripts/postrun.sh` inside
+the job directory. Hook paths must not escape the job directory.
 
 **Prerun hooks** run before the agent. A non-zero exit code gates the job —
 the run is skipped and recorded as gated. A zero exit code allows the job

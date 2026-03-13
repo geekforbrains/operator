@@ -28,8 +28,9 @@ def configure_agent_tool_context(
 ) -> None:
     from operator_ai.tools import memory as memory_tools
     from operator_ai.tools import state as state_tools
-    from operator_ai.tools.context import set_skill_filter
+    from operator_ai.tools.context import set_base_dir, set_skill_filter
 
+    set_base_dir(base_dir)
     set_skill_filter(skill_filter)
     state_tools.configure(
         {

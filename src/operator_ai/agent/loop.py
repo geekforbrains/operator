@@ -13,14 +13,12 @@ from zoneinfo import ZoneInfo
 import litellm
 
 from operator_ai.agent.runtime import resolve_base_dir
-from operator_ai.config import Config, ThinkingLevel, ensure_shared_symlink
+from operator_ai.config import ThinkingLevel, ensure_shared_symlink
 from operator_ai.context import prepare_context
-from operator_ai.memory import MemoryStore
-from operator_ai.run_prompt import RunEnvelope
 from operator_ai.tools import registry as tool_registry
 from operator_ai.tools import subagent
 from operator_ai.tools.context import get_user_context
-from operator_ai.tools.registry import ToolDef
+from operator_ai.tools.subagent import RunConfig
 from operator_ai.tools.workspace import set_workspace
 from operator_ai.utils import truncate
 
@@ -159,29 +157,11 @@ def _apply_reasoning_effort(
 
 async def run_agent(
     messages: list[dict[str, Any]],
-    models: list[str],
-    max_iterations: int,
-    workspace: str,
-    agent_name: str | None = None,
+    rc: RunConfig,
+    *,
     on_message: Callable[[str], Awaitable[None]] | None = None,
     check_cancelled: Callable[[], None] | None = None,
     on_tool_call: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
-    depth: int = 0,
-    context_ratio: float = 0.0,
-    max_output_tokens: int | None = None,
-    thinking: ThinkingLevel = "off",
-    extra_tools: list[ToolDef] | None = None,
-    usage: dict[str, int] | None = None,
-    tool_filter: Callable[[str], bool] | None = None,
-    skill_filter: Callable[[str], bool] | None = None,
-    shared_dir: Path | None = None,
-    config: Config | None = None,
-    memory_store: MemoryStore | None = None,
-    username: str = "",
-    allow_user_scope: bool = False,
-    allowed_agents: set[str] | None = None,
-    base_dir: Path | None = None,
-    run_envelope: RunEnvelope | None = None,
     tool_results_keep: int = 5,
     tool_results_soft_trim: int = 10,
 ) -> str:
@@ -192,44 +172,44 @@ async def run_agent(
     check_cancelled is called between iterations — should raise to abort.
     models is a fallback chain — on LLM error, the next model is tried.
     """
-    ws = Path(workspace)
+    ws = Path(rc.workspace)
     ws.mkdir(parents=True, exist_ok=True)
-    if shared_dir is not None:
-        ensure_shared_symlink(ws, shared_dir)
+    if rc.shared_dir is not None:
+        ensure_shared_symlink(ws, rc.shared_dir)
     set_workspace(ws)
 
     # Configure subagent tool with current context
     subagent.configure(
-        subagent.SubagentContext(
-            models=models,
-            max_iterations=max_iterations,
-            workspace=workspace,
-            agent_name=agent_name or "",
-            depth=depth,
-            context_ratio=context_ratio,
-            max_output_tokens=max_output_tokens,
-            thinking=thinking,
-            extra_tools=list(extra_tools) if extra_tools else None,
-            usage=usage,
-            tool_filter=tool_filter,
-            skill_filter=skill_filter,
-            shared_dir=shared_dir,
-            config=config,
-            memory_store=memory_store,
-            username=username,
-            allow_user_scope=allow_user_scope,
-            allowed_agents=allowed_agents,
-            base_dir=resolve_base_dir(config=config, base_dir=base_dir),
-            run_envelope=run_envelope,
+        RunConfig(
+            models=rc.models,
+            max_iterations=rc.max_iterations,
+            workspace=rc.workspace,
+            agent_name=rc.agent_name,
+            depth=rc.depth,
+            context_ratio=rc.context_ratio,
+            max_output_tokens=rc.max_output_tokens,
+            thinking=rc.thinking,
+            extra_tools=list(rc.extra_tools) if rc.extra_tools else None,
+            usage=rc.usage,
+            tool_filter=rc.tool_filter,
+            skill_filter=rc.skill_filter,
+            shared_dir=rc.shared_dir,
+            config=rc.config,
+            memory_store=rc.memory_store,
+            username=rc.username,
+            allow_user_scope=rc.allow_user_scope,
+            allowed_agents=rc.allowed_agents,
+            base_dir=resolve_base_dir(config=rc.config, base_dir=rc.base_dir),
+            run_envelope=rc.run_envelope,
         )
     )
 
     tools = tool_registry.get_tools()
-    if extra_tools:
-        tools = tools + list(extra_tools)
-    if tool_filter is not None:
+    if rc.extra_tools:
+        tools = tools + list(rc.extra_tools)
+    if rc.tool_filter is not None:
         all_names = [t.name for t in tools]
-        tools = [t for t in tools if tool_filter(t.name)]
+        tools = [t for t in tools if rc.tool_filter(t.name)]
         filtered_out = set(all_names) - {t.name for t in tools}
         if filtered_out:
             logger.info("permissions: filtered out tools: %s", ", ".join(sorted(filtered_out)))
@@ -239,7 +219,7 @@ async def run_agent(
     tools_by_name = {t.name: t for t in tools}
     tool_defs = [t.to_openai_tool() for t in tools]
 
-    if not models:
+    if not rc.models:
         raise ValueError("no models configured")
 
     # Resolve user timezone for timestamp rendering
@@ -249,11 +229,11 @@ async def run_agent(
         with contextlib.suppress(KeyError, Exception):
             user_tz = ZoneInfo(user_ctx.timezone)
 
-    for iteration in range(max_iterations):
+    for iteration in range(rc.max_iterations):
         if check_cancelled:
             check_cancelled()
 
-        step = f"[iter {iteration + 1}/{max_iterations}]"
+        step = f"[iter {iteration + 1}/{rc.max_iterations}]"
 
         # Signal "thinking" before LLM call
         if on_tool_call:
@@ -262,11 +242,11 @@ async def run_agent(
         # Try each model in the fallback chain
         response = None
         last_error: Exception | None = None
-        for model in models:
+        for model in rc.models:
             model_messages = prepare_context(
                 messages,
                 model,
-                context_ratio=context_ratio,
+                context_ratio=rc.context_ratio,
                 tz=user_tz,
                 tools=tool_defs,
                 tool_results_keep=tool_results_keep,
@@ -287,8 +267,8 @@ async def run_agent(
                 kwargs["tools"] = tool_defs
 
             # Resolve max output tokens: config override > model default
-            if max_output_tokens is not None:
-                kwargs["max_tokens"] = max_output_tokens
+            if rc.max_output_tokens is not None:
+                kwargs["max_tokens"] = rc.max_output_tokens
             else:
                 try:
                     info = litellm.get_model_info(model)
@@ -300,7 +280,7 @@ async def run_agent(
                         "%s get_model_info failed for %s, max_tokens not set", step, model
                     )
 
-            _apply_reasoning_effort(kwargs=kwargs, model=model, thinking=thinking, step=step)
+            _apply_reasoning_effort(kwargs=kwargs, model=model, thinking=rc.thinking, step=step)
 
             try:
                 response = await litellm.acompletion(**kwargs)
@@ -314,7 +294,7 @@ async def run_agent(
             except Exception as e:
                 last_error = e
                 logger.debug("%s model %s failure traceback", step, model, exc_info=e)
-                if model != models[-1]:
+                if model != rc.models[-1]:
                     logger.warning(
                         "%s model %s failed (%s: %s), trying next",
                         step,
@@ -332,10 +312,10 @@ async def run_agent(
             )
             raise last_error
 
-        if usage is not None and hasattr(response, "usage") and response.usage:
+        if rc.usage is not None and hasattr(response, "usage") and response.usage:
             u = response.usage
-            usage["prompt_tokens"] = usage.get("prompt_tokens", 0) + (u.prompt_tokens or 0)
-            usage["completion_tokens"] = usage.get("completion_tokens", 0) + (
+            rc.usage["prompt_tokens"] = rc.usage.get("prompt_tokens", 0) + (u.prompt_tokens or 0)
+            rc.usage["completion_tokens"] = rc.usage.get("completion_tokens", 0) + (
                 u.completion_tokens or 0
             )
             # Anthropic: cache_read_input_tokens / cache_creation_input_tokens
@@ -345,10 +325,12 @@ async def run_agent(
                 ptd = getattr(u, "prompt_tokens_details", None)
                 if ptd:
                     cached_read = getattr(ptd, "cached_tokens", 0) or 0
-            usage["cache_read_input_tokens"] = usage.get("cache_read_input_tokens", 0) + cached_read
-            usage["cache_creation_input_tokens"] = usage.get("cache_creation_input_tokens", 0) + (
-                getattr(u, "cache_creation_input_tokens", 0) or 0
+            rc.usage["cache_read_input_tokens"] = (
+                rc.usage.get("cache_read_input_tokens", 0) + cached_read
             )
+            rc.usage["cache_creation_input_tokens"] = rc.usage.get(
+                "cache_creation_input_tokens", 0
+            ) + (getattr(u, "cache_creation_input_tokens", 0) or 0)
 
         choice = response.choices[0]
         assistant_msg = choice.message.model_dump(exclude_none=True)
@@ -421,7 +403,7 @@ async def run_agent(
                 }
             )
 
-    logger.warning("max iterations (%d) reached", max_iterations)
+    logger.warning("max iterations (%d) reached", rc.max_iterations)
     return "[max iterations reached]"
 
 

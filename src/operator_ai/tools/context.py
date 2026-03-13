@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextvars
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 
 @dataclass
@@ -39,3 +40,17 @@ def set_skill_filter(f: Callable[[str], bool] | None) -> None:
 
 def get_skill_filter() -> Callable[[str], bool] | None:
     return _skill_filter_var.get()
+
+
+# Base directory context var — used by tools that need resolved paths
+_base_dir_var: contextvars.ContextVar[Path | None] = contextvars.ContextVar(
+    "base_dir", default=None
+)
+
+
+def set_base_dir(path: Path) -> None:
+    _base_dir_var.set(path)
+
+
+def get_base_dir() -> Path | None:
+    return _base_dir_var.get()

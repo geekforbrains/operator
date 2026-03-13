@@ -183,7 +183,7 @@ async def execute_job(
 
         # Lazy imports to avoid circular dependency:
         # job -> agent -> tools/__init__ -> tools/jobs -> job
-        from operator_ai.agent import run_agent
+        from operator_ai.agent import RunConfig, run_agent
         from operator_ai.tools import messaging
 
         transport = transports.get(agent_name)
@@ -223,21 +223,23 @@ async def execute_job(
         extra_tools = transport.get_tools() if transport else None
         output = await run_agent(
             messages=messages,
-            models=models,
-            max_iterations=max_iter,
-            workspace=str(config.agent_workspace(agent_name)),
-            agent_name=agent_name,
-            context_ratio=config.agent_context_ratio(agent_name),
-            max_output_tokens=config.agent_max_output_tokens(agent_name),
-            thinking=config.agent_thinking(agent_name),
-            extra_tools=extra_tools,
-            tool_filter=config.agent_tool_filter(agent_name),
-            skill_filter=config.agent_skill_filter(agent_name),
-            shared_dir=config.shared_dir,
-            config=config,
-            memory_store=memory_store,
-            base_dir=config.base_dir,
-            run_envelope=run_envelope,
+            rc=RunConfig(
+                models=models,
+                max_iterations=max_iter,
+                workspace=str(config.agent_workspace(agent_name)),
+                agent_name=agent_name,
+                context_ratio=config.agent_context_ratio(agent_name),
+                max_output_tokens=config.agent_max_output_tokens(agent_name),
+                thinking=config.agent_thinking(agent_name),
+                extra_tools=extra_tools,
+                tool_filter=config.agent_tool_filter(agent_name),
+                skill_filter=config.agent_skill_filter(agent_name),
+                shared_dir=config.shared_dir,
+                config=config,
+                memory_store=memory_store,
+                base_dir=config.base_dir,
+                run_envelope=run_envelope,
+            ),
         )
 
         # Postrun hook

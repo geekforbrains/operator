@@ -5,9 +5,10 @@ import logging
 import os
 import re
 import shlex
+from pathlib import Path
 
-from operator_ai.config import SKILLS_DIR, ConfigError, load_config
-from operator_ai.tools.context import get_skill_filter
+from operator_ai.config import OPERATOR_DIR, ConfigError, load_config
+from operator_ai.tools.context import get_base_dir, get_skill_filter
 from operator_ai.tools.registry import MAX_OUTPUT, format_process_output, safe_name, tool
 from operator_ai.tools.workspace import get_workspace
 from operator_ai.transport.registry import transport_secret_env_vars
@@ -16,6 +17,12 @@ logger = logging.getLogger("operator.tools.skills_access")
 _SKILL_SUBDIRS = ("scripts/", "references/", "assets/")
 _ENV_REF_RE = re.compile(r"\$(?:([A-Za-z_][A-Za-z0-9_]*)|\{([A-Za-z_][A-Za-z0-9_]*)\})")
 _ALLOWED_OPERATOR_ENV = {"OPERATOR_HOME"}
+
+
+def _skills_dir() -> Path:
+    """Return the resolved skills directory from tool context or fallback."""
+    base = get_base_dir()
+    return (base or OPERATOR_DIR) / "skills"
 
 
 def _expand_env_refs(value: str, env: dict[str, str]) -> str:
@@ -39,7 +46,7 @@ def _check_skill_access(skill: str) -> str | None:
     if skill_filter is not None and not skill_filter(skill):
         return f"[error: skill '{skill}' is not available to this agent]"
 
-    skill_dir = SKILLS_DIR / skill
+    skill_dir = _skills_dir() / skill
     if not skill_dir.is_dir():
         return f"[error: skill '{skill}' not found]"
 
@@ -63,7 +70,7 @@ async def read_skill(skill: str, path: str = "") -> str:
     if err:
         return err
 
-    skill_dir = SKILLS_DIR / skill
+    skill_dir = _skills_dir() / skill
 
     if not path:
         target = skill_dir / "SKILL.md"
@@ -105,7 +112,7 @@ async def run_skill(skill: str, command: str, timeout: int = 120) -> str:
     if err:
         return err
 
-    skill_dir = SKILLS_DIR / skill
+    skill_dir = _skills_dir() / skill
     if not skill_dir.is_dir():
         return f"[error: skill '{skill}' not found]"
 

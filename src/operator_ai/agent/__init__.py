@@ -7,9 +7,11 @@ from operator_ai.agent.info import (
 )
 from operator_ai.agent.loop import run_agent
 from operator_ai.agent.runtime import configure_agent_tool_context, resolve_base_dir
+from operator_ai.tools.subagent import RunConfig
 
 __all__ = [
     "AgentInfo",
+    "RunConfig",
     "build_agents_prompt",
     "configure_agent_tool_context",
     "load_agent_body",

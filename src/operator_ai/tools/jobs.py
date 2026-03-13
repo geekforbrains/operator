@@ -16,11 +16,12 @@ from pathlib import Path
 import yaml
 from croniter import croniter
 
-from operator_ai.config import ConfigError, load_config
+from operator_ai.config import OPERATOR_DIR, ConfigError, load_config
 from operator_ai.frontmatter import rewrite_frontmatter
-from operator_ai.job.spec import JOBS_DIR, scan_jobs
+from operator_ai.job.spec import scan_jobs
 from operator_ai.message_timestamps import format_ts
 from operator_ai.store import get_store
+from operator_ai.tools.context import get_base_dir
 from operator_ai.tools.registry import safe_name, tool
 
 # ---------------------------------------------------------------------------
@@ -107,13 +108,20 @@ def _build_job_file(
     return f"---\n{fm_text}\n---\n\n{prompt}\n"
 
 
+def _jobs_dir() -> Path:
+    """Return the resolved jobs directory from tool context or fallback."""
+    base = get_base_dir()
+    return (base or OPERATOR_DIR) / "jobs"
+
+
 def _job_dir(name: str) -> tuple[Path, str | None]:
     """Resolve job directory path, returning (path, error_or_none)."""
+    jobs_dir = _jobs_dir()
     try:
         slug = safe_name(name, "job")
     except ValueError as e:
-        return JOBS_DIR / "invalid", f"[error: {e}]"
-    return JOBS_DIR / slug, None
+        return jobs_dir / "invalid", f"[error: {e}]"
+    return jobs_dir / slug, None
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +350,7 @@ async def disable_job(name: str) -> str:
 @tool(description="List all scheduled jobs with their status and last run info.")
 async def list_jobs() -> str:
     """List jobs."""
-    jobs = scan_jobs()
+    jobs = scan_jobs(_jobs_dir())
     if not jobs:
         return "No jobs found."
 

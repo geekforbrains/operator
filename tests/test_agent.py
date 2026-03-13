@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import operator_ai.agent.loop as agent_module
-from operator_ai.agent import run_agent
+from operator_ai.agent import RunConfig, run_agent
 from operator_ai.config import Config
 from operator_ai.message_timestamps import attach_message_created_at
 from operator_ai.tools.context import UserContext, set_user_context
@@ -77,12 +77,14 @@ def test_run_agent_renders_user_message_timestamp_in_live_request(
     result = asyncio.run(
         run_agent(
             messages=messages,
-            models=["openai/gpt-4.1"],
-            max_iterations=1,
-            workspace=str(tmp_path),
-            context_ratio=0.0,
-            max_output_tokens=64,
-            config=_config(),
+            rc=RunConfig(
+                models=["openai/gpt-4.1"],
+                max_iterations=1,
+                workspace=str(tmp_path),
+                context_ratio=0.0,
+                max_output_tokens=64,
+                config=_config(),
+            ),
         )
     )
 
@@ -119,12 +121,14 @@ def test_run_agent_keeps_anthropic_system_cache_boundary_stable(
                     created_at=datetime(2026, 3, 6, 17, 45, tzinfo=UTC),
                 ),
             ],
-            models=["anthropic/claude-sonnet-4-6"],
-            max_iterations=1,
-            workspace=str(tmp_path),
-            context_ratio=0.0,
-            max_output_tokens=64,
-            config=_config(),
+            rc=RunConfig(
+                models=["anthropic/claude-sonnet-4-6"],
+                max_iterations=1,
+                workspace=str(tmp_path),
+                context_ratio=0.0,
+                max_output_tokens=64,
+                config=_config(),
+            ),
         )
     )
 
@@ -165,12 +169,14 @@ def test_run_agent_maps_thinking_to_reasoning_effort_when_supported(
                     {"role": "system", "content": "# System"},
                     {"role": "user", "content": "Plan this"},
                 ],
-                models=["openai/o3"],
-                max_iterations=1,
-                workspace=str(tmp_path),
-                context_ratio=0.0,
-                max_output_tokens=64,
-                thinking="high",
+                rc=RunConfig(
+                    models=["openai/o3"],
+                    max_iterations=1,
+                    workspace=str(tmp_path),
+                    context_ratio=0.0,
+                    max_output_tokens=64,
+                    thinking="high",
+                ),
             )
         )
 
@@ -205,12 +211,14 @@ def test_run_agent_omits_reasoning_effort_for_anthropic_when_thinking_off(
                     {"role": "system", "content": "# System"},
                     {"role": "user", "content": "Plan this"},
                 ],
-                models=["anthropic/claude-sonnet-4-6"],
-                max_iterations=1,
-                workspace=str(tmp_path),
-                context_ratio=0.0,
-                max_output_tokens=64,
-                thinking="off",
+                rc=RunConfig(
+                    models=["anthropic/claude-sonnet-4-6"],
+                    max_iterations=1,
+                    workspace=str(tmp_path),
+                    context_ratio=0.0,
+                    max_output_tokens=64,
+                    thinking="off",
+                ),
             )
         )
 
@@ -253,12 +261,14 @@ def test_run_agent_routes_openai_tool_reasoning_calls_through_responses_bridge(
                     {"role": "system", "content": "# System"},
                     {"role": "user", "content": "Plan this"},
                 ],
-                models=["openai/gpt-5.4"],
-                max_iterations=1,
-                workspace=str(tmp_path),
-                context_ratio=0.0,
-                max_output_tokens=64,
-                thinking="high",
+                rc=RunConfig(
+                    models=["openai/gpt-5.4"],
+                    max_iterations=1,
+                    workspace=str(tmp_path),
+                    context_ratio=0.0,
+                    max_output_tokens=64,
+                    thinking="high",
+                ),
             )
         )
 
@@ -315,12 +325,14 @@ def test_run_agent_fallback_omits_reasoning_effort_and_sanitizes_history(
         result = asyncio.run(
             run_agent(
                 messages=messages,
-                models=["anthropic/claude-sonnet-4-6", "openai/gpt-4.1"],
-                max_iterations=1,
-                workspace=str(tmp_path),
-                context_ratio=0.0,
-                max_output_tokens=64,
-                thinking="high",
+                rc=RunConfig(
+                    models=["anthropic/claude-sonnet-4-6", "openai/gpt-4.1"],
+                    max_iterations=1,
+                    workspace=str(tmp_path),
+                    context_ratio=0.0,
+                    max_output_tokens=64,
+                    thinking="high",
+                ),
             )
         )
 
@@ -366,11 +378,13 @@ def test_run_agent_falls_back_on_unusable_empty_model_response(
                     {"role": "system", "content": "# System"},
                     {"role": "user", "content": "Try again"},
                 ],
-                models=["anthropic/claude-sonnet-4-6", "openai/gpt-4.1"],
-                max_iterations=1,
-                workspace=str(tmp_path),
-                context_ratio=0.0,
-                max_output_tokens=64,
+                rc=RunConfig(
+                    models=["anthropic/claude-sonnet-4-6", "openai/gpt-4.1"],
+                    max_iterations=1,
+                    workspace=str(tmp_path),
+                    context_ratio=0.0,
+                    max_output_tokens=64,
+                ),
             )
         )
 

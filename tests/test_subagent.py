@@ -172,11 +172,12 @@ def test_spawn_agent_without_explicit_target_uses_current_agent_prompt(
 ) -> None:
     captured: dict[str, object] = {}
 
-    async def fake_run_agent(**kwargs):
+    async def fake_run_agent(messages, rc, **kwargs):
         captured["kwargs"] = kwargs
-        captured["system_prompt"] = kwargs["messages"][0]["content"]
-        captured["user_message"] = kwargs["messages"][1]
-        captured["agent_name"] = kwargs["agent_name"]
+        captured["rc"] = rc
+        captured["system_prompt"] = messages[0]["content"]
+        captured["user_message"] = messages[1]
+        captured["agent_name"] = rc.agent_name
         return "done"
 
     monkeypatch.setattr("operator_ai.prompts.load_system_prompt", lambda _path=None: "# System")
@@ -240,37 +241,18 @@ def test_spawn_agent_without_explicit_target_uses_current_agent_prompt(
     assert "- Agent (You): operator" in captured["system_prompt"]
     assert "- Username: gavin" in captured["system_prompt"]
     assert "- Workspace: `" in captured["system_prompt"]
-    assert set(captured["kwargs"]) == {
-        "messages",
-        "models",
-        "max_iterations",
-        "workspace",
-        "agent_name",
-        "depth",
-        "context_ratio",
-        "max_output_tokens",
-        "thinking",
-        "extra_tools",
-        "usage",
-        "tool_filter",
-        "skill_filter",
-        "shared_dir",
-        "config",
-        "memory_store",
-        "username",
-        "allow_user_scope",
-        "allowed_agents",
-        "base_dir",
-        "run_envelope",
-    }
+    rc = captured["rc"]
+    assert rc.models == ["openai/gpt-4.1"]
+    assert rc.max_iterations == 5
+    assert rc.agent_name == "operator"
+    assert rc.memory_store is memory_store
+    assert rc.username == "gavin"
+    assert rc.allow_user_scope is True
+    assert rc.allowed_agents == {"operator"}
+    assert rc.base_dir == tmp_path
     user_message = captured["user_message"]
     assert user_message["content"] == "Summarize the release branch."
     assert user_message[MESSAGE_CREATED_AT_KEY]
-    assert captured["kwargs"]["memory_store"] is memory_store
-    assert captured["kwargs"]["username"] == "gavin"
-    assert captured["kwargs"]["allow_user_scope"] is True
-    assert captured["kwargs"]["allowed_agents"] == {"operator"}
-    assert captured["kwargs"]["base_dir"] == tmp_path
 
 
 def test_spawn_agent_reconfigures_memory_and_state_context_for_target_agent(
@@ -279,8 +261,8 @@ def test_spawn_agent_reconfigures_memory_and_state_context_for_target_agent(
     captured: dict[str, object] = {}
     store = MemoryStore(base_dir=tmp_path)
 
-    async def fake_run_agent(**kwargs):
-        captured["kwargs"] = kwargs
+    async def fake_run_agent(messages, rc, **_kwargs):  # noqa: ARG001
+        captured["rc"] = rc
         captured["memory_ctx"] = memory_tools._get_context()
         captured["state_ctx"] = state_tools._get_context()
         return "done"
@@ -341,16 +323,16 @@ def test_spawn_agent_reconfigures_memory_and_state_context_for_target_agent(
     assert memory_ctx[2] == "alice"
     assert memory_ctx[3] is True
     assert captured["state_ctx"] == ("researcher", tmp_path)
-    assert captured["kwargs"]["max_iterations"] == 25
+    assert captured["rc"].max_iterations == 25
 
 
 def test_spawn_agent_preserves_job_run_mode(monkeypatch, tmp_path: Path) -> None:
     captured: dict[str, object] = {}
 
-    async def fake_run_agent(**kwargs):
-        captured["system_prompt"] = kwargs["messages"][0]["content"]
-        captured["user_message"] = kwargs["messages"][1]
-        captured["agent_name"] = kwargs["agent_name"]
+    async def fake_run_agent(messages, rc, **_kwargs):
+        captured["system_prompt"] = messages[0]["content"]
+        captured["user_message"] = messages[1]
+        captured["agent_name"] = rc.agent_name
         return "done"
 
     monkeypatch.setattr("operator_ai.agent.run_agent", fake_run_agent)
@@ -483,7 +465,7 @@ class TestSpawnAgentAccessControl:
         self._configure_subagent(config)
         set_user_context(UserContext(username="alice", roles=["dev"]))
 
-        async def fake_run_agent(**kwargs):  # noqa: ARG001
+        async def fake_run_agent(*_args, **_kwargs):
             return "done"
 
         monkeypatch.setattr("operator_ai.agent.run_agent", fake_run_agent)
@@ -507,7 +489,7 @@ class TestSpawnAgentAccessControl:
         self._configure_subagent(config)
         set_user_context(UserContext(username="boss", roles=["admin"]))
 
-        async def fake_run_agent(**kwargs):  # noqa: ARG001
+        async def fake_run_agent(*_args, **_kwargs):
             return "admin-done"
 
         monkeypatch.setattr("operator_ai.agent.run_agent", fake_run_agent)
@@ -530,7 +512,7 @@ class TestSpawnAgentAccessControl:
         """Job runs (no user context) should bypass the access check."""
         config = FakeConfig(roles={})
 
-        async def fake_run_agent(**kwargs):  # noqa: ARG001
+        async def fake_run_agent(*_args, **_kwargs):
             return "job-done"
 
         monkeypatch.setattr("operator_ai.agent.run_agent", fake_run_agent)
@@ -563,7 +545,7 @@ class TestSpawnAgentAccessControl:
         # User with no roles — would fail access check if it ran
         set_user_context(UserContext(username="alice", roles=["dev"]))
 
-        async def fake_run_agent(**kwargs):  # noqa: ARG001
+        async def fake_run_agent(*_args, **_kwargs):
             return "inherited"
 
         monkeypatch.setattr("operator_ai.agent.run_agent", fake_run_agent)

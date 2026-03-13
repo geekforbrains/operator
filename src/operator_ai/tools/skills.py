@@ -7,15 +7,22 @@ YAML frontmatter.  The tools assemble the skill file internally.
 from __future__ import annotations
 
 import shutil
+from pathlib import Path
 
-from operator_ai.config import SKILLS_DIR
+from operator_ai.config import OPERATOR_DIR
 from operator_ai.skills import build_skill_file, scan_skills, validate_skill_name
-from operator_ai.tools.context import get_skill_filter
+from operator_ai.tools.context import get_base_dir, get_skill_filter
 from operator_ai.tools.registry import safe_name, tool
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _skills_dir() -> Path:
+    """Return the resolved skills directory from tool context or fallback."""
+    base = get_base_dir()
+    return (base or OPERATOR_DIR) / "skills"
 
 
 def _parse_env(env: str) -> list[str]:
@@ -82,7 +89,7 @@ async def create_skill(
     if err:
         return err
 
-    skill_dir = SKILLS_DIR / name
+    skill_dir = _skills_dir() / name
     if skill_dir.exists():
         return f"[error: skill '{name}' already exists. Use update_skill to modify.]"
 
@@ -124,7 +131,7 @@ async def update_skill(
     if err:
         return err
 
-    skill_dir = SKILLS_DIR / name
+    skill_dir = _skills_dir() / name
     if not skill_dir.exists():
         return f"[error: skill '{name}' not found]"
 
@@ -156,7 +163,7 @@ async def delete_skill(name: str) -> str:
     except ValueError as e:
         return f"[error: {e}]"
 
-    skill_dir = SKILLS_DIR / name
+    skill_dir = _skills_dir() / name
     if not skill_dir.exists():
         return f"[error: skill '{name}' not found]"
 
@@ -167,7 +174,7 @@ async def delete_skill(name: str) -> str:
 @tool(description="List all available skills with their descriptions and status.")
 async def list_skills() -> str:
     """List skills."""
-    skills = scan_skills(SKILLS_DIR)
+    skills = scan_skills(_skills_dir())
     skill_filter = get_skill_filter()
     if skill_filter is not None:
         skills = [s for s in skills if skill_filter(s.name)]

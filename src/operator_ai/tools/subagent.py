@@ -23,7 +23,7 @@ MAX_SUBAGENT_DEPTH = 3
 
 
 @dataclass
-class SubagentContext:
+class RunConfig:
     models: list[str]
     max_iterations: int
     workspace: str
@@ -46,12 +46,14 @@ class SubagentContext:
     run_envelope: RunEnvelope | None = None
 
 
-_context_var: contextvars.ContextVar[SubagentContext | None] = contextvars.ContextVar(
+SubagentContext = RunConfig
+
+_context_var: contextvars.ContextVar[RunConfig | None] = contextvars.ContextVar(
     "_agent_context", default=None
 )
 
 
-def configure(context: SubagentContext) -> None:
+def configure(context: RunConfig) -> None:
     _context_var.set(context)
 
 
@@ -70,7 +72,7 @@ def _user_can_access_agent(agent_name: str, config: Any) -> bool:
     return False
 
 
-def _resolve_agent_context(agent_name: str | None, current: SubagentContext) -> SubagentContext:
+def _resolve_agent_context(agent_name: str | None, current: RunConfig) -> RunConfig:
     """Resolve context for spawn_agent, switching to a different agent if specified."""
     if not agent_name:
         return current
@@ -183,28 +185,16 @@ async def spawn_agent(task: str, context: str = "", agent: str = "") -> str:
             username=resolved.username,
             allow_user_scope=resolved.allow_user_scope,
         )
-        return await run_agent(
-            messages=messages,
-            models=resolved.models,
-            max_iterations=resolved.max_iterations,
+        child_rc = replace(
+            resolved,
             workspace=resolved.workspace or ".",
             agent_name=run_agent_name,
             depth=depth + 1,
-            context_ratio=resolved.context_ratio,
-            max_output_tokens=resolved.max_output_tokens,
-            thinking=resolved.thinking,
-            extra_tools=resolved.extra_tools,
-            usage=resolved.usage,
-            tool_filter=resolved.tool_filter,
-            skill_filter=resolved.skill_filter,
-            shared_dir=resolved.shared_dir,
-            config=resolved.config,
-            memory_store=resolved.memory_store,
-            username=resolved.username,
-            allow_user_scope=resolved.allow_user_scope,
-            allowed_agents=resolved.allowed_agents,
             base_dir=base_dir,
-            run_envelope=resolved.run_envelope,
+        )
+        return await run_agent(
+            messages=messages,
+            rc=child_rc,
         )
 
     # Run in a copied context so the child's configure() call doesn't

@@ -6,7 +6,7 @@ import functools
 import logging
 from datetime import UTC, datetime
 
-from operator_ai.agent import configure_agent_tool_context, run_agent
+from operator_ai.agent import RunConfig, configure_agent_tool_context, run_agent
 from operator_ai.config import Config, RoleConfig
 from operator_ai.log_context import new_run_id, set_run_context
 from operator_ai.main.attachments import process_attachments
@@ -358,28 +358,30 @@ class Dispatcher:
             await status.start()
             await run_agent(
                 messages=messages,
-                models=self.config.agent_models(agent_name),
-                max_iterations=self.config.agent_max_iterations(agent_name),
-                workspace=str(self.config.agent_workspace(agent_name)),
-                agent_name=agent_name,
+                rc=RunConfig(
+                    models=self.config.agent_models(agent_name),
+                    max_iterations=self.config.agent_max_iterations(agent_name),
+                    workspace=str(self.config.agent_workspace(agent_name)),
+                    agent_name=agent_name,
+                    context_ratio=self.config.agent_context_ratio(agent_name),
+                    max_output_tokens=self.config.agent_max_output_tokens(agent_name),
+                    thinking=self.config.agent_thinking(agent_name),
+                    extra_tools=extra_tools,
+                    usage=usage,
+                    tool_filter=self.config.agent_tool_filter(agent_name),
+                    skill_filter=self.config.agent_skill_filter(agent_name),
+                    shared_dir=self.config.shared_dir,
+                    config=self.config,
+                    memory_store=self.memory_store,
+                    username=username,
+                    allow_user_scope=msg.is_private,
+                    allowed_agents=allowed_agents,
+                    base_dir=self.config.base_dir,
+                    run_envelope=run_envelope,
+                ),
                 on_message=on_message,
                 check_cancelled=runtime.check_cancelled,
                 on_tool_call=on_tool_call,
-                context_ratio=self.config.agent_context_ratio(agent_name),
-                max_output_tokens=self.config.agent_max_output_tokens(agent_name),
-                thinking=self.config.agent_thinking(agent_name),
-                extra_tools=extra_tools,
-                usage=usage,
-                tool_filter=self.config.agent_tool_filter(agent_name),
-                skill_filter=self.config.agent_skill_filter(agent_name),
-                shared_dir=self.config.shared_dir,
-                config=self.config,
-                memory_store=self.memory_store,
-                username=username,
-                allow_user_scope=msg.is_private,
-                allowed_agents=allowed_agents,
-                base_dir=self.config.base_dir,
-                run_envelope=run_envelope,
             )
             logger.info("conversation %s — done", conversation_id)
             if usage:
