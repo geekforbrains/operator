@@ -162,6 +162,18 @@ def test_unlink_not_found(store: Store) -> None:
     assert "not found" in result
 
 
+def test_unlink_rejects_wrong_owner(store: Store) -> None:
+    store.add_user("alice")
+    store.add_user("gavin")
+    store.add_identity("alice", "slack:U999")
+    with _patched(store):
+        result = _run(
+            manage_users(action="unlink", username="gavin", transport="slack", external_id="U999")
+        )
+    assert "[error:" in result
+    assert "belongs to 'alice'" in result
+
+
 # ── add_role ─────────────────────────────────────────────────
 
 

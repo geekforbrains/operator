@@ -1,11 +1,23 @@
 from __future__ import annotations
 
-import sqlite3
 from typing import Literal
 
 from operator_ai.store import get_store
 from operator_ai.tools.context import UserContext, get_user_context, set_user_context
 from operator_ai.tools.registry import tool
+from operator_ai.user_ops import (
+    UserOperationError,
+    add_role,
+    create_user,
+    link_identity,
+    platform_id,
+    remove_role,
+    remove_user,
+    unlink_identity,
+)
+from operator_ai.user_ops import (
+    set_timezone as set_user_timezone,
+)
 
 UserManagementAction = Literal["list", "add", "remove", "link", "unlink", "add_role", "remove_role"]
 
@@ -51,23 +63,19 @@ async def manage_users(
         if not role:
             return "[error: role is required]"
         try:
-            store.add_user(username)
-        except ValueError as e:
-            return f"[error: {e}]"
-        except sqlite3.IntegrityError:
-            return f"[error: user '{username}' already exists]"
-        try:
-            store.add_role(username, role)
-        except Exception as e:
+            create_user(store, username=username, role=role)
+        except UserOperationError as e:
             return f"[error: {e}]"
         return f"Added user '{username}' with role '{role}'."
 
     if action == "remove":
         if not username:
             return "[error: username is required]"
-        if store.remove_user(username):
-            return f"Removed user '{username}'."
-        return f"[error: user '{username}' not found]"
+        try:
+            remove_user(store, username=username)
+        except UserOperationError as e:
+            return f"[error: {e}]"
+        return f"Removed user '{username}'."
 
     if action == "link":
         if not username:
@@ -76,14 +84,12 @@ async def manage_users(
             return "[error: transport is required]"
         if not external_id:
             return "[error: external_id is required]"
-        platform_id = f"{transport}:{external_id}"
-        if store.get_user(username) is None:
-            return f"[error: user '{username}' not found]"
         try:
-            store.add_identity(username, platform_id)
-        except sqlite3.IntegrityError:
-            return f"[error: identity '{platform_id}' already linked]"
-        return f"Linked {platform_id} to '{username}'."
+            identity = platform_id(transport, external_id)
+            link_identity(store, username=username, identity=identity)
+        except UserOperationError as e:
+            return f"[error: {e}]"
+        return f"Linked {identity} to '{username}'."
 
     if action == "unlink":
         if not username:
@@ -92,22 +98,22 @@ async def manage_users(
             return "[error: transport is required]"
         if not external_id:
             return "[error: external_id is required]"
-        platform_id = f"{transport}:{external_id}"
-        if store.remove_identity(platform_id):
-            return f"Unlinked {platform_id}."
-        return f"[error: identity '{platform_id}' not found]"
+        try:
+            identity = platform_id(transport, external_id)
+            unlink_identity(store, username=username, identity=identity)
+        except UserOperationError as e:
+            return f"[error: {e}]"
+        return f"Unlinked {identity}."
 
     if action == "add_role":
         if not username:
             return "[error: username is required]"
         if not role:
             return "[error: role is required]"
-        if store.get_user(username) is None:
-            return f"[error: user '{username}' not found]"
         try:
-            store.add_role(username, role)
-        except sqlite3.IntegrityError:
-            return f"[error: user '{username}' already has role '{role}']"
+            add_role(store, username=username, role=role)
+        except UserOperationError as e:
+            return f"[error: {e}]"
         return f"Added role '{role}' to '{username}'."
 
     if action == "remove_role":
@@ -115,9 +121,11 @@ async def manage_users(
             return "[error: username is required]"
         if not role:
             return "[error: role is required]"
-        if store.remove_role(username, role):
-            return f"Removed role '{role}' from '{username}'."
-        return f"[error: role '{role}' not found for '{username}']"
+        try:
+            remove_role(store, username=username, role=role)
+        except UserOperationError as e:
+            return f"[error: {e}]"
+        return f"Removed role '{role}' from '{username}'."
 
     return f"[error: unknown action '{action}'. Use: list, add, remove, link, unlink, add_role, remove_role]"
 
@@ -134,12 +142,9 @@ async def set_timezone(timezone: str) -> str:
         return "[error: timezone can only be set during a user conversation]"
 
     store = get_store()
-    if store.get_user(user_ctx.username) is None:
-        return f"[error: user '{user_ctx.username}' not found]"
-
     try:
-        store.set_user_timezone(user_ctx.username, timezone)
-    except ValueError as e:
+        set_user_timezone(store, username=user_ctx.username, timezone=timezone)
+    except UserOperationError as e:
         return f"[error: {e}]"
 
     set_user_context(

@@ -4,19 +4,12 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from operator_ai.config import OPERATOR_DIR
+from operator_ai.cli.common import cli_base_dir, cli_memory_store, load_cli_config
 from operator_ai.memory import MemoryIndex, MemoryStore, reindex_diff, reindex_full
 
 console = Console()
 
 memory_app = typer.Typer(help="Browse and search memories.")
-
-
-def _cli_memory_store() -> MemoryStore:
-    """Create a MemoryStore for CLI commands, with index if available."""
-    index_db = OPERATOR_DIR / "db" / "memory_index.db"
-    index = MemoryIndex(index_db) if index_db.exists() else None
-    return MemoryStore(base_dir=OPERATOR_DIR, index=index)
 
 
 @memory_app.callback(invoke_without_command=True)
@@ -31,7 +24,7 @@ def memory_list_cmd(
     scope: str = typer.Argument("global", help="Scope: global, agent:<name>, or user:<name>."),
 ) -> None:
     """List rules and notes for a scope."""
-    mem = _cli_memory_store()
+    mem = cli_memory_store(load_cli_config())
     rules = mem.list_rules(scope)
     notes = mem.list_notes(scope)
 
@@ -71,7 +64,7 @@ def memory_search_cmd(
     scope: str = typer.Option("global", "--scope", "-s", help="Scope to search."),
 ) -> None:
     """Search notes by filename and content."""
-    mem = _cli_memory_store()
+    mem = cli_memory_store(load_cli_config())
     results = mem.search_notes(scope, query)
 
     if not results:
@@ -98,9 +91,11 @@ def memory_index_cmd(
     force: bool = typer.Option(False, "--force", help="Full rebuild instead of hash-diff."),
 ) -> None:
     """Rebuild the FTS5 search index from memory files on disk."""
-    index_db = OPERATOR_DIR / "db" / "memory_index.db"
+    config = load_cli_config()
+    base_dir = cli_base_dir(config)
+    index_db = base_dir / "db" / "memory_index.db"
     index = MemoryIndex(index_db)
-    mem = MemoryStore(base_dir=OPERATOR_DIR, index=index)
+    mem = MemoryStore(base_dir=base_dir, index=index)
 
     if force:
         count = reindex_full(mem, index)

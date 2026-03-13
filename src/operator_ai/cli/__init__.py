@@ -13,19 +13,18 @@ from rich.text import Text
 
 import operator_ai.tools  # noqa: F401
 from operator_ai.agent import load_configured_agents
+from operator_ai.cli.common import cli_base_dir, load_cli_config
 from operator_ai.cli.init import init_cmd
 from operator_ai.cli.jobs import job_app
 from operator_ai.cli.memory import memory_app
 from operator_ai.cli.service import service_app
 from operator_ai.cli.users import user_app
-from operator_ai.config import LOGS_DIR, OPERATOR_DIR, ConfigError, load_config
+from operator_ai.config import ConfigError, load_config
 from operator_ai.main import async_main
 from operator_ai.skills import scan_skills
 from operator_ai.tools.registry import get_tools
 
 console = Console()
-
-LOG_FILE = LOGS_DIR / "operator.log"
 
 app = typer.Typer(add_completion=False)
 skill_app = typer.Typer(help="Manage skills.")
@@ -55,13 +54,14 @@ def logs(
     lines: int = typer.Option(50, "--lines", "-n", help="Number of lines to show."),
 ) -> None:
     """Tail the operator log file."""
-    if not LOG_FILE.exists():
-        print(f"No log file found at {LOG_FILE}")
+    log_file = cli_base_dir(load_cli_config()) / "logs" / "operator.log"
+    if not log_file.exists():
+        print(f"No log file found at {log_file}")
         raise typer.Exit(code=1)
     cmd = ["tail", "-n", str(lines)]
     if follow:
         cmd.append("-f")
-    cmd.append(str(LOG_FILE))
+    cmd.append(str(log_file))
     with contextlib.suppress(KeyboardInterrupt):
         subprocess.run(cmd)
 
@@ -141,7 +141,7 @@ def skills_list() -> None:
 
 
 def _show_skills() -> None:
-    skills_dir = OPERATOR_DIR / "skills"
+    skills_dir = cli_base_dir(load_cli_config()) / "skills"
     skills = scan_skills(skills_dir)
     if not skills:
         console.print("No skills found.")

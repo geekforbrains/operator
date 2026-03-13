@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import sqlite3
-
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -9,6 +7,16 @@ from rich.table import Table
 from operator_ai.config import ConfigError, load_config
 from operator_ai.message_timestamps import format_ts
 from operator_ai.store import get_store
+from operator_ai.user_ops import (
+    UserOperationError,
+    add_role,
+    create_user,
+    link_identity,
+    platform_id,
+    remove_role,
+    remove_user,
+    unlink_identity,
+)
 
 console = Console()
 
@@ -32,19 +40,14 @@ def user_add(
             pass
 
     store = get_store()
-    platform_id = f"{transport}:{external_id}"
     try:
-        store.add_user(username)
-    except ValueError as e:
+        identity = platform_id(transport, external_id)
+        create_user(store, username=username, role=role, identity=identity)
+    except UserOperationError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(code=1) from None
-    except sqlite3.IntegrityError:
-        console.print(f"[red]Error:[/red] user '{username}' already exists.")
-        raise typer.Exit(code=1) from None
 
-    store.add_role(username, role)
-    store.add_identity(username, platform_id)
-    console.print(f"User '{username}' created with role '{role}' and identity '{platform_id}'.")
+    console.print(f"User '{username}' created with role '{role}' and identity '{identity}'.")
 
 
 @user_app.command("link")
@@ -55,17 +58,13 @@ def user_link(
 ) -> None:
     """Link a transport identity to an existing user."""
     store = get_store()
-    if store.get_user(username) is None:
-        console.print(f"[red]Error:[/red] user '{username}' not found.")
-        raise typer.Exit(code=1)
-
-    platform_id = f"{transport}:{external_id}"
     try:
-        store.add_identity(username, platform_id)
-    except sqlite3.IntegrityError:
-        console.print(f"[red]Error:[/red] identity '{platform_id}' already linked.")
+        identity = platform_id(transport, external_id)
+        link_identity(store, username=username, identity=identity)
+    except UserOperationError as e:
+        console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(code=1) from None
-    console.print(f"Linked '{platform_id}' to user '{username}'.")
+    console.print(f"Linked '{identity}' to user '{username}'.")
 
 
 @user_app.command("unlink")
@@ -76,11 +75,13 @@ def user_unlink(
 ) -> None:
     """Remove a transport identity from a user."""
     store = get_store()
-    platform_id = f"{transport}:{external_id}"
-    if not store.remove_identity(platform_id):
-        console.print(f"[red]Error:[/red] identity '{platform_id}' not found.")
-        raise typer.Exit(code=1)
-    console.print(f"Unlinked '{platform_id}' from user '{username}'.")
+    try:
+        identity = platform_id(transport, external_id)
+        unlink_identity(store, username=username, identity=identity)
+    except UserOperationError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1) from None
+    console.print(f"Unlinked '{identity}' from user '{username}'.")
 
 
 @user_app.command("remove")
@@ -89,9 +90,11 @@ def user_remove(
 ) -> None:
     """Remove a user entirely (cascades identities and roles)."""
     store = get_store()
-    if not store.remove_user(username):
-        console.print(f"[red]Error:[/red] user '{username}' not found.")
-        raise typer.Exit(code=1)
+    try:
+        remove_user(store, username=username)
+    except UserOperationError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1) from None
     console.print(f"User '{username}' removed.")
 
 
@@ -146,14 +149,10 @@ def user_add_role(
 ) -> None:
     """Add a role to a user."""
     store = get_store()
-    if store.get_user(username) is None:
-        console.print(f"[red]Error:[/red] user '{username}' not found.")
-        raise typer.Exit(code=1)
-
     try:
-        store.add_role(username, role)
-    except sqlite3.IntegrityError:
-        console.print(f"[red]Error:[/red] user '{username}' already has role '{role}'.")
+        add_role(store, username=username, role=role)
+    except UserOperationError as e:
+        console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(code=1) from None
     console.print(f"Added role '{role}' to user '{username}'.")
 
@@ -165,7 +164,9 @@ def user_remove_role(
 ) -> None:
     """Remove a role from a user."""
     store = get_store()
-    if not store.remove_role(username, role):
-        console.print(f"[red]Error:[/red] user '{username}' does not have role '{role}'.")
-        raise typer.Exit(code=1)
+    try:
+        remove_role(store, username=username, role=role)
+    except UserOperationError as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(code=1) from None
     console.print(f"Removed role '{role}' from user '{username}'.")

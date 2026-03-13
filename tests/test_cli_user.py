@@ -65,6 +65,14 @@ def test_user_unlink():
     assert "Unlinked" in result.output
 
 
+def test_user_unlink_rejects_wrong_owner():
+    runner.invoke(app, ["user", "add", "gavin", "--role", "admin", "slack", "U123"])
+    runner.invoke(app, ["user", "add", "alice", "--role", "admin", "slack", "U999"])
+    result = runner.invoke(app, ["user", "unlink", "gavin", "slack", "U999"])
+    assert result.exit_code == 1
+    assert "belongs to 'alice'" in result.output
+
+
 def test_user_add_role():
     runner.invoke(app, ["user", "add", "gavin", "--role", "admin", "slack", "U123"])
     result = runner.invoke(app, ["user", "add-role", "gavin", "team"])
@@ -95,6 +103,16 @@ def test_user_add_invalid_name():
     result = runner.invoke(app, ["user", "add", "invalid_NAME", "--role", "admin", "slack", "U123"])
     assert result.exit_code == 1
     assert "Error" in result.output
+
+
+def test_user_add_rolls_back_on_identity_conflict():
+    runner.invoke(app, ["user", "add", "gavin", "--role", "admin", "slack", "U123"])
+    result = runner.invoke(app, ["user", "add", "alice", "--role", "admin", "slack", "U123"])
+    assert result.exit_code == 1
+    assert "already linked" in result.output
+
+    info = runner.invoke(app, ["user", "info", "alice"])
+    assert info.exit_code == 1
 
 
 def test_user_list_empty():
@@ -136,7 +154,7 @@ def test_user_add_role_user_not_found():
 def test_user_remove_role_not_found():
     result = runner.invoke(app, ["user", "remove-role", "ghost", "admin"])
     assert result.exit_code == 1
-    assert "does not have" in result.output
+    assert "not found" in result.output
 
 
 def test_tools_command():

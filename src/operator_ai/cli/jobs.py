@@ -9,13 +9,12 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from operator_ai.config import LOGS_DIR, OPERATOR_DIR, ConfigError, load_config
+from operator_ai.cli.common import cli_base_dir, cli_memory_store, cli_store, load_cli_config
+from operator_ai.config import ConfigError, load_config
 from operator_ai.frontmatter import rewrite_frontmatter
 from operator_ai.job import find_job, run_job_now, scan_jobs
 from operator_ai.log_context import setup_logging
-from operator_ai.memory import MemoryStore
 from operator_ai.message_timestamps import format_ts
-from operator_ai.store import get_store
 from operator_ai.transport.cli import CliTransport
 from operator_ai.transport.registry import transport_logger_names
 
@@ -24,13 +23,15 @@ console = Console()
 job_app = typer.Typer(help="Job inspection and management.")
 
 
-_JOBS_DIR = OPERATOR_DIR / "jobs"
+def _jobs_dir(config=None) -> Path:
+    return config.jobs_dir() if config is not None else cli_base_dir() / "jobs"
 
 
-def _setup_cli_logging() -> None:
+def _setup_cli_logging(*, config=None) -> None:
     """Set up logging for CLI commands — writes to the shared log file + stderr."""
+    log_dir = config.logs_dir() if config is not None else cli_base_dir() / "logs"
     setup_logging(
-        log_dir=LOGS_DIR,
+        log_dir=log_dir,
         stderr=True,
         noisy_loggers=("httpx", "httpcore", "litellm", "openai", *transport_logger_names()),
     )
@@ -39,11 +40,12 @@ def _setup_cli_logging() -> None:
 @job_app.command("list")
 def job_list() -> None:
     """List all jobs with status."""
-    jobs = scan_jobs(_JOBS_DIR)
+    config = load_cli_config()
+    jobs = scan_jobs(_jobs_dir(config))
     if not jobs:
         console.print("No jobs found.")
         raise typer.Exit()
-    store = get_store()
+    store = cli_store(config)
     table = Table(show_header=True, show_edge=False, pad_edge=False)
     table.add_column("Name", style="bold", no_wrap=True)
     table.add_column("Status")
@@ -96,12 +98,13 @@ def job_info(
     name: str = typer.Argument(help="Job name."),
 ) -> None:
     """Show job configuration and runtime state."""
-    job = find_job(name, _JOBS_DIR)
+    config = load_cli_config()
+    job = find_job(name, _jobs_dir(config))
     if not job:
         console.print(f"Job '{name}' not found.", style="red")
         raise typer.Exit(code=1)
 
-    state = get_store().load_job_state(name)
+    state = cli_store(config).load_job_state(name)
     enabled = Text("yes", style="green") if job.enabled else Text("no", style="red")
 
     table = Table(show_header=False, show_edge=False, pad_edge=False, box=None)
@@ -140,18 +143,17 @@ def job_run(
     name: str = typer.Argument(help="Job name to run immediately."),
 ) -> None:
     """Trigger a job immediately (outside the cron schedule)."""
-    _setup_cli_logging()
-    cli_logger = logging.getLogger("operator.cli")
-
     try:
         config = load_config()
     except ConfigError as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(code=1) from None
-    store = get_store()
-    memory_store = MemoryStore(base_dir=OPERATOR_DIR)
+    _setup_cli_logging(config=config)
+    cli_logger = logging.getLogger("operator.cli")
+    store = cli_store(config)
+    memory_store = cli_memory_store(config)
 
-    job = find_job(name, _JOBS_DIR)
+    job = find_job(name, config.jobs_dir())
     if not job:
         print(f"Job '{name}' not found.")
         raise typer.Exit(code=1)
@@ -202,7 +204,8 @@ def job_disable(
 
 
 def _toggle_job(name: str, *, enabled: bool) -> None:
-    job = find_job(name, _JOBS_DIR)
+    config = load_cli_config()
+    job = find_job(name, _jobs_dir(config))
     if not job:
         print(f"Job '{name}' not found.")
         raise typer.Exit(code=1)
