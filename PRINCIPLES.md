@@ -87,9 +87,16 @@ to the product contract — but they belong under the transport, not in the core
 
 Conversations are intentionally thread-scoped: every top-level message addressed
 to an agent starts a fresh session thread, and only later messages addressed to
-the agent continue that session. In channels, that means mention-gated follow-ups
-inside the thread; ambient human chatter is ignored unless the agent is addressed
-again. This applies in DMs too, where every DM message is addressed to the agent.
+the agent continue that session.
+
+In channels, that means mention-gated interaction: an `@mention` at the top level
+starts a session thread, and only subsequent `@mentions` inside that thread
+continue it. Ambient human chatter in the thread is ignored.
+
+In DMs, every message is implicitly addressed to the agent — there is no one else
+the user could be talking to. A top-level DM starts a fresh session thread, and
+all subsequent messages in that thread continue it without requiring a mention.
+
 The point is focus and isolation, not maximal ambient context. If an agent needs
 information outside the current Slack session, it should use Slack tools to
 inspect it deliberately.

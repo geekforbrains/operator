@@ -63,6 +63,7 @@ def reindex_full(store: MemoryStore, index: MemoryIndex) -> int:
             updated_at=mf.updated_at.timestamp() if mf.updated_at else None,
             expires_at=mf.expires_at.timestamp() if mf.expires_at else None,
         )
+        index.embed(rel_path, mf.content)
         count += 1
 
     logger.info("reindex (full): %d files indexed", count)
