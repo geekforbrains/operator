@@ -25,8 +25,7 @@ import operator_ai.tools  # noqa: F401
 from operator_ai.agent import load_configured_agents
 from operator_ai.config import LOGS_DIR, OPERATOR_DIR, ConfigError, load_config
 from operator_ai.frontmatter import rewrite_frontmatter
-from operator_ai.job_specs import find_job_spec, scan_job_specs
-from operator_ai.jobs import run_job_now
+from operator_ai.job import find_job, run_job_now, scan_jobs
 from operator_ai.layout import ensure_layout
 from operator_ai.log_context import setup_logging
 from operator_ai.main import async_main
@@ -591,12 +590,11 @@ def logs(
 
 
 def _scan_jobs():
-    """Lightweight job scan — reads frontmatter without importing the full jobs module."""
-    return scan_job_specs(OPERATOR_DIR / "jobs")
+    return scan_jobs(OPERATOR_DIR / "jobs")
 
 
 def _find_job(name: str):
-    return find_job_spec(name, OPERATOR_DIR / "jobs")
+    return find_job(name, OPERATOR_DIR / "jobs")
 
 
 @job_app.command("list")

@@ -17,7 +17,7 @@ from pathlib import Path
 import operator_ai.tools  # noqa: F401
 from operator_ai.agent import configure_agent_tool_context, run_agent
 from operator_ai.config import Config, ConfigError, RoleConfig, load_config
-from operator_ai.jobs import JobRunner
+from operator_ai.job import JobRunner
 from operator_ai.layout import ensure_layout
 from operator_ai.log_context import new_run_id, set_run_context, setup_logging
 from operator_ai.memory import MemoryIndex, MemoryStore, reindex_diff

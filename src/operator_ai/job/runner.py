@@ -1,3 +1,5 @@
+"""Job runner — scheduling, execution, and hook management."""
+
 from __future__ import annotations
 
 import asyncio
@@ -5,7 +7,6 @@ import contextlib
 import logging
 import os
 import time
-from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -14,8 +15,7 @@ from croniter import croniter
 
 from operator_ai.agent.runtime import configure_agent_tool_context
 from operator_ai.config import Config
-from operator_ai.frontmatter import extract_body, parse_frontmatter
-from operator_ai.job_specs import scan_job_specs
+from operator_ai.job.spec import Job, scan_jobs
 from operator_ai.log_context import new_run_id, set_run_context
 from operator_ai.memory import MemoryStore
 from operator_ai.message_timestamps import attach_message_created_at
@@ -23,65 +23,15 @@ from operator_ai.run_prompt import JobEnvelope, build_agent_system_prompt
 from operator_ai.store import Store
 from operator_ai.transport.base import Transport
 
-logger = logging.getLogger("operator.jobs")
+logger = logging.getLogger("operator.job")
 
 
-@dataclass
-class Job:
-    name: str
-    description: str
-    schedule: str
-    prompt: str
-    path: Path  # absolute path to the .md file
-    agent: str = ""
-    model: str = ""
-    max_iterations: int = 0
-    hooks: dict[str, str] = field(default_factory=dict)
-    enabled: bool = True
+# ---------------------------------------------------------------------------
+# Hook execution
+# ---------------------------------------------------------------------------
 
 
-def scan_jobs(jobs_dir: Path | None = None) -> list[Job]:
-    """Scan jobs/<name>/JOB.md via scan_job_specs, enrich with prompt/hooks/validation."""
-    jobs: list[Job] = []
-
-    specs = scan_job_specs(jobs_dir) if jobs_dir is not None else scan_job_specs()
-    for spec in specs:
-        if not spec.schedule or not croniter.is_valid(spec.schedule):
-            logger.warning("Invalid schedule '%s' in %s, skipping", spec.schedule, spec.path)
-            continue
-
-        job_md = Path(spec.path)
-        try:
-            text = job_md.read_text()
-            fm = parse_frontmatter(text)
-            body = extract_body(text)
-
-            # Coerce hooks to dict (agents sometimes write [] instead of {})
-            hooks = (fm or {}).get("hooks") or {}
-            if not isinstance(hooks, dict):
-                hooks = {}
-
-            jobs.append(
-                Job(
-                    name=spec.name,
-                    description=spec.description,
-                    schedule=spec.schedule,
-                    prompt=body,
-                    path=job_md,
-                    agent=spec.agent,
-                    model=spec.model,
-                    max_iterations=(fm or {}).get("max_iterations", 0),
-                    hooks=hooks,
-                    enabled=spec.enabled,
-                )
-            )
-        except Exception as e:
-            logger.warning("Failed to parse %s: %s", spec.path, e)
-
-    return jobs
-
-
-async def _run_hook(
+async def run_hook(
     job: Job,
     hook_name: str,
     agent_name: str = "",
@@ -95,7 +45,7 @@ async def _run_hook(
     if not script_path:
         return 0, ""
 
-    full_path = _resolve_hook_script_path(job, hook_name, script_path)
+    full_path = _resolve_hook_path(job, hook_name, script_path)
     if full_path is None:
         return 1, f"[invalid {hook_name} hook path: {script_path}]"
     if not full_path.exists():
@@ -147,7 +97,6 @@ async def _run_hook(
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
         await proc.wait()
-        elapsed = round(time.time() - hook_start, 1)
         logger.warning("Hook %s for job '%s' timed out after %ds", hook_name, job.name, timeout)
         return 1, f"[hook timed out after {timeout}s]"
     except Exception as e:
@@ -155,7 +104,7 @@ async def _run_hook(
         return 1, f"[hook error: {e}]"
 
 
-def _resolve_hook_script_path(job: Job, hook_name: str, script_path: str) -> Path | None:
+def _resolve_hook_path(job: Job, hook_name: str, script_path: str) -> Path | None:
     """Resolve a hook script path relative to the job directory."""
     try:
         rel_path = Path(script_path)
@@ -187,7 +136,12 @@ def _resolve_hook_script_path(job: Job, hook_name: str, script_path: str) -> Pat
         return None
 
 
-async def _execute_job(
+# ---------------------------------------------------------------------------
+# Job execution
+# ---------------------------------------------------------------------------
+
+
+async def execute_job(
     job: Job,
     config: Config,
     transports: dict[str, Transport],
@@ -205,7 +159,7 @@ async def _execute_job(
         prerun_output = ""
         hook_timeout = config.defaults.hook_timeout
         if job.hooks.get("prerun"):
-            exit_code, prerun_output = await _run_hook(
+            exit_code, prerun_output = await run_hook(
                 job,
                 "prerun",
                 agent_name=agent_name,
@@ -228,7 +182,7 @@ async def _execute_job(
                 return
 
         # Lazy imports to avoid circular dependency:
-        # jobs -> agent -> tools/__init__ -> tools/jobs -> jobs
+        # job -> agent -> tools/__init__ -> tools/jobs -> job
         from operator_ai.agent import run_agent
         from operator_ai.tools import messaging
 
@@ -288,7 +242,7 @@ async def _execute_job(
 
         # Postrun hook
         if job.hooks.get("postrun"):
-            exit_code, postrun_output = await _run_hook(
+            exit_code, postrun_output = await run_hook(
                 job,
                 "postrun",
                 agent_name=agent_name,
@@ -318,6 +272,42 @@ async def _execute_job(
         state.run_count += 1
         state.error_count += 1
         store.save_job_state(job.name, state)
+
+
+# ---------------------------------------------------------------------------
+# run_job_now — CLI / ad-hoc entry point
+# ---------------------------------------------------------------------------
+
+
+async def run_job_now(
+    *,
+    name: str,
+    config: Config,
+    store: Store,
+    transports: dict[str, Transport] | None = None,
+    memory_store: MemoryStore | None = None,
+) -> Job:
+    """Run a single job by name outside scheduler ticks.
+
+    Raises:
+        ValueError: If the named job does not exist.
+    """
+    job = next((j for j in scan_jobs(config.jobs_dir()) if j.name == name), None)
+    if job is None:
+        raise ValueError(f"job '{name}' not found")
+
+    await execute_job(job, config, transports or {}, store, memory_store)
+    return job
+
+
+# ---------------------------------------------------------------------------
+# JobRunner — cron scheduler
+# ---------------------------------------------------------------------------
+
+
+def _seconds_until_next_minute() -> float:
+    now = time.time()
+    return max(0.001, 60.0 - (now % 60.0))
 
 
 class JobRunner:
@@ -364,7 +354,6 @@ class JobRunner:
         logger.info("JobRunner stopped")
 
     def _ensure_agent_queue(self, agent_name: str) -> asyncio.Queue[tuple[Job, bool]]:
-        """Return the queue for *agent_name*, lazily creating it and its worker."""
         if agent_name not in self._agent_queues:
             queue: asyncio.Queue[tuple[Job, bool]] = asyncio.Queue()
             self._agent_queues[agent_name] = queue
@@ -372,24 +361,15 @@ class JobRunner:
         return self._agent_queues[agent_name]
 
     async def _agent_worker(self, agent_name: str) -> None:
-        """Drain the job queue for *agent_name*, running one job at a time."""
         queue = self._agent_queues[agent_name]
         try:
             while True:
                 job, was_queued = await queue.get()
                 if was_queued:
-                    logger.info(
-                        "Starting queued job '%s' on agent '%s'",
-                        job.name,
-                        agent_name,
-                    )
+                    logger.info("Starting queued job '%s' on agent '%s'", job.name, agent_name)
                 try:
-                    await _execute_job(
-                        job,
-                        self._config,
-                        self._transports,
-                        self._store,
-                        self._memory_store,
+                    await execute_job(
+                        job, self._config, self._transports, self._store, self._memory_store
                     )
                 except Exception:
                     logger.exception("Unhandled error in job '%s'", job.name)
@@ -440,31 +420,3 @@ class JobRunner:
                 logger.info("Firing job '%s' (schedule: %s)", job.name, job.schedule)
 
             queue.put_nowait((job, pending > 0))
-
-
-def _seconds_until_next_minute() -> float:
-    now = time.time()
-    return max(0.001, 60.0 - (now % 60.0))
-
-
-async def run_job_now(
-    *,
-    name: str,
-    config: Config,
-    store: Store,
-    transports: dict[str, Transport] | None = None,
-    memory_store: MemoryStore | None = None,
-) -> Job:
-    """Run a single job by name outside scheduler ticks.
-
-    Raises:
-        ValueError: If the named job does not exist.
-    """
-    job = next(
-        (candidate for candidate in scan_jobs(config.jobs_dir()) if candidate.name == name), None
-    )
-    if job is None:
-        raise ValueError(f"job '{name}' not found")
-
-    await _execute_job(job, config, transports or {}, store, memory_store)
-    return job
