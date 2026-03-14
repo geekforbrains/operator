@@ -56,13 +56,11 @@ class ToolDef:
         func: Callable[..., Any],
         description: str,
         permission_group: str | None = None,
-        status_label: str | Callable[[dict[str, Any]], str] | None = None,
     ):
         self.func = func
         self.name = func.__name__
         self.description = description
         self.permission_group = permission_group
-        self.status_label = status_label
         self.parameters = _build_parameters(func)
 
     def to_openai_tool(self) -> dict[str, Any]:

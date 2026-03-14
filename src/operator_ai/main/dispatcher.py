@@ -21,7 +21,6 @@ from operator_ai.memory import MemoryStore
 from operator_ai.message_timestamps import attach_message_created_at
 from operator_ai.messages import trim_incomplete_tool_turns
 from operator_ai.run_prompt import ChatEnvelope, build_agent_system_prompt
-from operator_ai.status import StatusIndicator
 from operator_ai.store import Store
 from operator_ai.system_events import SystemEventBuffer
 from operator_ai.tools import messaging
@@ -325,37 +324,19 @@ class Dispatcher:
         msg_count = sum(1 for m in messages if m.get("role") == "user")
         logger.info("conversation %s — message #%d", conversation_id, msg_count)
         extra_tools = transport.get_tools()
-        extra_tool_labels: dict[str, collections.abc.Callable[[dict[str, object]], str]] = {}
-        for tool in extra_tools:
-            if callable(tool.status_label):
-                extra_tool_labels[tool.name] = tool.status_label
-            elif isinstance(tool.status_label, str):
-                label = tool.status_label
-                extra_tool_labels[tool.name] = lambda _args, text=label: text
 
         async def on_message(text: str) -> None:
             preview = text[:25].replace("\n", " ")
             logger.info("→ %s…", preview)
             message_id = await transport.send(msg.channel_id, text, thread_id=msg.root_message_id)
             self.store.index_platform_message(msg.transport_name, message_id, conversation_id)
-
-        status = StatusIndicator(
-            transport,
-            msg.channel_id,
-            msg.root_message_id,
-            tool_labels=extra_tool_labels,
-        )
-
-        async def on_tool_call(name: str, args: dict) -> None:
-            if name:
-                status.set_tool(name, args)
-            else:
-                status.clear_tool()
+            # Re-set status after intermediate messages (setStatus auto-clears on send)
+            await transport.set_status(msg.channel_id, msg.root_message_id)
 
         usage = {} if self.config.runtime.show_usage else None
 
         try:
-            await status.start()
+            await transport.set_status(msg.channel_id, msg.root_message_id)
             await run_agent(
                 messages=messages,
                 rc=RunConfig(
@@ -382,7 +363,6 @@ class Dispatcher:
                 ),
                 on_message=on_message,
                 check_cancelled=runtime.check_cancelled,
-                on_tool_call=on_tool_call,
             )
             logger.info("conversation %s — done", conversation_id)
             if usage:
@@ -395,7 +375,7 @@ class Dispatcher:
             logger.error("agent error: %s: %s", type(e).__name__, e)
             await transport.send(msg.channel_id, f"[error: {e}]", thread_id=msg.root_message_id)
         finally:
-            await status.stop()
+            await transport.clear_status(msg.channel_id, msg.root_message_id)
             pending_messages = messages[persisted_count:]
             safe_messages = trim_incomplete_tool_turns(pending_messages)
             if len(safe_messages) != len(pending_messages):

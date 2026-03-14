@@ -137,6 +137,12 @@ class Transport(ABC):
     async def delete(self, channel_id: str, message_id: str) -> None:
         """Delete a message. No-op by default."""
 
+    async def set_status(self, channel_id: str, thread_id: str | None = None) -> None:
+        """Show a processing indicator. No-op by default."""
+
+    async def clear_status(self, channel_id: str, thread_id: str | None = None) -> None:
+        """Clear the processing indicator. No-op by default."""
+
     def get_prompt_extra(self) -> str:
         """Return extra prompt content (e.g. available channels) to append to system prompt."""
         return ""

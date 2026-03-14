@@ -170,7 +170,6 @@ async def run_agent(
     *,
     on_message: Callable[[str], Awaitable[None]] | None = None,
     check_cancelled: Callable[[], None] | None = None,
-    on_tool_call: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
     tool_results_keep: int = 5,
     tool_results_soft_trim: int = 10,
 ) -> str:
@@ -244,10 +243,6 @@ async def run_agent(
             check_cancelled()
 
         step = f"[iter {iteration + 1}/{rc.max_iterations}]"
-
-        # Signal "thinking" before LLM call
-        if on_tool_call:
-            await on_tool_call("", {})
 
         # Try each model in the fallback chain
         response = None
@@ -381,10 +376,6 @@ async def run_agent(
                 parsed_args = None
                 logger.warning("%s non-object tool args for %s", step, func_name)
             args = parsed_args or {}
-
-            # Signal tool execution
-            if on_tool_call:
-                await on_tool_call(func_name, args)
 
             if parsed_args is None:
                 result = f"[error: invalid tool args for '{func_name}']"

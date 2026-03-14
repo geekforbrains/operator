@@ -181,31 +181,25 @@ def get_slack_tools(transport: SlackTransport) -> list[ToolDef]:
         ToolDef(
             slack_find_users,
             "Find Slack users by display name, Slack ID, or linked Operator username.",
-            status_label="Finding Slack users...",
         ),
         ToolDef(
             slack_list_channels,
             "List available Slack channels the bot can post to, optionally filtering by name, ID, topic, or purpose.",
-            status_label="Listing channels...",
         ),
         ToolDef(
             slack_read_channel,
             "Read recent messages from a Slack channel. Use this to see what's been discussed.",
-            status_label="Reading channel...",
         ),
         ToolDef(
             slack_read_thread,
             "Read messages from a specific Slack thread. Use this to get full context on a conversation.",
-            status_label="Reading thread...",
         ),
         ToolDef(
             slack_add_reaction,
             "Add an emoji reaction to a Slack message. Use emoji name without colons.",
-            status_label="Adding reaction...",
         ),
         ToolDef(
             slack_remove_reaction,
             "Remove an emoji reaction from a Slack message.",
-            status_label="Removing reaction...",
         ),
     ]

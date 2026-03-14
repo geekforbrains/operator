@@ -341,6 +341,46 @@ class SlackTransport(Transport):
             lambda: app.client.chat_delete(channel=channel_id, ts=message_id),
         )
 
+    # --- Status ---
+
+    @override
+    async def set_status(self, channel_id: str, thread_id: str | None = None) -> None:
+        from operator_ai.status import pick_status_messages
+
+        app = self.require_app()
+        try:
+            await api_call(
+                "assistant.threads.setStatus",
+                lambda: app.client.api_call(
+                    "assistant.threads.setStatus",
+                    json={
+                        "channel_id": channel_id,
+                        "thread_ts": thread_id or "",
+                        "status": pick_status_messages(10),
+                    },
+                ),
+            )
+        except Exception:
+            logger.debug("Failed to set assistant status", exc_info=True)
+
+    @override
+    async def clear_status(self, channel_id: str, thread_id: str | None = None) -> None:
+        app = self.require_app()
+        try:
+            await api_call(
+                "assistant.threads.setStatus",
+                lambda: app.client.api_call(
+                    "assistant.threads.setStatus",
+                    json={
+                        "channel_id": channel_id,
+                        "thread_ts": thread_id or "",
+                        "status": "",
+                    },
+                ),
+            )
+        except Exception:
+            logger.debug("Failed to clear assistant status", exc_info=True)
+
     # --- File handling ---
 
     _MAX_DOWNLOAD = 50 * 1024 * 1024
