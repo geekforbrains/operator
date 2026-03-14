@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import yaml
 
@@ -350,6 +350,8 @@ class MemoryStore:
 
     # ── Sweep expired ────────────────────────────────────────────
 
+    _SKIP_DIRS: ClassVar[set[str]] = {"node_modules", ".git", "__pycache__", "workspace"}
+
     def sweep_expired(self) -> int:
         """Move expired memory files to trash. Returns count of swept files."""
         now = _now_utc()
@@ -359,6 +361,8 @@ class MemoryStore:
             if not root.is_dir():
                 continue
             for md_path in root.rglob("*.md"):
+                if self._SKIP_DIRS & set(md_path.parts):
+                    continue
                 if md_path.parent.name not in ("rules", "notes"):
                     continue
                 mf = _parse_memory_file(md_path, self.base_dir)
