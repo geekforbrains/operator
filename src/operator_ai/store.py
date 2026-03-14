@@ -14,6 +14,7 @@ from operator_ai.message_timestamps import MESSAGE_CREATED_AT_KEY
 from operator_ai.messages import trim_incomplete_tool_turns
 
 DB_PATH = OPERATOR_DIR / "db" / "operator.db"
+SCHEMA_VERSION = 1
 logger = logging.getLogger("operator.store")
 
 
@@ -63,6 +64,14 @@ class Store:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
+
+        version = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        if version and version != SCHEMA_VERSION:
+            raise RuntimeError(
+                f"Database schema version mismatch: found v{version}, expected v{SCHEMA_VERSION}. "
+                f"This release requires a fresh install. "
+                f"Delete {self._path} and restart."
+            )
 
         self._conn.execute(
             """
@@ -155,6 +164,7 @@ class Store:
             """
         )
 
+        self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         self._conn.commit()
 
     @property
