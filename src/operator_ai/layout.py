@@ -37,7 +37,6 @@ def _ensure_agent(name: str, config: Config) -> None:
 
     # workspace/shared symlink → ~/.operator/shared/
     ensure_shared_symlink(ws, config.shared_dir)
-    _ensure_dirs(config.shared_dir / name)
 
     # memory/{rules,notes,trash}
     mem = config.agent_memory_dir(name)

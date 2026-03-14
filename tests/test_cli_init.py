@@ -100,7 +100,7 @@ def test_init_creates_full_scaffold_and_points_user_to_manual_edits(tmp_path: Pa
         op_dir / "agents" / "operator" / "memory" / "notes",
         op_dir / "agents" / "operator" / "memory" / "trash",
         op_dir / "agents" / "operator" / "state",
-        op_dir / "shared" / "operator",
+        op_dir / "shared",
     ):
         assert path.is_dir()
 

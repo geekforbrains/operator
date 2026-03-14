@@ -54,14 +54,13 @@ def test_ensure_layout_creates_full_tree(tmp_path: Path) -> None:
         assert (agent / "state").is_dir()
 
 
-def test_ensure_layout_creates_per_agent_shared_dirs(tmp_path: Path) -> None:
+def test_ensure_layout_creates_shared_dir(tmp_path: Path) -> None:
     op_dir = tmp_path / ".operator"
     config = _make_config(op_dir, "alpha", "beta")
 
     ensure_layout(config)
 
-    assert (op_dir / "shared" / "alpha").is_dir()
-    assert (op_dir / "shared" / "beta").is_dir()
+    assert (op_dir / "shared").is_dir()
 
 
 # ── Symlink correctness ────────────────────────────────────────
@@ -79,8 +78,8 @@ def test_shared_symlink_points_to_shared_root(tmp_path: Path) -> None:
     assert link.resolve() == target.resolve()
 
     # Writing via the symlink should appear in the shared root
-    (link / "hermy" / "test.txt").write_text("hello")
-    assert (target / "hermy" / "test.txt").read_text() == "hello"
+    (link / "test.txt").write_text("hello")
+    assert (target / "test.txt").read_text() == "hello"
 
 
 # ── Idempotency ─────────────────────────────────────────────────

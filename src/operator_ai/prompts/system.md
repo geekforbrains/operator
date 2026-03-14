@@ -26,7 +26,7 @@ The workspace has a fixed layout:
 
 Inbound attachments and imported source files belong in `inbox/`.
 
-The `shared/` directory is visible to all agents. By convention, read from any subdirectory, but only write to your own (`shared/<your-name>/`). Do not reach into another agent's workspace when `shared/` is the right exchange path.
+The `shared/` directory is visible to all agents. Use it for cross-agent file exchange instead of reaching into another agent's workspace.
 
 Use `spawn_agent` to offload focused work into a fresh child run. Omit `agent` to offload to a fresh run of yourself. Specify `agent` when you need another agent's charter, tools, memory, or workspace.
 

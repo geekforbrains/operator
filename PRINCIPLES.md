@@ -174,8 +174,7 @@ Everything lives under `~/.operator/`:
         rules/
         notes/
         trash/
-  shared/
-    <name>/              # one per agent, created at startup
+  shared/                   # cross-agent file exchange
   db/                     # SQLite database state
   logs/                   # runtime logs
 ```
@@ -278,23 +277,8 @@ At a minimum, each workspace should include reserved directories such as:
 - `shared/` for cross-agent file sharing
 
 `shared/` lives at `~/.operator/shared/` and is symlinked into each agent's
-workspace so every agent sees the same shared root. By convention, agents read
-from any subdirectory and write to their own `shared/<agent>/` area. The base
-workspace contract and `SYSTEM.md` should steer agents toward this shared path
-for cross-agent exchange.
-
-Inside `shared/`, files are organized into per-agent subdirectories so it is
-clear which agent produced what:
-
-```text
-shared/
-  operator/
-  researcher/
-```
-
-The runtime ensures these subdirectories exist for every configured agent at
-startup. If a new agent is added to `operator.yaml`, its shared directory is
-created automatically.
+workspace so every agent sees the same shared root. Use it for cross-agent file
+exchange instead of reaching into another agent's workspace.
 
 Inbound attachments and imported source files should land in `inbox/` so they
 remain available as workspace artifacts instead of living only in transient
@@ -333,8 +317,7 @@ should work fully within their boundary — not be artificially limited in a
 way that makes them useless.
 
 The `shared/` symlink lives inside the workspace, so cross-agent file
-exchange works naturally within the sandbox. An agent can read from any
-agent's shared area and write to its own — no sandbox escape needed.
+exchange works naturally within the sandbox — no sandbox escape needed.
 
 ### Runtime state
 
