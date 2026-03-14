@@ -95,8 +95,14 @@ class Transport(ABC):
         """Return transport-specific tools to merge into the agent's tool set."""
         return []
 
-    async def get_thread_context(self, msg: IncomingMessage) -> str | None:
-        """Return formatted thread history for context injection. None if not applicable."""
+    async def get_thread_context(
+        self, msg: IncomingMessage, *, after_ts: str | None = None
+    ) -> str | None:
+        """Return formatted thread history for context injection.
+
+        If *after_ts* is provided, only return messages newer than that timestamp.
+        Returns None when there are no relevant messages.
+        """
         return None
 
     async def get_message_context(self, msg: IncomingMessage) -> list[str]:

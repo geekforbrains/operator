@@ -277,7 +277,7 @@ class Dispatcher:
         username = user_ctx.username if user_ctx else ""
 
         # Collect context blocks from all sources and prepend to user message
-        context_parts = await self._collect_context(msg, transport, conversation_id, messages)
+        context_parts = await self._collect_context(msg, transport, conversation_id)
         msg_text = msg.text
         if context_parts:
             msg_text = "\n\n".join(context_parts) + "\n\n" + msg.text
@@ -416,13 +416,11 @@ class Dispatcher:
         msg: IncomingMessage,
         transport: Transport,
         conversation_id: str,
-        messages: list[dict],
     ) -> list[str]:
         """Collect all context blocks to prepend to the user message."""
         blocks: list[str] = []
 
-        # Thread history (first interaction only)
-        block = await self._thread_history_context(msg, transport, messages)
+        block = await self._thread_history_context(msg, transport, conversation_id)
         if block:
             blocks.append(block)
 
@@ -441,22 +439,33 @@ class Dispatcher:
         self,
         msg: IncomingMessage,
         transport: Transport,
-        messages: list[dict],
+        conversation_id: str,
     ) -> str | None:
-        """Build thread history context block for new conversations."""
-        is_new_conversation = len(messages) <= 1  # only system message
-        if not is_new_conversation or msg.message_id == msg.root_message_id:
+        """Fetch unseen thread messages and inject as context."""
+        if msg.message_id == msg.root_message_id:
             return None
-        thread_ctx = await transport.get_thread_context(msg)
+
+        cursor = self.store.get_thread_cursor(conversation_id)
+        thread_ctx = await transport.get_thread_context(msg, after_ts=cursor)
+        self.store.set_thread_cursor(conversation_id, msg.message_id)
+
         if not thread_ctx:
             return None
+
+        if cursor is None:
+            label = (
+                "Snapshot of this thread before you were added. "
+                "Provided for awareness only — these messages were "
+                "not directed at you."
+            )
+        else:
+            label = "Messages in this thread since your last response."
+
         return (
-            '<context_snapshot source="thread_history">\n'
-            "Snapshot of this thread before you were added. "
-            "Provided for awareness only — these messages were "
-            "not directed at you.\n\n"
+            f'<context_snapshot source="thread_history">\n'
+            f"{label}\n\n"
             f"{thread_ctx}\n"
-            "</context_snapshot>"
+            f"</context_snapshot>"
         )
 
     def _system_events_context(self, conversation_id: str) -> str | None:

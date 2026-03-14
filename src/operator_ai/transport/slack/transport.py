@@ -435,7 +435,9 @@ class SlackTransport(Transport):
         ]
 
     @override
-    async def get_thread_context(self, msg: IncomingMessage) -> str | None:
+    async def get_thread_context(
+        self, msg: IncomingMessage, *, after_ts: str | None = None
+    ) -> str | None:
         app = self.require_app()
         try:
             resp = await api_call(
@@ -449,7 +451,18 @@ class SlackTransport(Transport):
             return None
 
         replies = resp.get("messages", [])
-        replies = [r for r in replies if r.get("ts") != msg.message_id]
+
+        # Filter out the current message, bot's own messages, and already-seen messages
+        bot_id = self._bot_user_id
+        replies = [
+            r
+            for r in replies
+            if r.get("ts") != msg.message_id
+            and r.get("user") != bot_id
+            and not r.get("bot_id")
+            and (after_ts is None or r.get("ts", "") > after_ts)
+        ]
+
         if not replies:
             return None
 

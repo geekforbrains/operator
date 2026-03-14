@@ -145,6 +145,16 @@ class Store:
             """
         )
 
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS thread_cursors (
+                conversation_id TEXT PRIMARY KEY,
+                last_ts TEXT NOT NULL,
+                FOREIGN KEY(conversation_id) REFERENCES conversations(conversation_id)
+            )
+            """
+        )
+
         self._conn.commit()
 
     @property
@@ -275,6 +285,25 @@ class Store:
             (transport_name, platform_message_id),
         ).fetchone()
         return str(row["conversation_id"]) if row else None
+
+    # ── Thread cursors ──────────────────────────────────────────
+
+    def get_thread_cursor(self, conversation_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT last_ts FROM thread_cursors WHERE conversation_id = ?",
+            (conversation_id,),
+        ).fetchone()
+        return str(row["last_ts"]) if row else None
+
+    def set_thread_cursor(self, conversation_id: str, ts: str) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO thread_cursors (conversation_id, last_ts) VALUES (?, ?)
+            ON CONFLICT(conversation_id) DO UPDATE SET last_ts=excluded.last_ts
+            """,
+            (conversation_id, ts),
+        )
+        self._conn.commit()
 
     # ── Job state ────────────────────────────────────────────────
 
