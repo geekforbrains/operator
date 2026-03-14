@@ -70,9 +70,6 @@ def reindex_full(store: MemoryStore, index: MemoryIndex) -> int:
     return count
 
 
-_SKIP_DIRS = {"node_modules", ".git", "__pycache__", "workspace"}
-
-
 def _scan_disk_files(store: MemoryStore) -> dict[str, tuple[MemoryFile, str]]:
     """Walk all memory directories and return {relative_path: (MemoryFile, hash)}."""
     disk_files: dict[str, tuple[MemoryFile, str]] = {}
@@ -81,8 +78,6 @@ def _scan_disk_files(store: MemoryStore) -> dict[str, tuple[MemoryFile, str]]:
         if not root.is_dir():
             continue
         for md_path in root.rglob("*.md"):
-            if _SKIP_DIRS & set(md_path.parts):
-                continue
             if md_path.parent.name not in ("rules", "notes"):
                 continue
             mf = _parse_memory_file(md_path, store.base_dir)

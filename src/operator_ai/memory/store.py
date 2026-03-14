@@ -11,7 +11,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -342,15 +342,19 @@ class MemoryStore:
 
     def memory_roots(self) -> list[Path]:
         """Return the root directories that contain memory files."""
-        return [
+        roots = [
             self.base_dir / "memory" / "global",
             self.base_dir / "memory" / "users",
-            self.base_dir / "agents",
         ]
+        agents_dir = self.base_dir / "agents"
+        if agents_dir.is_dir():
+            for agent_dir in agents_dir.iterdir():
+                mem = agent_dir / "memory"
+                if mem.is_dir():
+                    roots.append(mem)
+        return roots
 
     # ── Sweep expired ────────────────────────────────────────────
-
-    _SKIP_DIRS: ClassVar[set[str]] = {"node_modules", ".git", "__pycache__", "workspace"}
 
     def sweep_expired(self) -> int:
         """Move expired memory files to trash. Returns count of swept files."""
@@ -361,8 +365,6 @@ class MemoryStore:
             if not root.is_dir():
                 continue
             for md_path in root.rglob("*.md"):
-                if self._SKIP_DIRS & set(md_path.parts):
-                    continue
                 if md_path.parent.name not in ("rules", "notes"):
                     continue
                 mf = _parse_memory_file(md_path, self.base_dir)
